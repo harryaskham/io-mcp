@@ -127,12 +127,16 @@ def main() -> None:
         "--dwell", type=float, default=0.0, metavar="SECONDS",
         help="Enable dwell-to-select after SECONDS (default: off, require Enter)"
     )
+    parser.add_argument(
+        "--scroll-debounce", type=float, default=0.15, metavar="SECONDS",
+        help="Minimum time between scroll events (default: 0.15s)"
+    )
     args = parser.parse_args()
 
     tts = TTSEngine(local=args.local)
 
     # Create the textual app
-    app = IoMcpApp(tts=tts, dwell_time=args.dwell)
+    app = IoMcpApp(tts=tts, dwell_time=args.dwell, scroll_debounce=args.scroll_debounce)
 
     # Start MCP SSE server in background thread
     mcp_thread = threading.Thread(

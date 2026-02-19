@@ -129,10 +129,13 @@ class IoMcpApp(App):
         self,
         tts: TTSEngine,
         dwell_time: float = 0.0,
+        scroll_debounce: float = 0.15,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
         self._tts = tts
+        self._scroll_debounce = scroll_debounce
+        self._last_scroll_time: float = 0.0
         self._dwell_time = dwell_time
 
         # State for present_choices blocking
@@ -281,9 +284,18 @@ class IoMcpApp(App):
         if list_view.display:
             list_view.action_cursor_up()
 
+    def _scroll_allowed(self) -> bool:
+        """Check if enough time has passed since the last scroll."""
+        import time
+        now = time.time()
+        if now - self._last_scroll_time < self._scroll_debounce:
+            return False
+        self._last_scroll_time = now
+        return True
+
     def on_mouse_scroll_down(self, event: MouseScrollDown) -> None:
         """Mouse scroll down → move cursor down."""
-        if self._active:
+        if self._active and self._scroll_allowed():
             list_view = self.query_one("#choices", ListView)
             if list_view.display:
                 list_view.action_cursor_down()
@@ -292,7 +304,7 @@ class IoMcpApp(App):
 
     def on_mouse_scroll_up(self, event: MouseScrollUp) -> None:
         """Mouse scroll up → move cursor up."""
-        if self._active:
+        if self._active and self._scroll_allowed():
             list_view = self.query_one("#choices", ListView)
             if list_view.display:
                 list_view.action_cursor_up()
