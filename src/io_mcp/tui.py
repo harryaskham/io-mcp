@@ -173,10 +173,15 @@ class IoMcpApp(App):
         self._selection_event.clear()
         self._active = True
 
+        # Pregenerate all audio clips in parallel before showing UI
+        labels = [c.get("label", "") for c in choices]
+        all_texts = [preamble] + labels + [f"Selected: {l}" for l in labels]
+        self._tts.pregenerate(all_texts)
+
         # Schedule UI update on the textual event loop
         self.call_from_thread(self._show_choices)
 
-        # Speak preamble
+        # Speak preamble (now plays from cache instantly)
         self._tts.speak(preamble)
 
         # Block until selection
