@@ -10,13 +10,14 @@ Exposes two MCP tools via SSE transport on port 8444:
   speak(text)
       Non-blocking TTS narration through earphones. Returns immediately.
 
-The TUI runs in a background thread reading from /dev/tty. The MCP
-server uses SSE (HTTP) transport so stdin/stdout are not contended.
+Textual TUI runs in the main thread (needs signal handlers).
+MCP SSE server runs in a background thread via uvicorn.
 
 Usage:
     cd ~/cosmos/projects/io-mcp && uv run io-mcp
     # or: uv run io-mcp --local   (use espeak-ng instead of gpt-4o-mini-tts)
     # or: uv run io-mcp --port 9000
+    # or: uv run io-mcp --dwell=5  (auto-select after 5s)
 """
 
 from __future__ import annotations
@@ -25,21 +26,18 @@ import argparse
 import asyncio
 import json
 import logging
-import signal
+import threading
 import sys
 
-from mcp.server.fastmcp import FastMCP
-
-from .tui import TUI
+from .tui import IoMcpApp
+from .tts import TTSEngine
 
 log = logging.getLogger("io_mcp")
 
-# Global TUI instance — started before MCP server, shared by tool handlers.
-_tui: TUI | None = None
 
-
-def _create_mcp(host: str = "0.0.0.0", port: int = 8444) -> FastMCP:
-    """Create and configure the FastMCP server with tools."""
+def _run_mcp_server(app: IoMcpApp, host: str, port: int) -> None:
+    """Run the MCP SSE server in a background thread."""
+    from mcp.server.fastmcp import FastMCP
 
     server = FastMCP("io-mcp", host=host, port=port)
 
@@ -69,15 +67,12 @@ def _create_mcp(host: str = "0.0.0.0", port: int = 8444) -> FastMCP:
         str
             JSON string: {"selected": "chosen label", "summary": "chosen summary"}
         """
-        if _tui is None:
-            return json.dumps({"selected": "error", "summary": "TUI not initialized"})
-
         if not choices:
             return json.dumps({"selected": "error", "summary": "No choices provided"})
 
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
-            None, _tui.present_choices, preamble, choices
+            None, app.present_choices, preamble, choices
         )
 
         return json.dumps(result)
@@ -104,14 +99,12 @@ def _create_mcp(host: str = "0.0.0.0", port: int = 8444) -> FastMCP:
         str
             Confirmation message.
         """
-        if _tui is None:
-            return "TUI not initialized"
-
-        _tui.speak(text)
+        app.speak(text)
         preview = text[:100] + ("..." if len(text) > 100 else "")
         return f"Spoke: {preview}"
 
-    return server
+    # Run SSE server (blocks this thread)
+    server.run(transport="sse")
 
 
 def main() -> None:
@@ -130,28 +123,27 @@ def main() -> None:
         "--host", default="0.0.0.0",
         help="SSE server host (default: 0.0.0.0)"
     )
+    parser.add_argument(
+        "--dwell", type=float, default=0.0, metavar="SECONDS",
+        help="Enable dwell-to-select after SECONDS (default: off, require Enter)"
+    )
     args = parser.parse_args()
 
-    global _tui
-    _tui = TUI(local_tts=args.local)
+    tts = TTSEngine(local=args.local)
 
-    mcp = _create_mcp(host=args.host, port=args.port)
+    # Create the textual app
+    app = IoMcpApp(tts=tts, dwell_time=args.dwell)
 
-    def _shutdown(sig, frame):
-        if _tui:
-            _tui.stop()
-        sys.exit(0)
+    # Start MCP SSE server in background thread
+    mcp_thread = threading.Thread(
+        target=_run_mcp_server,
+        args=(app, args.host, args.port),
+        daemon=True,
+    )
+    mcp_thread.start()
 
-    signal.signal(signal.SIGINT, _shutdown)
-    signal.signal(signal.SIGTERM, _shutdown)
-
-    # Start TUI (alt screen, input capture)
-    _tui.start()
-
-    try:
-        mcp.run(transport="sse")
-    finally:
-        _tui.stop()
+    # Run textual app in main thread (needs signal handlers)
+    app.run()
 
 
 if __name__ == "__main__":
