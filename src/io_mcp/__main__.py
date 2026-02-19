@@ -1,7 +1,7 @@
 """
 io-mcp — MCP server for agent I/O via scroll-wheel and TTS.
 
-Exposes two MCP tools via SSE transport on port 8222:
+Exposes two MCP tools via SSE transport on port 8444:
 
   present_choices(preamble, choices)
       Show choices in the TUI, block until user scrolls and selects.
@@ -38,7 +38,7 @@ log = logging.getLogger("io_mcp")
 _tui: TUI | None = None
 
 
-def _create_mcp(host: str = "0.0.0.0", port: int = 8222) -> FastMCP:
+def _create_mcp(host: str = "0.0.0.0", port: int = 8444) -> FastMCP:
     """Create and configure the FastMCP server with tools."""
 
     server = FastMCP("io-mcp", host=host, port=port)
@@ -123,8 +123,8 @@ def main() -> None:
         help="Use espeak-ng (local, fast) instead of gpt-4o-mini-tts (API)"
     )
     parser.add_argument(
-        "--port", type=int, default=8222,
-        help="SSE server port (default: 8222)"
+        "--port", type=int, default=8444,
+        help="SSE server port (default: 8444)"
     )
     parser.add_argument(
         "--host", default="0.0.0.0",
