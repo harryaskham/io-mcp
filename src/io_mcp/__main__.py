@@ -179,14 +179,6 @@ def main() -> None:
         help="Characters that trigger TTS readback while typing (default: ' .,;:!?')"
     )
     parser.add_argument(
-        "--speed", type=float, default=1.2, metavar="SPEED",
-        help="TTS speed multiplier for OpenAI TTS (default: 1.2)"
-    )
-    parser.add_argument(
-        "--voice", default="sage",
-        help="OpenAI TTS voice name (default: sage)"
-    )
-    parser.add_argument(
         "--invert", action="store_true",
         help="Invert scroll direction (scroll-down → cursor-up, scroll-up → cursor-down)"
     )
@@ -196,7 +188,7 @@ def main() -> None:
     if not args.append_option:
         args.append_option = ["More options"]
 
-    tts = TTSEngine(local=args.local, speed=args.speed, voice=args.voice)
+    tts = TTSEngine(local=args.local)
 
     # Separate TTS engine for freeform typing readback (can be different backend/speed)
     freeform_local = args.freeform_tts == "local"

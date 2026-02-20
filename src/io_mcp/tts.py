@@ -1,7 +1,10 @@
-"""TTS engine with two backends: local espeak-ng and API gpt-4o-mini-tts.
+"""TTS engine with two backends: local espeak-ng and API tts tool.
 
 Supports pregeneration: generate audio files for a batch of texts in
 parallel, then play them instantly on demand from cache.
+
+The tts tool is configured entirely via environment variables
+(TTS_PROVIDER, TTS_SPEED, OPENAI_TTS_VOICE, AZURE_SPEECH_*, etc.).
 """
 
 from __future__ import annotations
@@ -54,12 +57,11 @@ class TTSEngine:
     pregenerate() creates clips in parallel so scrolling is instant.
     """
 
-    def __init__(self, local: bool = False, speed: float = 1.0, voice: str = "sage"):
+    def __init__(self, local: bool = False, speed: float = 1.0):
         self._process: Optional[subprocess.Popen] = None
         self._lock = threading.Lock()
         self._local = local
         self._speed = speed
-        self._voice = voice
 
         self._env = os.environ.copy()
         self._env["PULSE_SERVER"] = os.environ.get("PULSE_SERVER", "127.0.0.1")
@@ -89,8 +91,10 @@ class TTSEngine:
         print(f"  TTS: {mode}", flush=True)
 
     def _cache_key(self, text: str) -> str:
-        # Include voice/speed/backend in key so different settings don't collide
-        params = f"{text}|local={self._local}|speed={self._speed}|voice={self._voice}"
+        # Include backend+speed in key; for API mode the tts tool's own
+        # config (provider, voice, etc.) comes from env vars — cache is
+        # invalidated naturally when the process restarts with new env.
+        params = f"{text}|local={self._local}|speed={self._speed}"
         return hashlib.md5(params.encode()).hexdigest()
 
     def _generate_to_file(self, text: str) -> Optional[str]:
@@ -123,12 +127,9 @@ class TTSEngine:
                 if not self._tts_bin:
                     return None
                 # tts tool: request WAV (self-describing, paplay auto-detects)
+                # All config (provider, speed, voice) flows via env vars
                 out_path = os.path.join(CACHE_DIR, f"{key}.wav")
                 cmd = [self._tts_bin, text, "--stdout", "--response-format", "wav"]
-                if self._speed != 1.0:
-                    cmd += ["--speed", str(self._speed)]
-                if self._voice:
-                    cmd += ["--voice", self._voice]
                 with open(out_path, "wb") as f:
                     proc = subprocess.run(
                         cmd, stdout=f, stderr=subprocess.DEVNULL,
