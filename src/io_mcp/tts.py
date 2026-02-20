@@ -153,10 +153,11 @@ class TTSEngine:
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             pool.map(self._generate_to_file, to_generate)
 
-    def play_cached(self, text: str) -> None:
+    def play_cached(self, text: str, block: bool = False) -> None:
         """Play a pregenerated audio clip. Falls back to live generation.
 
-        Runs playback in a background thread so it never blocks the UI.
+        If block=True, waits for playback to finish before returning.
+        If block=False, starts playback and returns immediately.
         """
         if not self._paplay:
             return
@@ -168,14 +169,16 @@ class TTSEngine:
             # Fast path: cached — kill current and play immediately
             self.stop()
             self._start_playback(path)
+            if block:
+                self._wait_for_playback()
         else:
-            # Slow path: generate on demand in background thread
-            def _gen_and_play():
-                p = self._generate_to_file(text)
-                if p:
-                    self.stop()
-                    self._start_playback(p)
-            threading.Thread(target=_gen_and_play, daemon=True).start()
+            # Slow path: generate on demand
+            p = self._generate_to_file(text)
+            if p:
+                self.stop()
+                self._start_playback(p)
+                if block:
+                    self._wait_for_playback()
 
     def _start_playback(self, path: str) -> None:
         """Start paplay for a WAV file."""
@@ -191,9 +194,26 @@ class TTSEngine:
             except Exception:
                 self._process = None
 
+    def _wait_for_playback(self) -> None:
+        """Wait for current playback to finish."""
+        proc = self._process
+        if proc is not None:
+            try:
+                proc.wait(timeout=30)
+            except Exception:
+                pass
+
     def speak(self, text: str) -> None:
-        """Speak text — uses cache if available, otherwise generates live."""
-        self.play_cached(text)
+        """Speak text and BLOCK until playback finishes.
+
+        This is used by the MCP speak() tool — blocking ensures Claude
+        waits for narration to complete before sending the next tool call.
+        """
+        self.play_cached(text, block=True)
+
+    def speak_async(self, text: str) -> None:
+        """Speak text without blocking. Used for scroll TTS."""
+        self.play_cached(text, block=False)
 
     def stop(self) -> None:
         """Kill any in-progress playback (non-blocking)."""

@@ -18,7 +18,7 @@ from textual.events import MouseScrollDown, MouseScrollUp
 from textual.reactive import reactive
 from textual.timer import Timer
 from textual.widget import Widget
-from textual.widgets import Footer, Header, Label, ListItem, ListView, Static
+from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, Static
 
 from .tts import TTSEngine
 
@@ -117,12 +117,27 @@ class IoMcpApp(App):
         color: $text-muted;
         margin: 0 2;
     }
+
+    #freeform-input {
+        margin: 1 2;
+        display: none;
+    }
     """
 
     BINDINGS = [
         Binding("j,down", "cursor_down", "Down", show=False),
         Binding("k,up", "cursor_up", "Up", show=False),
         Binding("enter", "select", "Select", show=True),
+        Binding("i", "freeform_input", "Type reply", show=True),
+        Binding("1", "pick_1", "", show=False),
+        Binding("2", "pick_2", "", show=False),
+        Binding("3", "pick_3", "", show=False),
+        Binding("4", "pick_4", "", show=False),
+        Binding("5", "pick_5", "", show=False),
+        Binding("6", "pick_6", "", show=False),
+        Binding("7", "pick_7", "", show=False),
+        Binding("8", "pick_8", "", show=False),
+        Binding("9", "pick_9", "", show=False),
         Binding("q,ctrl+c", "quit_app", "Quit", show=True),
     ]
 
@@ -131,11 +146,13 @@ class IoMcpApp(App):
         tts: TTSEngine,
         dwell_time: float = 0.0,
         scroll_debounce: float = 0.15,
+        demo: bool = False,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
         self._tts = tts
         self._scroll_debounce = scroll_debounce
+        self._demo = demo
         self._last_scroll_time: float = 0.0
         self._dwell_time = dwell_time
 
@@ -149,17 +166,22 @@ class IoMcpApp(App):
         # Suppress TTS for the initial highlight when list is populated
         self._suppress_first_highlight = False
 
+        # Freeform text input mode
+        self._input_mode = False
+
         # Dwell timer
         self._dwell_timer: Optional[Timer] = None
         self._dwell_start: float = 0.0
 
     def compose(self) -> ComposeResult:
         yield Header(name="io-mcp", show_clock=False)
-        yield Label("Waiting for Claude...", id="status")
+        status_text = "Ready — demo mode" if self._demo else "Waiting for agent..."
+        yield Label(status_text, id="status")
         yield Label("", id="preamble")
         yield ListView(id="choices")
+        yield Input(placeholder="Type your reply, press Enter to send, Escape to cancel", id="freeform-input")
         yield DwellBar(id="dwell-bar")
-        yield Static("↕ Scroll  ⏎ Select  j/k Navigate  q Quit", id="footer-help")
+        yield Static("↕ Scroll  ⏎ Select  i Type reply  j/k Navigate  q Quit", id="footer-help")
 
     def on_mount(self) -> None:
         self.title = "io-mcp"
@@ -249,7 +271,8 @@ class IoMcpApp(App):
         self.query_one("#preamble").display = False
         self.query_one("#dwell-bar").display = False
         status = self.query_one("#status", Label)
-        status.update(f"Selected: {label} — waiting for Claude...")
+        after_text = f"Selected: {label}" if self._demo else f"Selected: {label} — waiting for agent..."
+        status.update(after_text)
         status.display = True
 
     def speak(self, text: str) -> None:
@@ -298,7 +321,7 @@ class IoMcpApp(App):
             # Read: "2. Commit everything. Stage and commit the fix."
             idx = event.item.choice_index
             text = f"{idx + 1}. {event.item.choice_label}. {event.item.choice_summary}"
-            self._tts.speak(text)
+            self._tts.speak_async(text)
             if self._dwell_time > 0:
                 self._start_dwell()
 
@@ -310,11 +333,15 @@ class IoMcpApp(App):
         self._do_select()
 
     def action_cursor_down(self) -> None:
+        if self._input_mode:
+            return
         list_view = self.query_one("#choices", ListView)
         if list_view.display:
             list_view.action_cursor_down()
 
     def action_cursor_up(self) -> None:
+        if self._input_mode:
+            return
         list_view = self.query_one("#choices", ListView)
         if list_view.display:
             list_view.action_cursor_up()
@@ -347,8 +374,83 @@ class IoMcpApp(App):
                 event.stop()
 
     def action_select(self) -> None:
-        if self._active:
+        if self._active and not self._input_mode:
             self._do_select()
+
+    def action_freeform_input(self) -> None:
+        """Switch to freeform text input mode."""
+        if not self._active or self._input_mode:
+            return
+        self._input_mode = True
+        self._cancel_dwell()
+        self._tts.stop()
+        self._tts.speak_async("Type your reply")
+
+        # Hide choices, show input
+        self.query_one("#choices").display = False
+        self.query_one("#dwell-bar").display = False
+        inp = self.query_one("#freeform-input", Input)
+        inp.value = ""
+        inp.styles.display = "block"
+        inp.focus()
+
+    @on(Input.Submitted, "#freeform-input")
+    def on_freeform_submitted(self, event: Input.Submitted) -> None:
+        """Handle Enter in freeform input."""
+        text = event.value.strip()
+        if not text:
+            return
+        self._input_mode = False
+        event.input.styles.display = "none"
+
+        self._tts.stop()
+        self._tts.speak_async(f"Selected: {text}")
+
+        self._selection = {"selected": text, "summary": "(freeform input)"}
+        self._selection_event.set()
+        self._show_waiting(text)
+
+    def _cancel_freeform(self) -> None:
+        """Cancel freeform input and return to choices."""
+        self._input_mode = False
+        inp = self.query_one("#freeform-input", Input)
+        inp.styles.display = "none"
+        self.query_one("#choices").display = True
+        list_view = self.query_one("#choices", ListView)
+        list_view.focus()
+        if self._dwell_time > 0:
+            self.query_one("#dwell-bar").display = True
+            self._start_dwell()
+        self._tts.speak_async("Cancelled. Back to choices.")
+
+    def on_key(self, event) -> None:
+        """Handle Escape in freeform input mode."""
+        if self._input_mode and event.key == "escape":
+            self._cancel_freeform()
+            event.prevent_default()
+            event.stop()
+
+    def _pick_by_number(self, n: int) -> None:
+        """Immediately select option by 1-based number."""
+        if not self._active or self._input_mode:
+            return
+        idx = n - 1
+        if idx < 0 or idx >= len(self._choices):
+            return
+        # Move highlight to that item first
+        list_view = self.query_one("#choices", ListView)
+        list_view.index = idx
+        self._do_select()
+
+    def action_pick_1(self) -> None: self._pick_by_number(1)
+    def action_pick_2(self) -> None: self._pick_by_number(2)
+    def action_pick_3(self) -> None: self._pick_by_number(3)
+    def action_pick_4(self) -> None: self._pick_by_number(4)
+    def action_pick_5(self) -> None: self._pick_by_number(5)
+    def action_pick_6(self) -> None: self._pick_by_number(6)
+    def action_pick_7(self) -> None: self._pick_by_number(7)
+    def action_pick_8(self) -> None: self._pick_by_number(8)
+    def action_pick_9(self) -> None: self._pick_by_number(9)
 
     def action_quit_app(self) -> None:
         if self._active:
@@ -371,7 +473,7 @@ class IoMcpApp(App):
         summary = chosen.get("summary", "")
 
         self._tts.stop()
-        self._tts.speak(f"Selected: {label}")
+        self._tts.speak_async(f"Selected: {label}")
 
         self._selection = {"selected": label, "summary": summary}
         self._selection_event.set()

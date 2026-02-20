@@ -125,7 +125,8 @@ def _run_mcp_server(app: IoMcpApp, host: str, port: int, append_options: list[st
         str
             Confirmation message.
         """
-        app.speak(text)
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, app.speak, text)
         preview = text[:100] + ("..." if len(text) > 100 else "")
         return f"Spoke: {preview}"
 
@@ -161,6 +162,10 @@ def main() -> None:
         "--append-option", action="append", default=[], metavar="LABEL",
         help="Always append this option to every choice list (repeatable)"
     )
+    parser.add_argument(
+        "--demo", action="store_true",
+        help="Demo mode: show test choices immediately, no MCP server"
+    )
     args = parser.parse_args()
 
     # Default append option: always offer to generate more options
@@ -169,20 +174,52 @@ def main() -> None:
 
     tts = TTSEngine(local=args.local)
 
-    # Write PID file so global hooks can detect io-mcp is running
-    _write_pid_file()
-    atexit.register(_remove_pid_file)
-
     # Create the textual app
-    app = IoMcpApp(tts=tts, dwell_time=args.dwell, scroll_debounce=args.scroll_debounce)
+    app = IoMcpApp(tts=tts, dwell_time=args.dwell, scroll_debounce=args.scroll_debounce, demo=args.demo)
 
-    # Start MCP SSE server in background thread
-    mcp_thread = threading.Thread(
-        target=_run_mcp_server,
-        args=(app, args.host, args.port, args.append_option),
-        daemon=True,
-    )
-    mcp_thread.start()
+    if args.demo:
+        # Demo mode: loop test choices, no MCP server
+        def _demo_loop():
+            import time
+            time.sleep(0.5)  # let textual mount
+            round_num = 0
+            while True:
+                round_num += 1
+                choices = [
+                    {"label": "Fix the bug", "summary": "There's a null pointer in the auth module on line 42"},
+                    {"label": "Run the tests", "summary": "Execute the full test suite and report failures"},
+                    {"label": "Show the diff", "summary": "Display what changed since the last commit"},
+                    {"label": "Deploy to staging", "summary": "Push current branch to the staging environment"},
+                ]
+                # Append persistent options
+                for opt in args.append_option:
+                    if not any(c["label"].lower() == opt.lower() for c in choices):
+                        choices.append({"label": opt, "summary": "(persistent option)"})
+
+                result = app.present_choices(
+                    f"Demo round {round_num}. Pick any option to test scrolling and TTS.",
+                    choices,
+                )
+                selected = result.get("selected", "")
+                if selected == "quit":
+                    break
+                # Brief pause then loop
+                time.sleep(0.3)
+
+        demo_thread = threading.Thread(target=_demo_loop, daemon=True)
+        demo_thread.start()
+    else:
+        # Write PID file so global hooks can detect io-mcp is running
+        _write_pid_file()
+        atexit.register(_remove_pid_file)
+
+        # Start MCP SSE server in background thread
+        mcp_thread = threading.Thread(
+            target=_run_mcp_server,
+            args=(app, args.host, args.port, args.append_option),
+            daemon=True,
+        )
+        mcp_thread.start()
 
     # Run textual app in main thread (needs signal handlers)
     app.run()
