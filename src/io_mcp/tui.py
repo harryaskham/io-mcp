@@ -176,16 +176,33 @@ class IoMcpApp(App):
         self._selection_event.clear()
         self._active = True
 
+        # Build numbered labels for TTS
+        numbered_labels = [
+            f"{i+1}. {c.get('label', '')}" for i, c in enumerate(choices)
+        ]
+        # Full summary line per choice: "1. Label. Description."
+        numbered_full = [
+            f"{i+1}. {c.get('label', '')}. {c.get('summary', '')}"
+            for i, c in enumerate(choices)
+        ]
+
+        # Build the "all options" readout: preamble + list of numbered titles
+        titles_readout = " ".join(numbered_labels)
+        full_intro = f"{preamble} Your options are: {titles_readout}"
+
         # Pregenerate all audio clips in parallel before showing UI
-        labels = [c.get("label", "") for c in choices]
-        all_texts = [preamble] + labels + [f"Selected: {l}" for l in labels]
+        all_texts = (
+            [full_intro]
+            + numbered_full  # for on-scroll readout (label + desc)
+            + [f"Selected: {c.get('label', '')}" for c in choices]
+        )
         self._tts.pregenerate(all_texts)
 
         # Schedule UI update on the textual event loop
         self.call_from_thread(self._show_choices)
 
-        # Speak preamble (now plays from cache instantly)
-        self._tts.speak(preamble)
+        # Speak preamble + all option titles
+        self._tts.speak(full_intro)
 
         # Block until selection
         self._selection_event.wait()
@@ -207,10 +224,10 @@ class IoMcpApp(App):
         self._suppress_first_highlight = True
         list_view = self.query_one("#choices", ListView)
         list_view.clear()
-        for c in self._choices:
+        for i, c in enumerate(self._choices):
             label = c.get("label", "???")
             summary = c.get("summary", "")
-            list_view.append(ChoiceItem(label, summary))
+            list_view.append(ChoiceItem(f"{i+1}. {label}", summary))
         list_view.display = True
         list_view.index = 0
         list_view.focus()
@@ -268,16 +285,21 @@ class IoMcpApp(App):
 
     @on(ListView.Highlighted)
     def on_highlight_changed(self, event: ListView.Highlighted) -> None:
-        """Speak label when highlight changes (skip initial highlight)."""
+        """Speak numbered label + description when highlight changes."""
         if not self._active or event.item is None:
             return
         # Skip the first highlight — it fires when the list is populated
-        # and would overlap with the preamble TTS
+        # and would overlap with the preamble + titles TTS
         if self._suppress_first_highlight:
             self._suppress_first_highlight = False
             return
         if isinstance(event.item, ChoiceItem):
-            self._tts.speak(event.item.choice_label)
+            # Find index of this item in the list
+            list_view = self.query_one("#choices", ListView)
+            idx = list_view.index or 0
+            # Read: "2. Commit everything. Stage and commit the fix."
+            text = f"{idx + 1}. {event.item.choice_label}. {event.item.choice_summary}"
+            self._tts.speak(text)
             if self._dwell_time > 0:
                 self._start_dwell()
 

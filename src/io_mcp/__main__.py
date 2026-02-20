@@ -163,6 +163,10 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    # Default append option: always offer to generate more options
+    if not args.append_option:
+        args.append_option = ["More options"]
+
     tts = TTSEngine(local=args.local)
 
     # Write PID file so global hooks can detect io-mcp is running
