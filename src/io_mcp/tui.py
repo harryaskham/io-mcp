@@ -74,11 +74,13 @@ class IoMcpApp(App):
     #preamble {
         margin: 1 2;
         color: $success;
+        text-wrap: wrap;
     }
 
     #status {
         margin: 1 2;
         color: $warning;
+        text-wrap: wrap;
     }
 
     #choices {
@@ -93,11 +95,13 @@ class IoMcpApp(App):
 
     ChoiceItem > .choice-label {
         color: $text;
+        text-wrap: wrap;
     }
 
     ChoiceItem > .choice-summary {
         color: $text-muted;
         margin-left: 2;
+        text-wrap: wrap;
     }
 
     ChoiceItem.-highlight > .choice-label {
@@ -233,12 +237,18 @@ class IoMcpApp(App):
         )
         self._tts.pregenerate(all_texts)
 
-        # Speak preamble + all option titles, then read option 1's full description
-        # so the user knows what's currently highlighted without needing to scroll
+        # Speak preamble + all option titles
         self._tts.speak(full_intro)
-        if numbered_full:
-            self._tts.speak(numbered_full[0])
+
+        # Intro done — clear the flag so highlight TTS works again, then
+        # read whichever item the user has currently highlighted (they may
+        # have scrolled during the intro). Use speak_async so it's
+        # interruptible if they scroll again immediately.
         self._intro_speaking = False
+        list_view = self.query_one("#choices", ListView)
+        idx = list_view.index or 0
+        if idx < len(numbered_full):
+            self._tts.speak_async(numbered_full[idx])
 
         # Block until selection
         self._selection_event.wait()
