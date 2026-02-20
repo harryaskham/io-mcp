@@ -35,11 +35,12 @@ from .tts import TTSEngine
 log = logging.getLogger("io_mcp")
 
 
-def _run_mcp_server(app: IoMcpApp, host: str, port: int) -> None:
+def _run_mcp_server(app: IoMcpApp, host: str, port: int, append_options: list[str] | None = None) -> None:
     """Run the MCP SSE server in a background thread."""
     from mcp.server.fastmcp import FastMCP
 
     server = FastMCP("io-mcp", host=host, port=port)
+    _append = append_options or []
 
     @server.tool()
     async def present_choices(
@@ -70,9 +71,16 @@ def _run_mcp_server(app: IoMcpApp, host: str, port: int) -> None:
         if not choices:
             return json.dumps({"selected": "error", "summary": "No choices provided"})
 
+        # Append persistent options from --append-option flags
+        all_choices = list(choices)
+        for opt in _append:
+            # Don't duplicate if Claude already included it
+            if not any(c.get("label", "").lower() == opt.lower() for c in all_choices):
+                all_choices.append({"label": opt, "summary": f"(persistent option)"})
+
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
-            None, app.present_choices, preamble, choices
+            None, app.present_choices, preamble, all_choices
         )
 
         return json.dumps(result)
@@ -131,6 +139,10 @@ def main() -> None:
         "--scroll-debounce", type=float, default=0.15, metavar="SECONDS",
         help="Minimum time between scroll events (default: 0.15s)"
     )
+    parser.add_argument(
+        "--append-option", action="append", default=[], metavar="LABEL",
+        help="Always append this option to every choice list (repeatable)"
+    )
     args = parser.parse_args()
 
     tts = TTSEngine(local=args.local)
@@ -141,7 +153,7 @@ def main() -> None:
     # Start MCP SSE server in background thread
     mcp_thread = threading.Thread(
         target=_run_mcp_server,
-        args=(app, args.host, args.port),
+        args=(app, args.host, args.port, args.append_option),
         daemon=True,
     )
     mcp_thread.start()

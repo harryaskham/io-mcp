@@ -145,6 +145,9 @@ class IoMcpApp(App):
         self._selection_event = threading.Event()
         self._active = False
 
+        # Suppress TTS for the initial highlight when list is populated
+        self._suppress_first_highlight = False
+
         # Dwell timer
         self._dwell_timer: Optional[Timer] = None
         self._dwell_start: float = 0.0
@@ -201,6 +204,7 @@ class IoMcpApp(App):
         self.query_one("#status").display = False
 
         # Populate list
+        self._suppress_first_highlight = True
         list_view = self.query_one("#choices", ListView)
         list_view.clear()
         for c in self._choices:
@@ -264,8 +268,13 @@ class IoMcpApp(App):
 
     @on(ListView.Highlighted)
     def on_highlight_changed(self, event: ListView.Highlighted) -> None:
-        """Speak label when highlight changes."""
+        """Speak label when highlight changes (skip initial highlight)."""
         if not self._active or event.item is None:
+            return
+        # Skip the first highlight — it fires when the list is populated
+        # and would overlap with the preamble TTS
+        if self._suppress_first_highlight:
+            self._suppress_first_highlight = False
             return
         if isinstance(event.item, ChoiceItem):
             self._tts.speak(event.item.choice_label)
