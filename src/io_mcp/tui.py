@@ -144,6 +144,8 @@ class IoMcpApp(App):
     def __init__(
         self,
         tts: TTSEngine,
+        freeform_tts: TTSEngine | None = None,
+        freeform_delimiters: str = " .,;:!?",
         dwell_time: float = 0.0,
         scroll_debounce: float = 0.15,
         demo: bool = False,
@@ -151,6 +153,8 @@ class IoMcpApp(App):
     ) -> None:
         super().__init__(**kwargs)
         self._tts = tts
+        self._freeform_tts = freeform_tts or tts
+        self._freeform_delimiters = set(freeform_delimiters)
         self._scroll_debounce = scroll_debounce
         self._demo = demo
         self._last_scroll_time: float = 0.0
@@ -168,6 +172,7 @@ class IoMcpApp(App):
 
         # Freeform text input mode
         self._input_mode = False
+        self._freeform_spoken_pos = 0  # how far we've spoken in the input
 
         # Dwell timer
         self._dwell_timer: Optional[Timer] = None
@@ -382,6 +387,7 @@ class IoMcpApp(App):
         if not self._active or self._input_mode:
             return
         self._input_mode = True
+        self._freeform_spoken_pos = 0
         self._cancel_dwell()
         self._tts.stop()
         self._tts.speak_async("Type your reply")
@@ -394,6 +400,25 @@ class IoMcpApp(App):
         inp.styles.display = "block"
         inp.focus()
 
+    @on(Input.Changed, "#freeform-input")
+    def on_freeform_changed(self, event: Input.Changed) -> None:
+        """Read back new chunks when a delimiter is typed."""
+        if not self._input_mode:
+            return
+        text = event.value
+        if len(text) <= self._freeform_spoken_pos:
+            # Deletion — reset spoken position to current length
+            self._freeform_spoken_pos = len(text)
+            return
+        # Check if the last character typed is a delimiter
+        if text and text[-1] in self._freeform_delimiters:
+            # Speak the new chunk since last spoken position
+            chunk = text[self._freeform_spoken_pos:].strip()
+            if chunk:
+                self._freeform_tts.stop()
+                self._freeform_tts.speak_async(chunk)
+            self._freeform_spoken_pos = len(text)
+
     @on(Input.Submitted, "#freeform-input")
     def on_freeform_submitted(self, event: Input.Submitted) -> None:
         """Handle Enter in freeform input."""
@@ -403,6 +428,8 @@ class IoMcpApp(App):
         self._input_mode = False
         event.input.styles.display = "none"
 
+        # Stop any freeform readback, confirm with main TTS
+        self._freeform_tts.stop()
         self._tts.stop()
         self._tts.speak_async(f"Selected: {text}")
 
@@ -413,6 +440,7 @@ class IoMcpApp(App):
     def _cancel_freeform(self) -> None:
         """Cancel freeform input and return to choices."""
         self._input_mode = False
+        self._freeform_tts.stop()
         inp = self.query_one("#freeform-input", Input)
         inp.styles.display = "none"
         self.query_one("#choices").display = True

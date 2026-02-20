@@ -54,10 +54,11 @@ class TTSEngine:
     pregenerate() creates clips in parallel so scrolling is instant.
     """
 
-    def __init__(self, local: bool = False):
+    def __init__(self, local: bool = False, speed: float = 1.0):
         self._process: Optional[subprocess.Popen] = None
         self._lock = threading.Lock()
         self._local = local
+        self._speed = speed
 
         self._env = os.environ.copy()
         self._env["PULSE_SERVER"] = os.environ.get("PULSE_SERVER", "127.0.0.1")
@@ -105,8 +106,9 @@ class TTSEngine:
             if self._local:
                 if not self._espeak:
                     return None
-                # espeak-ng outputs WAV directly
-                cmd = [self._espeak, "--stdout", "-s", str(TTS_SPEED), text]
+                # espeak-ng outputs WAV directly; scale WPM by speed
+                wpm = int(TTS_SPEED * self._speed)
+                cmd = [self._espeak, "--stdout", "-s", str(wpm), text]
                 with open(out_path, "wb") as f:
                     proc = subprocess.run(
                         cmd, stdout=f, stderr=subprocess.DEVNULL,
@@ -120,6 +122,8 @@ class TTSEngine:
                 # tts tool: request WAV (self-describing, paplay auto-detects)
                 out_path = os.path.join(CACHE_DIR, f"{key}.wav")
                 cmd = [self._tts_bin, text, "--stdout", "--response-format", "wav"]
+                if self._speed != 1.0:
+                    cmd += ["--speed", str(self._speed)]
                 with open(out_path, "wb") as f:
                     proc = subprocess.run(
                         cmd, stdout=f, stderr=subprocess.DEVNULL,

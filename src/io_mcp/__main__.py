@@ -166,6 +166,18 @@ def main() -> None:
         "--demo", action="store_true",
         help="Demo mode: show test choices immediately, no MCP server"
     )
+    parser.add_argument(
+        "--freeform-tts", choices=["api", "local"], default="api",
+        help="TTS backend for freeform typing readback (default: api, same as main)"
+    )
+    parser.add_argument(
+        "--freeform-tts-speed", type=float, default=1.6, metavar="SPEED",
+        help="TTS speed multiplier for freeform readback (default: 1.6)"
+    )
+    parser.add_argument(
+        "--freeform-tts-delimiters", default=" .,;:!?",
+        help="Characters that trigger TTS readback while typing (default: ' .,;:!?')"
+    )
     args = parser.parse_args()
 
     # Default append option: always offer to generate more options
@@ -174,8 +186,19 @@ def main() -> None:
 
     tts = TTSEngine(local=args.local)
 
+    # Separate TTS engine for freeform typing readback (can be different backend/speed)
+    freeform_local = args.freeform_tts == "local"
+    freeform_tts = TTSEngine(local=freeform_local, speed=args.freeform_tts_speed)
+
     # Create the textual app
-    app = IoMcpApp(tts=tts, dwell_time=args.dwell, scroll_debounce=args.scroll_debounce, demo=args.demo)
+    app = IoMcpApp(
+        tts=tts,
+        freeform_tts=freeform_tts,
+        freeform_delimiters=args.freeform_tts_delimiters,
+        dwell_time=args.dwell,
+        scroll_debounce=args.scroll_debounce,
+        demo=args.demo,
+    )
 
     if args.demo:
         # Demo mode: loop test choices, no MCP server
