@@ -24,8 +24,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import atexit
 import json
 import logging
+import os
 import threading
 import sys
 
@@ -33,6 +35,22 @@ from .tui import IoMcpApp
 from .tts import TTSEngine
 
 log = logging.getLogger("io_mcp")
+
+PID_FILE = "/tmp/io-mcp.pid"
+
+
+def _write_pid_file() -> None:
+    """Write PID file so hooks can detect io-mcp is running."""
+    with open(PID_FILE, "w") as f:
+        f.write(str(os.getpid()))
+
+
+def _remove_pid_file() -> None:
+    """Remove PID file on exit."""
+    try:
+        os.unlink(PID_FILE)
+    except OSError:
+        pass
 
 
 def _run_mcp_server(app: IoMcpApp, host: str, port: int, append_options: list[str] | None = None) -> None:
@@ -146,6 +164,10 @@ def main() -> None:
     args = parser.parse_args()
 
     tts = TTSEngine(local=args.local)
+
+    # Write PID file so global hooks can detect io-mcp is running
+    _write_pid_file()
+    atexit.register(_remove_pid_file)
 
     # Create the textual app
     app = IoMcpApp(tts=tts, dwell_time=args.dwell, scroll_debounce=args.scroll_debounce)
