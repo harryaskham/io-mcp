@@ -24,7 +24,7 @@ TTS_SPEED = 160
 TTS_TOOL_DIR = os.path.expanduser("~/mono/tools/tts")
 
 # LD_LIBRARY_PATH needed for sounddevice/portaudio on NOD
-PORTAUDIO_LIB = "/nix/store/7r2nbdnd4f0mpwkkknix2sl3zm67nlkf-nix-on-droid-path/lib"
+PORTAUDIO_LIB = os.path.expanduser("~/.nix-profile/lib")
 
 # Cache dir for pregenerated audio
 CACHE_DIR = os.path.join(tempfile.gettempdir(), "io-mcp-tts-cache")
