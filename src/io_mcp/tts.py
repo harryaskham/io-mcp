@@ -154,28 +154,35 @@ class TTSEngine:
             pool.map(self._generate_to_file, to_generate)
 
     def play_cached(self, text: str) -> None:
-        """Play a pregenerated audio clip. Falls back to live generation."""
+        """Play a pregenerated audio clip. Falls back to live generation.
+
+        Runs playback in a background thread so it never blocks the UI.
+        """
         if not self._paplay:
             return
-        self.stop()
 
         key = self._cache_key(text)
         path = self._cache.get(key)
 
-        if not path or not os.path.isfile(path):
-            # Generate on demand (fallback)
-            path = self._generate_to_file(text)
+        if path and os.path.isfile(path):
+            # Fast path: cached — kill current and play immediately
+            self.stop()
+            self._start_playback(path)
+        else:
+            # Slow path: generate on demand in background thread
+            def _gen_and_play():
+                p = self._generate_to_file(text)
+                if p:
+                    self.stop()
+                    self._start_playback(p)
+            threading.Thread(target=_gen_and_play, daemon=True).start()
 
-        if not path:
-            return
-
+    def _start_playback(self, path: str) -> None:
+        """Start paplay for a WAV file."""
         with self._lock:
             try:
-                # All cached files are WAV — paplay auto-detects format
-                cmd = [self._paplay, path]
-
                 self._process = subprocess.Popen(
-                    cmd,
+                    [self._paplay, path],
                     env=self._env,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
@@ -189,16 +196,12 @@ class TTSEngine:
         self.play_cached(text)
 
     def stop(self) -> None:
-        """Kill any in-progress playback."""
+        """Kill any in-progress playback (non-blocking)."""
         with self._lock:
             if self._process and self._process.poll() is None:
                 try:
                     os.killpg(os.getpgid(self._process.pid), signal.SIGKILL)
                 except (OSError, ProcessLookupError):
-                    pass
-                try:
-                    self._process.wait(timeout=0.5)
-                except Exception:
                     pass
                 self._process = None
 

@@ -29,13 +29,14 @@ from .tts import TTSEngine
 class ChoiceItem(ListItem):
     """A single choice in the list."""
 
-    def __init__(self, label: str, summary: str, **kwargs) -> None:
+    def __init__(self, label: str, summary: str, index: int = 0, **kwargs) -> None:
         super().__init__(**kwargs)
-        self.choice_label = label
+        self.choice_label = label  # raw label without number
         self.choice_summary = summary
+        self.choice_index = index  # 0-based
 
     def compose(self) -> ComposeResult:
-        yield Label(f"[bold]{self.choice_label}[/bold]", classes="choice-label")
+        yield Label(f"[bold]{self.choice_index + 1}. {self.choice_label}[/bold]", classes="choice-label")
         yield Label(self.choice_summary, classes="choice-summary")
 
 
@@ -227,7 +228,7 @@ class IoMcpApp(App):
         for i, c in enumerate(self._choices):
             label = c.get("label", "???")
             summary = c.get("summary", "")
-            list_view.append(ChoiceItem(f"{i+1}. {label}", summary))
+            list_view.append(ChoiceItem(label, summary, index=i))
         list_view.display = True
         list_view.index = 0
         list_view.focus()
@@ -294,10 +295,8 @@ class IoMcpApp(App):
             self._suppress_first_highlight = False
             return
         if isinstance(event.item, ChoiceItem):
-            # Find index of this item in the list
-            list_view = self.query_one("#choices", ListView)
-            idx = list_view.index or 0
             # Read: "2. Commit everything. Stage and commit the fix."
+            idx = event.item.choice_index
             text = f"{idx + 1}. {event.item.choice_label}. {event.item.choice_summary}"
             self._tts.speak(text)
             if self._dwell_time > 0:
