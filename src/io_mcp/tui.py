@@ -148,6 +148,7 @@ class IoMcpApp(App):
         freeform_delimiters: str = " .,;:!?",
         dwell_time: float = 0.0,
         scroll_debounce: float = 0.15,
+        invert_scroll: bool = False,
         demo: bool = False,
         **kwargs,
     ) -> None:
@@ -156,6 +157,7 @@ class IoMcpApp(App):
         self._freeform_tts = freeform_tts or tts
         self._freeform_delimiters = set(freeform_delimiters)
         self._scroll_debounce = scroll_debounce
+        self._invert_scroll = invert_scroll
         self._demo = demo
         self._last_scroll_time: float = 0.0
         self._dwell_time = dwell_time
@@ -167,8 +169,9 @@ class IoMcpApp(App):
         self._selection_event = threading.Event()
         self._active = False
 
-        # Suppress TTS for the initial highlight when list is populated
-        self._suppress_first_highlight = False
+        # True while preamble/intro TTS is playing — suppress scroll TTS
+        # so highlight changes during intro don't interrupt it
+        self._intro_speaking = False
 
         # Freeform text input mode
         self._input_mode = False
@@ -203,6 +206,7 @@ class IoMcpApp(App):
         self._selection = None
         self._selection_event.clear()
         self._active = True
+        self._intro_speaking = True
 
         # Build numbered labels for TTS
         numbered_labels = [
@@ -218,7 +222,10 @@ class IoMcpApp(App):
         titles_readout = " ".join(numbered_labels)
         full_intro = f"{preamble} Your options are: {titles_readout}"
 
-        # Pregenerate all audio clips in parallel before showing UI
+        # Show UI immediately — don't wait for audio pregeneration
+        self.call_from_thread(self._show_choices)
+
+        # Pregenerate all audio clips in parallel
         all_texts = (
             [full_intro]
             + numbered_full  # for on-scroll readout (label + desc)
@@ -226,11 +233,12 @@ class IoMcpApp(App):
         )
         self._tts.pregenerate(all_texts)
 
-        # Schedule UI update on the textual event loop
-        self.call_from_thread(self._show_choices)
-
-        # Speak preamble + all option titles
+        # Speak preamble + all option titles, then read option 1's full description
+        # so the user knows what's currently highlighted without needing to scroll
         self._tts.speak(full_intro)
+        if numbered_full:
+            self._tts.speak(numbered_full[0])
+        self._intro_speaking = False
 
         # Block until selection
         self._selection_event.wait()
@@ -249,7 +257,6 @@ class IoMcpApp(App):
         self.query_one("#status").display = False
 
         # Populate list
-        self._suppress_first_highlight = True
         list_view = self.query_one("#choices", ListView)
         list_view.clear()
         for i, c in enumerate(self._choices):
@@ -317,10 +324,10 @@ class IoMcpApp(App):
         """Speak numbered label + description when highlight changes."""
         if not self._active or event.item is None:
             return
-        # Skip the first highlight — it fires when the list is populated
-        # and would overlap with the preamble + titles TTS
-        if self._suppress_first_highlight:
-            self._suppress_first_highlight = False
+        # While the intro is still speaking (preamble + all titles + option 1),
+        # don't fire TTS for highlight changes — it would interrupt the intro.
+        # The visual highlight still moves normally.
+        if self._intro_speaking:
             return
         if isinstance(event.item, ChoiceItem):
             # Read: "2. Commit everything. Stage and commit the fix."
@@ -361,20 +368,26 @@ class IoMcpApp(App):
         return True
 
     def on_mouse_scroll_down(self, event: MouseScrollDown) -> None:
-        """Mouse scroll down → move cursor down."""
+        """Mouse scroll down → move cursor down (or up if inverted)."""
         if self._active and self._scroll_allowed():
             list_view = self.query_one("#choices", ListView)
             if list_view.display:
-                list_view.action_cursor_down()
+                if self._invert_scroll:
+                    list_view.action_cursor_up()
+                else:
+                    list_view.action_cursor_down()
                 event.prevent_default()
                 event.stop()
 
     def on_mouse_scroll_up(self, event: MouseScrollUp) -> None:
-        """Mouse scroll up → move cursor up."""
+        """Mouse scroll up → move cursor up (or down if inverted)."""
         if self._active and self._scroll_allowed():
             list_view = self.query_one("#choices", ListView)
             if list_view.display:
-                list_view.action_cursor_up()
+                if self._invert_scroll:
+                    list_view.action_cursor_down()
+                else:
+                    list_view.action_cursor_up()
                 event.prevent_default()
                 event.stop()
 

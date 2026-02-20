@@ -88,9 +88,12 @@ uv run io-mcp
 | `--scroll-debounce` | 0.15 | Min seconds between scroll events |
 | `--append-option` | "More options" | Always append this choice (repeatable) |
 | `--demo` | off | Demo mode — test choices loop, no MCP server |
-| `--freeform-tts` | api | TTS backend for freeform typing readback (api\|local) |
+| `--freeform-tts` | local | TTS backend for freeform typing readback (api\|local) |
 | `--freeform-tts-speed` | 1.6 | Speed multiplier for freeform TTS |
 | `--freeform-tts-delimiters` | " .,;:!?" | Chars that trigger typing readback |
+| `--speed` | 1.2 | Speed multiplier for OpenAI TTS |
+| `--voice` | sage | OpenAI TTS voice name |
+| `--invert` | off | Reverse scroll direction interpretation |
 
 ## Important Notes for Agents
 

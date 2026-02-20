@@ -54,11 +54,12 @@ class TTSEngine:
     pregenerate() creates clips in parallel so scrolling is instant.
     """
 
-    def __init__(self, local: bool = False, speed: float = 1.0):
+    def __init__(self, local: bool = False, speed: float = 1.0, voice: str = "sage"):
         self._process: Optional[subprocess.Popen] = None
         self._lock = threading.Lock()
         self._local = local
         self._speed = speed
+        self._voice = voice
 
         self._env = os.environ.copy()
         self._env["PULSE_SERVER"] = os.environ.get("PULSE_SERVER", "127.0.0.1")
@@ -88,7 +89,9 @@ class TTSEngine:
         print(f"  TTS: {mode}", flush=True)
 
     def _cache_key(self, text: str) -> str:
-        return hashlib.md5(text.encode()).hexdigest()
+        # Include voice/speed/backend in key so different settings don't collide
+        params = f"{text}|local={self._local}|speed={self._speed}|voice={self._voice}"
+        return hashlib.md5(params.encode()).hexdigest()
 
     def _generate_to_file(self, text: str) -> Optional[str]:
         """Generate audio for text and save to a WAV file. Returns file path."""
@@ -124,6 +127,8 @@ class TTSEngine:
                 cmd = [self._tts_bin, text, "--stdout", "--response-format", "wav"]
                 if self._speed != 1.0:
                     cmd += ["--speed", str(self._speed)]
+                if self._voice:
+                    cmd += ["--voice", self._voice]
                 with open(out_path, "wb") as f:
                     proc = subprocess.run(
                         cmd, stdout=f, stderr=subprocess.DEVNULL,

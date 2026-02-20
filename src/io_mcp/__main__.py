@@ -167,8 +167,8 @@ def main() -> None:
         help="Demo mode: show test choices immediately, no MCP server"
     )
     parser.add_argument(
-        "--freeform-tts", choices=["api", "local"], default="api",
-        help="TTS backend for freeform typing readback (default: api, same as main)"
+        "--freeform-tts", choices=["api", "local"], default="local",
+        help="TTS backend for freeform typing readback (default: local)"
     )
     parser.add_argument(
         "--freeform-tts-speed", type=float, default=1.6, metavar="SPEED",
@@ -178,13 +178,25 @@ def main() -> None:
         "--freeform-tts-delimiters", default=" .,;:!?",
         help="Characters that trigger TTS readback while typing (default: ' .,;:!?')"
     )
+    parser.add_argument(
+        "--speed", type=float, default=1.2, metavar="SPEED",
+        help="TTS speed multiplier for OpenAI TTS (default: 1.2)"
+    )
+    parser.add_argument(
+        "--voice", default="sage",
+        help="OpenAI TTS voice name (default: sage)"
+    )
+    parser.add_argument(
+        "--invert", action="store_true",
+        help="Invert scroll direction (scroll-down → cursor-up, scroll-up → cursor-down)"
+    )
     args = parser.parse_args()
 
     # Default append option: always offer to generate more options
     if not args.append_option:
         args.append_option = ["More options"]
 
-    tts = TTSEngine(local=args.local)
+    tts = TTSEngine(local=args.local, speed=args.speed, voice=args.voice)
 
     # Separate TTS engine for freeform typing readback (can be different backend/speed)
     freeform_local = args.freeform_tts == "local"
@@ -197,6 +209,7 @@ def main() -> None:
         freeform_delimiters=args.freeform_tts_delimiters,
         dwell_time=args.dwell,
         scroll_debounce=args.scroll_debounce,
+        invert_scroll=args.invert,
         demo=args.demo,
     )
 
