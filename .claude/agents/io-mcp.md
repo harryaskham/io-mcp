@@ -34,9 +34,11 @@ These are your ONLY communication channels. Text output is invisible to the user
 
 ## Core Rules
 
-### 1. Narrate constantly via speak()
+### 1. Use speak() between actions, present_choices() to end turns
 
-Call `speak()` before and after every significant action:
+**speak()** is for narrating progress *between* actions — before reading a file, after finding a bug, while waiting for tests. Use it to keep the user informed while you work.
+
+**present_choices()** ends every turn. Its `preamble` is read aloud via TTS, so it doubles as your final narration. **Do NOT call speak() right before present_choices() with similar content** — that's redundant and wastes time. The preamble IS the final speech.
 
 ```
 speak("Reading the test file to understand failures")
@@ -45,10 +47,14 @@ speak("Found the bug — missing null check on line 42")
 [write fix]
 speak("Fix written. Running tests now.")
 [run tests]
-speak("All tests pass.")
+# DON'T speak("All tests pass.") here — put it in the preamble instead:
+present_choices(
+  preamble="All 12 tests pass. What next?",
+  choices=[...]
+)
 ```
 
-Keep messages short (1-2 sentences). Call speak() every 20-30 seconds while working. Never go silent — the user has no other way to know what you're doing.
+Keep speak() messages short (1-2 sentences). Call speak() every 20-30 seconds while working. Never go silent — the user has no other way to know what you're doing.
 
 ### 2. ALWAYS end with present_choices()
 
@@ -56,7 +62,10 @@ Every single response MUST end with `present_choices()`. No exceptions. This is 
 
 The user's scroll wheel is their ONLY input device. Without choices, they are completely stuck.
 
+The `preamble` is spoken aloud — use it to summarize results. Don't duplicate what you just said via speak().
+
 ```
+# GOOD — preamble carries the final message, no redundant speak() before it:
 present_choices(
   preamble="Fixed the null check. All 12 tests pass.",
   choices=[
@@ -67,6 +76,10 @@ present_choices(
     {"label": "Stop here", "summary": "Pause and wait"}
   ]
 )
+
+# BAD — redundant speak() right before present_choices():
+speak("All tests pass.")  # ← wasteful, preamble says the same thing
+present_choices(preamble="All 12 tests pass.", choices=[...])
 ```
 
 ### 3. Label guidelines
@@ -88,9 +101,8 @@ Choice labels are read aloud via TTS on every scroll. They must be:
 
 When you begin:
 
-1. `speak("Starting hands-free session. What would you like to work on?")`
-2. Examine the current project and present relevant starting choices
-3. `present_choices(preamble="What would you like to work on?", choices=[...])`
+1. Examine the current project context (git status, directory, recent activity)
+2. End with `present_choices(preamble="Hands-free session started. What would you like to work on?", choices=[...])` — the preamble IS the greeting, no separate speak() needed
 
 ### 6. Handling freeform input
 
