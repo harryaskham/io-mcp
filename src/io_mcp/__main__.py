@@ -38,6 +38,8 @@ import socket
 import threading
 import sys
 
+from mcp.server.fastmcp import FastMCP, Context
+
 from .tui import IoMcpApp
 from .tts import TTSEngine
 
@@ -81,7 +83,7 @@ def _kill_existing_instance() -> None:
         pass
 
 
-def _get_session_id(ctx: "Context") -> str:
+def _get_session_id(ctx: Context) -> str:
     """Extract a stable session ID from the MCP context.
 
     For streamable-http: uses the mcp_session_id (a UUID string).
@@ -110,7 +112,6 @@ def _run_mcp_server(app: IoMcpApp, host: str, port: int, append_options: list[st
 
 def _run_mcp_server_inner(app: IoMcpApp, host: str, port: int, append_options: list[str] | None = None) -> None:
     """Inner implementation of MCP server startup."""
-    from mcp.server.fastmcp import FastMCP, Context
 
     with open("/tmp/io-mcp-server.log", "w") as f:
         f.write(f"Starting MCP server on {host}:{port}\n")
