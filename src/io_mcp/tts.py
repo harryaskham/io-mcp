@@ -62,6 +62,7 @@ class TTSEngine:
         self._lock = threading.Lock()
         self._local = local
         self._speed = speed
+        self._muted = False  # when True, play_cached is a no-op
 
         self._env = os.environ.copy()
         self._env["PULSE_SERVER"] = os.environ.get("PULSE_SERVER", "127.0.0.1")
@@ -169,7 +170,7 @@ class TTSEngine:
         If block=True, waits for playback to finish before returning.
         If block=False, starts playback and returns immediately.
         """
-        if not self._paplay:
+        if not self._paplay or self._muted:
             return
 
         key = self._cache_key(text)
@@ -240,6 +241,15 @@ class TTSEngine:
                 except (OSError, ProcessLookupError):
                     pass
                 self._process = None
+
+    def mute(self) -> None:
+        """Stop playback and prevent any new audio from playing."""
+        self._muted = True
+        self.stop()
+
+    def unmute(self) -> None:
+        """Allow audio playback again."""
+        self._muted = False
 
     def clear_cache(self) -> None:
         """Remove all cached audio files."""

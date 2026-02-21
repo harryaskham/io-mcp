@@ -848,8 +848,9 @@ class IoMcpApp(App):
         session.voice_recording = True
         session.reading_options = False
 
-        # Stop all audio immediately before mic opens
-        self._tts.stop()
+        # Mute TTS — stops current audio and prevents any new playback
+        # until unmute() is called in _stop_voice_recording
+        self._tts.mute()
 
         # UI update
         self.query_one("#choices").display = False
@@ -944,6 +945,9 @@ class IoMcpApp(App):
                         proc.kill()
                     except Exception:
                         pass
+
+            # Unmute TTS now that recording is stopped
+            self._tts.unmute()
 
             # Check file exists
             if not rec_file or not os.path.isfile(rec_file):
@@ -1426,6 +1430,7 @@ class IoMcpApp(App):
                     os.unlink(rec_file)
                 except Exception:
                     pass
+            self._tts.unmute()
             self._tts.speak_async("Recording cancelled")
             self._restore_choices()
             event.prevent_default()
