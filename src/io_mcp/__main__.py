@@ -28,6 +28,8 @@ import atexit
 import json
 import logging
 import os
+import signal
+import socket
 import threading
 import sys
 
@@ -50,6 +52,27 @@ def _remove_pid_file() -> None:
     try:
         os.unlink(PID_FILE)
     except OSError:
+        pass
+
+
+def _kill_existing_instance() -> None:
+    """Kill any previous io-mcp instance so we can rebind the port cleanly.
+
+    This ensures that after a restart, the SSE port is immediately available
+    for new agent connections.
+    """
+    try:
+        with open(PID_FILE, "r") as f:
+            old_pid = int(f.read().strip())
+        if old_pid != os.getpid():
+            os.kill(old_pid, signal.SIGTERM)
+            import time
+            time.sleep(0.3)  # Give it a moment to die
+            try:
+                os.kill(old_pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+    except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError):
         pass
 
 
@@ -132,6 +155,32 @@ def _run_mcp_server(app: IoMcpApp, host: str, port: int, append_options: list[st
         """
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, app.speak, text)
+        preview = text[:100] + ("..." if len(text) > 100 else "")
+        return f"Spoke: {preview}"
+
+    @server.tool()
+    async def speak_async(text: str) -> str:
+        """Speak text aloud via TTS WITHOUT blocking. Returns immediately.
+
+        Use this for quick status updates where you don't need to wait
+        for speech to finish before continuing work. Prefer this over
+        speak() for brief narration between tool calls.
+
+        The audio plays in the background while you continue working.
+        If new speech is requested before the current one finishes,
+        the current playback is interrupted.
+
+        Parameters
+        ----------
+        text:
+            The text to speak. Keep it concise (1-2 sentences max).
+
+        Returns
+        -------
+        str
+            Confirmation message.
+        """
+        app.speak_async(text)
         preview = text[:100] + ("..." if len(text) > 100 else "")
         return f"Spoke: {preview}"
 
@@ -246,6 +295,9 @@ def main() -> None:
         demo_thread = threading.Thread(target=_demo_loop, daemon=True)
         demo_thread.start()
     else:
+        # Kill any existing io-mcp instance so we can rebind the SSE port
+        _kill_existing_instance()
+
         # Write PID file so global hooks can detect io-mcp is running
         _write_pid_file()
         atexit.register(_remove_pid_file)

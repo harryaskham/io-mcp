@@ -34,8 +34,9 @@ EXTRA_OPTIONS = [
     {"label": "Voice toggle", "summary": "Quick-switch between voices"},
     {"label": "Settings", "summary": "Open settings menu"},
 ]
-# Indices: 0=record, -1=fast, -2=voice, -3=settings
-# Displayed in list before real options, reached by scrolling up
+# Display order (top to bottom): -3=Record, -2=Fast, -1=Voice, 0=Settings
+# Logical index to array: ei = len(EXTRA_OPTIONS) - 1 + logical_index
+# Reached by scrolling up past the first real option
 
 
 # ─── Choice Item Widget ─────────────────────────────────────────────────────
@@ -377,7 +378,7 @@ class IoMcpApp(App):
                     s = c.get('summary', '')
                     text = f"{logical}. {c.get('label', '')}. {s}" if s else f"{logical}. {c.get('label', '')}"
                 else:
-                    ei = -logical
+                    ei = len(EXTRA_OPTIONS) - 1 + logical
                     if 0 <= ei < len(EXTRA_OPTIONS):
                         e = EXTRA_OPTIONS[ei]
                         text = f"{e['label']}. {e['summary']}"
@@ -450,9 +451,23 @@ class IoMcpApp(App):
         status.update(after_text)
         status.display = True
 
+    def _show_idle(self) -> None:
+        """Show idle state (no active choices, no agent connected)."""
+        self.query_one("#choices").display = False
+        self.query_one("#preamble").display = False
+        self.query_one("#dwell-bar").display = False
+        status = self.query_one("#status", Label)
+        status_text = "Ready — demo mode" if self._demo else "Waiting for agent..."
+        status.update(status_text)
+        status.display = True
+
     def speak(self, text: str) -> None:
-        """Non-blocking TTS (can be called from any thread)."""
+        """Blocking TTS (can be called from any thread)."""
         self._tts.speak(text)
+
+    def speak_async(self, text: str) -> None:
+        """Non-blocking TTS (can be called from any thread)."""
+        self._tts.speak_async(text)
 
     # ─── Prompt replay ────────────────────────────────────────────────
 
@@ -590,11 +605,9 @@ class IoMcpApp(App):
     # ─── Settings menu ────────────────────────────────────────────────
 
     def action_toggle_settings(self) -> None:
-        """Toggle settings menu."""
+        """Toggle settings menu. Always available regardless of agent connection."""
         if self._in_settings:
             self._exit_settings()
-            return
-        if not self._active and not self._demo:
             return
         self._enter_settings()
 
@@ -636,10 +649,15 @@ class IoMcpApp(App):
         self._in_settings = False
         self._setting_edit_mode = False
         self._tts.stop()
-        self._tts.speak_async("Back to choices")
 
-        # Restore the real choices
-        self.call_from_thread(self._show_choices)
+        if self._active:
+            self._tts.speak_async("Back to choices")
+            # Restore the real choices
+            self.call_from_thread(self._show_choices)
+        else:
+            self._tts.speak_async("Settings closed")
+            # No active choices — show waiting state
+            self.call_from_thread(self._show_idle)
 
     def _enter_setting_edit(self, key: str) -> None:
         """Enter edit mode for a specific setting."""
@@ -785,12 +803,8 @@ class IoMcpApp(App):
                 s = c.get('summary', '')
                 text = f"{logical}. {c.get('label', '')}. {s}" if s else f"{logical}. {c.get('label', '')}"
             else:
-                # Extra option
-                ei = -(logical - 0)  # 0 → 0, -1 → 1, -2 → 2, -3 → 3
-                if logical == 0:
-                    ei = 0
-                elif logical < 0:
-                    ei = -logical
+                # Extra option: logical 0 → last extra, -1 → second-to-last, etc.
+                ei = len(EXTRA_OPTIONS) - 1 + logical
                 if 0 <= ei < len(EXTRA_OPTIONS):
                     e = EXTRA_OPTIONS[ei]
                     text = f"{e['label']}. {e.get('summary', '')}" if e.get('summary') else e['label']
@@ -1034,24 +1048,30 @@ class IoMcpApp(App):
         self._show_waiting(label)
 
     def _handle_extra_select(self, logical_index: int) -> None:
-        """Handle selection of extra options (0, -1, -2, -3)."""
+        """Handle selection of extra options.
+
+        Display order (top to bottom): -3=Record, -2=Fast, -1=Voice, 0=Settings.
+        Maps logical_index to EXTRA_OPTIONS array via: ei = len(EXTRA_OPTIONS) - 1 + logical_index.
+        """
         self._tts.stop()
 
-        if logical_index == 0:
-            # Record response
+        # Convert logical index to array index
+        ei = len(EXTRA_OPTIONS) - 1 + logical_index
+        if ei < 0 or ei >= len(EXTRA_OPTIONS):
+            return
+
+        label = EXTRA_OPTIONS[ei]["label"]
+        if label == "Record response":
             self.action_voice_input()
-        elif logical_index == -1:
-            # Fast toggle
+        elif label == "Fast toggle":
             msg = self.settings.toggle_fast()
             self._tts.clear_cache()
             self._tts.speak_async(msg)
-        elif logical_index == -2:
-            # Voice toggle
+        elif label == "Voice toggle":
             msg = self.settings.toggle_voice()
             self._tts.clear_cache()
             self._tts.speak_async(msg)
-        elif logical_index == -3:
-            # Settings
+        elif label == "Settings":
             self._enter_settings()
 
 

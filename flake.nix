@@ -95,11 +95,25 @@
           pythonSet = pythonSets.${system};
           venv = pythonSet.mkVirtualEnv "io-mcp" workspace.deps.all;
           inherit (pkgs.callPackages pyproject-nix.build.util { }) mkApplication;
-        in lib.fix (self: {
-          default = self.io-mcp;
-          io-mcp = mkApplication {
+          base = mkApplication {
             inherit venv;
             package = pythonSet.io-mcp;
+          };
+        in lib.fix (self: {
+          default = self.io-mcp;
+          io-mcp = pkgs.symlinkJoin {
+            name = "io-mcp";
+            paths = [ base ];
+            postBuild = ''
+              # Link agent/skill/hook files under $out/share
+              mkdir -p $out/share/io-mcp/agents
+              mkdir -p $out/share/io-mcp/skills/io-mcp
+              mkdir -p $out/share/io-mcp/hooks
+              cp ${./.claude/agents/io-mcp.md} $out/share/io-mcp/agents/io-mcp.md
+              cp ${./.claude/skills/io-mcp/SKILL.md} $out/share/io-mcp/skills/io-mcp/SKILL.md
+              cp ${./.claude/hooks/enforce-choices.sh} $out/share/io-mcp/hooks/enforce-choices.sh
+              cp ${./.claude/hooks/nudge-speak.sh} $out/share/io-mcp/hooks/nudge-speak.sh
+            '';
           };
         })
       );

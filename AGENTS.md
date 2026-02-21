@@ -23,7 +23,7 @@ MCP server providing hands-free Claude Code interaction via scroll wheel (smart 
 
 - **Main thread**: Textual TUI — scroll/keyboard navigation, choice display
 - **Background thread**: MCP SSE server on port 8444 via FastMCP + uvicorn
-- **Two MCP tools**: `speak(text)` and `present_choices(preamble, choices)`
+- **Two MCP tools**: `speak(text)` (blocking), `speak_async(text)` (non-blocking), and `present_choices(preamble, choices)`
 - **TTS pipeline**: `tts` CLI (gpt-4o-mini-tts) or `espeak-ng` → WAV → `paplay` via PulseAudio TCP bridge
 
 ## Source Layout
