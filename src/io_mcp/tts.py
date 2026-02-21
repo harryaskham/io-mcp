@@ -222,8 +222,14 @@ class TTSEngine:
         self.play_cached(text, block=True)
 
     def speak_async(self, text: str) -> None:
-        """Speak text without blocking. Used for scroll TTS."""
-        self.play_cached(text, block=False)
+        """Speak text without blocking. Used for scroll TTS.
+
+        Runs generation + playback in a background thread so the calling
+        thread (e.g. Textual main thread) is never blocked.
+        """
+        def _do():
+            self.play_cached(text, block=False)
+        threading.Thread(target=_do, daemon=True).start()
 
     def stop(self) -> None:
         """Kill any in-progress playback (non-blocking)."""

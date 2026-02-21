@@ -1031,7 +1031,6 @@ class IoMcpApp(App):
             session.in_settings = True
             session.reading_options = False
         self._setting_edit_mode = False
-        self._tts.stop()
 
         self._settings_items = [
             {"label": "Speed", "key": "speed",
@@ -1056,6 +1055,8 @@ class IoMcpApp(App):
         list_view.index = 0
         list_view.focus()
 
+        # TTS after UI is updated
+        self._tts.stop()
         self._tts.speak_async("Settings")
 
     def _exit_settings(self) -> None:
@@ -1064,14 +1065,16 @@ class IoMcpApp(App):
         if session:
             session.in_settings = False
         self._setting_edit_mode = False
-        self._tts.stop()
 
+        # UI first, then TTS
         if session and session.active:
-            self._tts.speak_async("Back to choices")
             self._show_choices()
+            self._tts.stop()
+            self._tts.speak_async("Back to choices")
         else:
-            self._tts.speak_async("Settings closed")
             self._show_idle()
+            self._tts.stop()
+            self._tts.speak_async("Settings closed")
 
     def _enter_setting_edit(self, key: str) -> None:
         """Enter edit mode for a specific setting."""
