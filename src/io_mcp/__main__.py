@@ -100,14 +100,21 @@ def _run_mcp_server(app: IoMcpApp, host: str, port: int, append_options: list[st
     try:
         _run_mcp_server_inner(app, host, port, append_options)
     except Exception:
-        log.exception("MCP server thread crashed")
         import traceback
-        traceback.print_exc()
+        crash = traceback.format_exc()
+        # Write to file since Textual captures stderr
+        with open("/tmp/io-mcp-crash.log", "w") as f:
+            f.write(crash)
+        log.error("MCP server thread crashed — see /tmp/io-mcp-crash.log")
 
 
 def _run_mcp_server_inner(app: IoMcpApp, host: str, port: int, append_options: list[str] | None = None) -> None:
     """Inner implementation of MCP server startup."""
     from mcp.server.fastmcp import FastMCP, Context
+
+    with open("/tmp/io-mcp-server.log", "w") as f:
+        f.write(f"Starting MCP server on {host}:{port}\n")
+        f.flush()
 
     server = FastMCP("io-mcp", host=host, port=port)
     _append = append_options or []
@@ -233,7 +240,21 @@ def _run_mcp_server_inner(app: IoMcpApp, host: str, port: int, append_options: l
         return f"Spoke: {preview}"
 
     # Run streamable-http server (blocks this thread)
+    # Log to file since Textual captures stdout/stderr
+    _log = logging.getLogger("uvicorn")
+    _log.handlers.clear()
+    _fh = logging.FileHandler("/tmp/io-mcp-server.log", mode="a")
+    _fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    _log.addHandler(_fh)
+    _log.setLevel(logging.DEBUG)
+
+    with open("/tmp/io-mcp-server.log", "a") as f:
+        f.write("Calling server.run(transport='streamable-http')\n")
+
     server.run(transport="streamable-http")
+
+    with open("/tmp/io-mcp-server.log", "a") as f:
+        f.write("server.run() returned (should not happen)\n")
 
 
 def main() -> None:
