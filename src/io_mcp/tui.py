@@ -229,15 +229,20 @@ class IoMcpApp(App):
         # Show UI immediately — don't wait for audio pregeneration
         self.call_from_thread(self._show_choices)
 
-        # Pregenerate all audio clips in parallel
-        all_texts = (
-            [full_intro]
-            + numbered_full  # for on-scroll readout (label + desc)
+        # Pregenerate the per-option clips in the background while the
+        # intro speaks. The intro itself will generate on-demand if not
+        # cached, but it starts playing immediately instead of waiting
+        # for every clip to finish first.
+        bg_texts = (
+            numbered_full  # for on-scroll readout (label + desc)
             + [f"Selected: {c.get('label', '')}" for c in choices]
         )
-        self._tts.pregenerate(all_texts)
+        pregen_thread = threading.Thread(
+            target=self._tts.pregenerate, args=(bg_texts,), daemon=True
+        )
+        pregen_thread.start()
 
-        # Speak preamble + all option titles
+        # Speak intro right away (generates on-demand if not cached)
         self._tts.speak(full_intro)
 
         # Intro done — clear the flag so highlight TTS works again, then
