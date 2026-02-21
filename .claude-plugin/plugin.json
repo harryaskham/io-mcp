@@ -4,8 +4,8 @@
   "description": "Hands-free Claude Code via scroll wheel and earphones. Provides io-mcp agent with TTS narration and scroll-wheel choice selection.",
   "mcpServers": {
     "io-mcp": {
-      "type": "sse",
-      "url": "http://localhost:8444/sse"
+      "type": "streamable-http",
+      "url": "http://localhost:8444/mcp"
     }
   }
 }

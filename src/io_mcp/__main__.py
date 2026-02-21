@@ -1,7 +1,7 @@
 """
 io-mcp — MCP server for agent I/O via scroll-wheel and TTS.
 
-Exposes MCP tools via SSE transport on port 8444:
+Exposes MCP tools via streamable-http transport on port 8444:
 
   present_choices(preamble, choices)
       Show choices in the TUI, block until user scrolls and selects.
@@ -16,7 +16,7 @@ Exposes MCP tools via SSE transport on port 8444:
 Multiple agents can connect simultaneously — each gets a session tab.
 
 Textual TUI runs in the main thread (needs signal handlers).
-MCP SSE server runs in a background thread via uvicorn.
+MCP streamable-http server runs in a background thread via uvicorn.
 
 Usage:
     cd ~/cosmos/projects/io-mcp && uv run io-mcp
@@ -63,7 +63,7 @@ def _remove_pid_file() -> None:
 def _kill_existing_instance() -> None:
     """Kill any previous io-mcp instance so we can rebind the port cleanly.
 
-    This ensures that after a restart, the SSE port is immediately available
+    This ensures that after a restart, the HTTP port is immediately available
     for new agent connections.
     """
     try:
@@ -81,8 +81,22 @@ def _kill_existing_instance() -> None:
         pass
 
 
+def _get_session_id(ctx: "Context") -> str:
+    """Extract a stable session ID from the MCP context.
+
+    For streamable-http: uses the mcp_session_id (a UUID string).
+    Fallback: uses id(ctx.session) as a string.
+    """
+    session = ctx.session
+    # streamable-http transport has mcp_session_id
+    sid = getattr(session, "mcp_session_id", None)
+    if sid:
+        return str(sid)
+    return str(id(session))
+
+
 def _run_mcp_server(app: IoMcpApp, host: str, port: int, append_options: list[str] | None = None) -> None:
-    """Run the MCP SSE server in a background thread."""
+    """Run the MCP streamable-http server in a background thread."""
     from mcp.server.fastmcp import FastMCP, Context
 
     server = FastMCP("io-mcp", host=host, port=port)
@@ -119,7 +133,7 @@ def _run_mcp_server(app: IoMcpApp, host: str, port: int, append_options: list[st
             return json.dumps({"selected": "error", "summary": "No choices provided"})
 
         # Get or create session for this MCP client
-        session_id = id(ctx.session)
+        session_id = _get_session_id(ctx)
         session, created = app.manager.get_or_create(session_id)
         if created:
             app.on_session_created(session)
@@ -166,7 +180,7 @@ def _run_mcp_server(app: IoMcpApp, host: str, port: int, append_options: list[st
             Confirmation message.
         """
         # Get or create session for this MCP client
-        session_id = id(ctx.session)
+        session_id = _get_session_id(ctx)
         session, created = app.manager.get_or_create(session_id)
         if created:
             app.on_session_created(session)
@@ -199,7 +213,7 @@ def _run_mcp_server(app: IoMcpApp, host: str, port: int, append_options: list[st
             Confirmation message.
         """
         # Get or create session for this MCP client
-        session_id = id(ctx.session)
+        session_id = _get_session_id(ctx)
         session, created = app.manager.get_or_create(session_id)
         if created:
             app.on_session_created(session)
@@ -208,8 +222,8 @@ def _run_mcp_server(app: IoMcpApp, host: str, port: int, append_options: list[st
         preview = text[:100] + ("..." if len(text) > 100 else "")
         return f"Spoke: {preview}"
 
-    # Run SSE server (blocks this thread)
-    server.run(transport="sse")
+    # Run streamable-http server (blocks this thread)
+    server.run(transport="streamable-http")
 
 
 def main() -> None:
@@ -222,11 +236,11 @@ def main() -> None:
     )
     parser.add_argument(
         "--port", type=int, default=8444,
-        help="SSE server port (default: 8444)"
+        help="Server port (default: 8444)"
     )
     parser.add_argument(
         "--host", default="0.0.0.0",
-        help="SSE server host (default: 0.0.0.0)"
+        help="Server bind address (default: 0.0.0.0)"
     )
     parser.add_argument(
         "--dwell", type=float, default=0.0, metavar="SECONDS",
@@ -289,7 +303,7 @@ def main() -> None:
             import time
             time.sleep(0.5)  # let textual mount
             # Create a demo session
-            demo_session, _ = app.manager.get_or_create(-1)
+            demo_session, _ = app.manager.get_or_create("demo")
             demo_session.name = "Demo"
 
             round_num = 0
@@ -324,14 +338,14 @@ def main() -> None:
         demo_thread = threading.Thread(target=_demo_loop, daemon=True)
         demo_thread.start()
     else:
-        # Kill any existing io-mcp instance so we can rebind the SSE port
+        # Kill any existing io-mcp instance so we can rebind the port
         _kill_existing_instance()
 
         # Write PID file so global hooks can detect io-mcp is running
         _write_pid_file()
         atexit.register(_remove_pid_file)
 
-        # Start MCP SSE server in background thread
+        # Start MCP streamable-http server in background thread
         mcp_thread = threading.Thread(
             target=_run_mcp_server,
             args=(app, args.host, args.port, args.append_option),

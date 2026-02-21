@@ -1,6 +1,6 @@
 """Per-session state for multi-agent io-mcp.
 
-Each MCP client (SSE connection) gets a Session object that holds
+Each MCP client (streamable-http connection) gets a Session object that holds
 its own choices, selection event, speech inbox, and UI state.
 SessionManager handles routing between sessions and tab navigation.
 """
@@ -25,7 +25,7 @@ class SpeechEntry:
 class Session:
     """State for one MCP client session (one tab)."""
 
-    session_id: int                          # id(ctx.session) — unique per SSE connection
+    session_id: str                          # MCP session ID (UUID for streamable-http)
     name: str                                # "Agent 1", "Agent 2", ...
 
     # ── Choice state ──────────────────────────────────────────────
@@ -59,13 +59,13 @@ class SessionManager:
     """
 
     def __init__(self) -> None:
-        self.sessions: dict[int, Session] = {}
-        self.session_order: list[int] = []      # ordered list of session IDs
-        self.active_session_id: Optional[int] = None
+        self.sessions: dict[str, Session] = {}
+        self.session_order: list[str] = []      # ordered list of session IDs
+        self.active_session_id: Optional[str] = None
         self._counter: int = 0
         self._lock = threading.Lock()
 
-    def get_or_create(self, session_id: int) -> tuple[Session, bool]:
+    def get_or_create(self, session_id: str) -> tuple[Session, bool]:
         """Get existing session or create a new one.
 
         Returns (session, created) where created is True if new.
@@ -86,7 +86,7 @@ class SessionManager:
 
             return session, True
 
-    def remove(self, session_id: int) -> Optional[int]:
+    def remove(self, session_id: str) -> Optional[str]:
         """Remove a session. Returns new active_session_id (or None).
 
         If the removed session was focused, focuses the next available.
@@ -113,7 +113,7 @@ class SessionManager:
                 return None
             return self.sessions.get(self.active_session_id)
 
-    def focus(self, session_id: int) -> Optional[Session]:
+    def focus(self, session_id: str) -> Optional[Session]:
         """Set focus to a specific session. Returns the session."""
         with self._lock:
             if session_id not in self.sessions:
@@ -170,7 +170,7 @@ class SessionManager:
         with self._lock:
             return [self.sessions[sid] for sid in self.session_order if sid in self.sessions]
 
-    def get(self, session_id: int) -> Optional[Session]:
+    def get(self, session_id: str) -> Optional[Session]:
         """Get a session by ID."""
         with self._lock:
             return self.sessions.get(session_id)

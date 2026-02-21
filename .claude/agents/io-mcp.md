@@ -6,8 +6,8 @@ skills:
   - io-mcp
 mcpServers:
   io-mcp:
-    type: sse
-    url: http://localhost:8444/sse
+    type: streamable-http
+    url: http://localhost:8444/mcp
 hooks:
   Stop:
     - hooks:

@@ -302,7 +302,7 @@ class IoMcpApp(App):
         """Get the currently focused session."""
         return self.manager.focused()
 
-    def _is_focused(self, session_id: int) -> bool:
+    def _is_focused(self, session_id: str) -> bool:
         """Check if a session is the focused one."""
         return self.manager.active_session_id == session_id
 
@@ -767,7 +767,7 @@ class IoMcpApp(App):
         except Exception:
             pass
 
-    def on_session_removed(self, session_id: int) -> None:
+    def on_session_removed(self, session_id: str) -> None:
         """Called when a session is removed."""
         new_active = self.manager.remove(session_id)
         try:
