@@ -1485,6 +1485,7 @@ class IoMcpApp(App):
         Also reloads EXTRA_OPTIONS.
         """
         import importlib
+        import inspect
         self._tts.stop()
 
         try:
@@ -1498,15 +1499,22 @@ class IoMcpApp(App):
             global EXTRA_OPTIONS
             EXTRA_OPTIONS = tui_mod.EXTRA_OPTIONS
 
-            # Monkey-patch all methods from the reloaded class
+            # Monkey-patch only methods defined directly on IoMcpApp
+            # (not inherited from Textual App/Widget/etc.)
             fresh_cls = tui_mod.IoMcpApp
-            for name in dir(fresh_cls):
-                if name.startswith("__") and name.endswith("__"):
-                    continue
-                attr = getattr(fresh_cls, name)
-                if callable(attr) or isinstance(attr, (staticmethod, classmethod, property)):
+            for name, method in inspect.getmembers(fresh_cls, predicate=inspect.isfunction):
+                # Only patch methods defined in our module
+                if method.__module__ and "io_mcp" in method.__module__:
                     try:
-                        setattr(self.__class__, name, attr)
+                        setattr(self.__class__, name, method)
+                    except (AttributeError, TypeError):
+                        pass
+
+            # Also update class-level constants we control
+            for attr in ("CSS", "BINDINGS"):
+                if hasattr(fresh_cls, attr):
+                    try:
+                        setattr(self.__class__, attr, getattr(fresh_cls, attr))
                     except (AttributeError, TypeError):
                         pass
 
