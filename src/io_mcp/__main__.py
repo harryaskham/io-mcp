@@ -97,6 +97,16 @@ def _get_session_id(ctx: "Context") -> str:
 
 def _run_mcp_server(app: IoMcpApp, host: str, port: int, append_options: list[str] | None = None) -> None:
     """Run the MCP streamable-http server in a background thread."""
+    try:
+        _run_mcp_server_inner(app, host, port, append_options)
+    except Exception:
+        log.exception("MCP server thread crashed")
+        import traceback
+        traceback.print_exc()
+
+
+def _run_mcp_server_inner(app: IoMcpApp, host: str, port: int, append_options: list[str] | None = None) -> None:
+    """Inner implementation of MCP server startup."""
     from mcp.server.fastmcp import FastMCP, Context
 
     server = FastMCP("io-mcp", host=host, port=port)

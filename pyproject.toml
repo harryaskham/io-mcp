@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "MCP server for agent I/O — scroll-wheel multi-choice input and TTS narration for hands-free Claude Code"
 requires-python = ">=3.12"
 dependencies = [
-    "mcp>=1.0.0",
+    "mcp>=1.26.0",
     "textual>=8.0.0",
 ]
 
