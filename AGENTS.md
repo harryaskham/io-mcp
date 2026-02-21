@@ -31,14 +31,21 @@ MCP server providing hands-free Claude Code interaction via scroll wheel (smart 
 ```
 src/io_mcp/
 ├── __main__.py   # CLI entry point, MCP server setup, arg parsing
-├── tui.py        # Textual app: ChoiceItem, IoMcpApp, input mode, scroll handling
+├── tui.py        # Textual app: choices, settings, voice input, extras
 └── tts.py        # TTSEngine: pregeneration, caching, blocking/async playback
 ```
 
 ### Key modules
 
-- **`__main__.py`**: Parses CLI flags, creates TTSEngine instances (main + freeform), instantiates IoMcpApp, starts MCP server thread (or demo loop). Manages PID file at `/tmp/io-mcp.pid`.
-- **`tui.py`**: Textual `App` subclass. `present_choices()` is the blocking API called from MCP — sets choices, pregenerates TTS, waits on `threading.Event` for user selection. Handles scroll debounce, dwell-to-select, `i` for freeform input, 1-9 for instant select.
+- **`__main__.py`**: Parses CLI flags, creates TTSEngine instances (main + freeform), instantiates IoMcpApp, starts MCP server thread (or demo loop). Manages PID file at `/tmp/io-mcp.pid`. Handles `--append-option` with `title::description` parsing.
+- **`tui.py`**: Textual `App` subclass with multiple modes:
+  - **Choice presentation**: `present_choices()` blocking API. Reads preamble + titles, then all option descriptions sequentially. Scroll interrupts readout to read selected item.
+  - **Extras (negative indices)**: Hidden options at indices 0, -1, -2, -3 reached by scrolling up past option 1: record response, fast toggle, voice toggle, settings.
+  - **Voice input** (`space`): Records via `stt` CLI, wraps transcription in `<transcription>` tags with error-tolerance note.
+  - **Settings menu** (`s`): Speed, voice, provider settings. Scroll through values, enter to confirm. Persists via env vars (TTS_SPEED, TTS_PROVIDER, OPENAI_TTS_VOICE, AZURE_SPEECH_VOICE).
+  - **Prompt replay** (`p`/`P`): `p` replays preamble only, `P` replays preamble + all options.
+  - **Freeform input** (`i`): Type text response, TTS reads back on delimiter.
+  - Scroll debounce, dwell-to-select, 1-9 instant select, invert scroll.
 - **`tts.py`**: `TTSEngine` with two backends (`--local` for espeak-ng, default gpt-4o-mini-tts). Pregenerates all choice audio in parallel via `ThreadPoolExecutor`. `speak()` blocks, `speak_async()` doesn't. Cache at `/tmp/io-mcp-tts-cache/`.
 
 ## Plugin / Agent Structure
@@ -59,6 +66,7 @@ Invoked via `claude --agent io-mcp` or `/io-mcp` skill command.
 - **paplay** (pulseaudio) — audio playback
 - **espeak-ng** — local/fast TTS fallback
 - **tts** CLI (from `~/mono/tools/tts`) — gpt-4o-mini-tts API wrapper (optional, falls back to espeak-ng)
+- **stt** CLI (from `~/mono/tools/stt`) — speech-to-text for voice input (optional)
 - **PulseAudio TCP bridge** — `PULSE_SERVER=127.0.0.1` connecting proot to native Termux PulseAudio
 
 ## Building
@@ -86,14 +94,37 @@ uv run io-mcp
 | `--host` | 0.0.0.0 | SSE server bind address |
 | `--dwell` | 0 (off) | Auto-select after N seconds |
 | `--scroll-debounce` | 0.15 | Min seconds between scroll events |
-| `--append-option` | "More options" | Always append this choice (repeatable) |
+| `--append-option` | "More options" | Always append this choice (repeatable). Format: `title` or `title::description` |
 | `--demo` | off | Demo mode — test choices loop, no MCP server |
 | `--freeform-tts` | local | TTS backend for freeform typing readback (api\|local) |
 | `--freeform-tts-speed` | 1.6 | Speed multiplier for freeform TTS |
 | `--freeform-tts-delimiters` | " .,;:!?" | Chars that trigger typing readback |
-| `--speed` | 1.2 | Speed multiplier for OpenAI TTS |
-| `--voice` | sage | OpenAI TTS voice name |
 | `--invert` | off | Reverse scroll direction interpretation |
+
+## Keyboard Shortcuts
+
+| Key | Action |
+|-----|--------|
+| `j`/`k`/`↑`/`↓` | Navigate choices |
+| `Enter` | Select highlighted choice |
+| `1`-`9` | Instant select by number |
+| `i` | Freeform text input mode |
+| `space` | Voice input (toggle recording) |
+| `s` | Open/close settings menu |
+| `p` | Replay prompt |
+| `P` | Replay prompt + all options |
+| `Escape` | Cancel current mode |
+| `q` | Quit |
+
+## Environment Variables for TTS
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TTS_SPEED` | 1.0 | TTS speed multiplier |
+| `TTS_PROVIDER` | openai | TTS provider: openai or azure-speech |
+| `OPENAI_TTS_VOICE` | sage | OpenAI TTS voice |
+| `AZURE_SPEECH_VOICE` | en-US-Noa:MAI-Voice-1 | Azure Speech voice |
+| `PULSE_SERVER` | 127.0.0.1 | PulseAudio server for audio playback |
 
 ## Important Notes for Agents
 
@@ -102,3 +133,5 @@ uv run io-mcp
 - PID file at `/tmp/io-mcp.pid` is used by hooks to detect if io-mcp is running
 - The `tui.py` uses `threading.Event` for cross-thread sync between MCP server and Textual app
 - Audio cache is per-session at `/tmp/io-mcp-tts-cache/` — cleared on cleanup
+- Settings changes (speed, voice, provider) clear the TTS cache to regenerate with new params
+- Extra options (negative indices) are local-only and not sent back to the Claude instance

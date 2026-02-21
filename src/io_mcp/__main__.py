@@ -92,9 +92,14 @@ def _run_mcp_server(app: IoMcpApp, host: str, port: int, append_options: list[st
         # Append persistent options from --append-option flags
         all_choices = list(choices)
         for opt in _append:
+            # Parse "title::description" format
+            if "::" in opt:
+                title, desc = opt.split("::", 1)
+            else:
+                title, desc = opt, ""
             # Don't duplicate if Claude already included it
-            if not any(c.get("label", "").lower() == opt.lower() for c in all_choices):
-                all_choices.append({"label": opt, "summary": f"(persistent option)"})
+            if not any(c.get("label", "").lower() == title.lower() for c in all_choices):
+                all_choices.append({"label": title, "summary": desc})
 
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
@@ -221,8 +226,12 @@ def main() -> None:
                 ]
                 # Append persistent options
                 for opt in args.append_option:
-                    if not any(c["label"].lower() == opt.lower() for c in choices):
-                        choices.append({"label": opt, "summary": "(persistent option)"})
+                    if "::" in opt:
+                        title, desc = opt.split("::", 1)
+                    else:
+                        title, desc = opt, ""
+                    if not any(c["label"].lower() == title.lower() for c in choices):
+                        choices.append({"label": title, "summary": desc})
 
                 result = app.present_choices(
                     f"Demo round {round_num}. Pick any option to test scrolling and TTS.",
