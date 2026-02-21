@@ -12,13 +12,13 @@ hooks:
   Stop:
     - hooks:
         - type: command
-          command: "${CLAUDE_PLUGIN_ROOT}/hooks/enforce-choices.sh"
+          command: "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/enforce-choices.sh"
           timeout: 10
   PreToolUse:
     - matcher: "Bash|Edit|Write|NotebookEdit"
       hooks:
         - type: command
-          command: "${CLAUDE_PLUGIN_ROOT}/hooks/nudge-speak.sh"
+          command: "${CLAUDE_PLUGIN_ROOT}/.claude/hooks/nudge-speak.sh"
           timeout: 5
 ---
 

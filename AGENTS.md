@@ -44,11 +44,11 @@ src/io_mcp/
 ## Plugin / Agent Structure
 
 ```
-agents/io-mcp.md          # Agent definition (YAML frontmatter + system prompt)
-hooks/enforce-choices.sh   # Stop hook — blocks unless present_choices() was called
-hooks/nudge-speak.sh       # PreToolUse hook — reminds to speak() before tools
-.claude-plugin/plugin.json # Plugin metadata for marketplace discovery
-.claude/skills/io-mcp/SKILL.md  # Skill definition loaded by /io-mcp command
+.claude/agents/io-mcp.md          # Agent definition (YAML frontmatter + system prompt)
+.claude/hooks/enforce-choices.sh   # Stop hook — blocks unless present_choices() was called
+.claude/hooks/nudge-speak.sh       # PreToolUse hook — reminds to speak() before tools
+.claude/skills/io-mcp/SKILL.md    # Skill definition loaded by /io-mcp command
+.claude-plugin/plugin.json         # Plugin metadata for marketplace discovery
 ```
 
 Installed via `cosmos-plugins` marketplace at `~/cosmos/.claude-plugin/marketplace.json`.
