@@ -27,7 +27,7 @@ from textual.widget import Widget
 from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, Static
 
 from .session import Session, SessionManager, SpeechEntry
-from .tts import PORTAUDIO_LIB, TTSEngine
+from .tts import PORTAUDIO_LIB, TTSEngine, _find_binary
 
 
 # ─── Extra options (negative indices) ──────────────────────────────────────
@@ -282,6 +282,7 @@ class IoMcpApp(App):
 
         # Voice input
         self._voice_process: Optional[subprocess.Popen] = None
+        self._parec_process: Optional[subprocess.Popen] = None
 
         # Settings (global, not per-session)
         self.settings = Settings()
@@ -834,7 +835,11 @@ class IoMcpApp(App):
             self._start_voice_recording()
 
     def _start_voice_recording(self) -> None:
-        """Start recording audio via stt tool."""
+        """Start recording audio via parec piped into stt.
+
+        Uses parec (PulseAudio) for audio capture — same bridge as paplay
+        uses for output — then pipes raw PCM16 24kHz mono into stt --stdin.
+        """
         session = self._focused()
         if not session:
             return
@@ -850,26 +855,57 @@ class IoMcpApp(App):
         status.update("🎙 Recording... (press space to stop)")
         status.display = True
 
-        # Start stt in raw mode
-        stt_bin = shutil.which("stt")
-        if stt_bin:
-            env = os.environ.copy()
-            env["PULSE_SERVER"] = os.environ.get("PULSE_SERVER", "127.0.0.1")
-            env["LD_LIBRARY_PATH"] = PORTAUDIO_LIB
-            try:
-                self._voice_process = subprocess.Popen(
-                    [stt_bin],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    env=env,
-                )
-            except Exception:
-                session.voice_recording = False
-                self._tts.speak_async("Voice input not available")
-                self._restore_choices()
-        else:
+        # Find binaries
+        parec_bin = _find_binary("parec")
+        stt_bin = _find_binary("stt")
+
+        if not parec_bin:
+            session.voice_recording = False
+            self._tts.speak_async("parec not found — cannot record audio")
+            self._restore_choices()
+            return
+
+        if not stt_bin:
             session.voice_recording = False
             self._tts.speak_async("stt tool not found")
+            self._restore_choices()
+            return
+
+        env = os.environ.copy()
+        env["PULSE_SERVER"] = os.environ.get("PULSE_SERVER", "127.0.0.1")
+        env["LD_LIBRARY_PATH"] = PORTAUDIO_LIB
+
+        try:
+            # parec captures audio from PulseAudio in raw PCM format
+            # Format: signed 16-bit little-endian, mono, 24kHz (matches stt expectations)
+            self._parec_process = subprocess.Popen(
+                [parec_bin, "--format=s16le", "--channels=1", "--rate=24000"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=env,
+            )
+            # stt reads raw PCM16 24kHz mono from stdin
+            self._voice_process = subprocess.Popen(
+                [stt_bin, "--stdin"],
+                stdin=self._parec_process.stdout,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=env,
+            )
+            # Allow parec to receive SIGPIPE if stt exits
+            self._parec_process.stdout.close()
+        except Exception as e:
+            session.voice_recording = False
+            self._tts.speak_async(f"Voice input failed: {str(e)[:80]}")
+            # Clean up any started processes
+            for proc in [getattr(self, '_parec_process', None), self._voice_process]:
+                if proc:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+            self._parec_process = None
+            self._voice_process = None
             self._restore_choices()
 
     def _stop_voice_recording(self) -> None:
@@ -878,10 +914,17 @@ class IoMcpApp(App):
         if not session:
             return
         session.voice_recording = False
+        parec_proc = getattr(self, '_parec_process', None)
+        self._parec_process = None
         proc = self._voice_process
         self._voice_process = None
 
         if proc is None:
+            if parec_proc:
+                try:
+                    parec_proc.kill()
+                except Exception:
+                    pass
             self._restore_choices()
             return
 
@@ -891,6 +934,13 @@ class IoMcpApp(App):
         def _process():
             try:
                 import signal
+                # Kill parec first to close stt's stdin (triggers EOF → flush → transcribe)
+                if parec_proc:
+                    try:
+                        parec_proc.send_signal(signal.SIGTERM)
+                    except Exception:
+                        pass
+                # Send SIGINT to stt to trigger graceful shutdown
                 proc.send_signal(signal.SIGINT)
                 stdout, stderr = proc.communicate(timeout=15)
                 transcript = stdout.decode("utf-8", errors="replace").strip()
@@ -898,6 +948,12 @@ class IoMcpApp(App):
             except Exception as e:
                 transcript = ""
                 stderr_text = str(e)
+                # Clean up parec if still running
+                if parec_proc:
+                    try:
+                        parec_proc.kill()
+                    except Exception:
+                        pass
 
             if transcript:
                 self._tts.stop()
@@ -1302,12 +1358,14 @@ class IoMcpApp(App):
             event.prevent_default()
             event.stop()
         elif session and session.voice_recording and event.key == "escape":
-            if self._voice_process:
-                try:
-                    self._voice_process.kill()
-                except Exception:
-                    pass
+            for proc in [getattr(self, '_parec_process', None), self._voice_process]:
+                if proc:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
             session.voice_recording = False
+            self._parec_process = None
             self._voice_process = None
             self._tts.speak_async("Recording cancelled")
             self._restore_choices()
