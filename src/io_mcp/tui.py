@@ -282,7 +282,7 @@ class IoMcpApp(App):
 
         # Voice input
         self._voice_process: Optional[subprocess.Popen] = None
-        self._parec_process: Optional[subprocess.Popen] = None
+        self._voice_rec_file: Optional[str] = None
 
         # Settings (global, not per-session)
         self.settings = Settings()
@@ -835,10 +835,11 @@ class IoMcpApp(App):
             self._start_voice_recording()
 
     def _start_voice_recording(self) -> None:
-        """Start recording audio via parec piped into stt.
+        """Start recording audio via termux-microphone-record.
 
-        Uses parec (PulseAudio) for audio capture — same bridge as paplay
-        uses for output — then pipes raw PCM16 24kHz mono into stt --stdin.
+        Uses termux-exec to invoke termux-microphone-record in native Termux
+        (outside proot) which has access to Android mic hardware. On stop,
+        the recorded file is converted via ffmpeg and piped to stt --stdin.
         """
         session = self._focused()
         if not session:
@@ -856,12 +857,13 @@ class IoMcpApp(App):
         status.display = True
 
         # Find binaries
-        parec_bin = _find_binary("parec")
+        termux_exec_bin = _find_binary("termux-exec")
         stt_bin = _find_binary("stt")
+        ffmpeg_bin = _find_binary("ffmpeg")
 
-        if not parec_bin:
+        if not termux_exec_bin:
             session.voice_recording = False
-            self._tts.speak_async("parec not found — cannot record audio")
+            self._tts.speak_async("termux-exec not found — cannot record audio")
             self._restore_choices()
             return
 
@@ -871,89 +873,113 @@ class IoMcpApp(App):
             self._restore_choices()
             return
 
-        env = os.environ.copy()
-        env["PULSE_SERVER"] = os.environ.get("PULSE_SERVER", "127.0.0.1")
-        env["LD_LIBRARY_PATH"] = PORTAUDIO_LIB
+        if not ffmpeg_bin:
+            session.voice_recording = False
+            self._tts.speak_async("ffmpeg not found")
+            self._restore_choices()
+            return
+
+        # Record to a temp file in home dir (accessible from both native and proot)
+        self._voice_rec_file = os.path.expanduser("~/voice-recording.ogg")
 
         try:
-            # parec captures audio from PulseAudio in raw PCM format
-            # Format: signed 16-bit little-endian, mono, 24kHz (matches stt expectations)
-            self._parec_process = subprocess.Popen(
-                [parec_bin, "--format=s16le", "--channels=1", "--rate=24000"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                env=env,
-            )
-            # stt reads raw PCM16 24kHz mono from stdin
+            # Start recording via termux-exec (runs in native Termux context)
             self._voice_process = subprocess.Popen(
-                [stt_bin, "--stdin"],
-                stdin=self._parec_process.stdout,
+                [termux_exec_bin, "termux-microphone-record",
+                 "-f", self._voice_rec_file,
+                 "-e", "opus", "-r", "24000", "-c", "1"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                env=env,
             )
-            # Allow parec to receive SIGPIPE if stt exits
-            self._parec_process.stdout.close()
         except Exception as e:
             session.voice_recording = False
             self._tts.speak_async(f"Voice input failed: {str(e)[:80]}")
-            # Clean up any started processes
-            for proc in [getattr(self, '_parec_process', None), self._voice_process]:
-                if proc:
-                    try:
-                        proc.kill()
-                    except Exception:
-                        pass
-            self._parec_process = None
             self._voice_process = None
             self._restore_choices()
 
     def _stop_voice_recording(self) -> None:
-        """Stop recording and process transcription."""
+        """Stop recording and process transcription.
+
+        Stops termux-microphone-record, then runs ffmpeg to convert the
+        recorded opus file to raw PCM16 24kHz mono, piped into stt --stdin.
+        """
         session = self._focused()
         if not session:
             return
         session.voice_recording = False
-        parec_proc = getattr(self, '_parec_process', None)
-        self._parec_process = None
         proc = self._voice_process
         self._voice_process = None
-
-        if proc is None:
-            if parec_proc:
-                try:
-                    parec_proc.kill()
-                except Exception:
-                    pass
-            self._restore_choices()
-            return
 
         status = self.query_one("#status", Label)
         status.update("⏳ Transcribing...")
 
         def _process():
-            try:
-                import signal
-                # Kill parec first to close stt's stdin (triggers EOF → flush → transcribe)
-                if parec_proc:
+            termux_exec_bin = _find_binary("termux-exec")
+            stt_bin = _find_binary("stt")
+            ffmpeg_bin = _find_binary("ffmpeg")
+            rec_file = getattr(self, '_voice_rec_file', None)
+
+            # Stop the recording
+            if termux_exec_bin:
+                try:
+                    subprocess.run(
+                        [termux_exec_bin, "termux-microphone-record", "-q"],
+                        timeout=5, capture_output=True,
+                    )
+                except Exception:
+                    pass
+
+            # Wait for the record process to finish
+            if proc:
+                try:
+                    proc.wait(timeout=5)
+                except Exception:
                     try:
-                        parec_proc.send_signal(signal.SIGTERM)
+                        proc.kill()
                     except Exception:
                         pass
-                # Send SIGINT to stt to trigger graceful shutdown
-                proc.send_signal(signal.SIGINT)
-                stdout, stderr = proc.communicate(timeout=15)
+
+            # Check file exists
+            if not rec_file or not os.path.isfile(rec_file):
+                self._tts.speak_async("No recording file found. Back to choices.")
+                self.call_from_thread(self._restore_choices)
+                return
+
+            # Convert and transcribe: ffmpeg → stt --stdin
+            env = os.environ.copy()
+            env["PULSE_SERVER"] = os.environ.get("PULSE_SERVER", "127.0.0.1")
+            env["LD_LIBRARY_PATH"] = PORTAUDIO_LIB
+
+            try:
+                # ffmpeg converts opus to raw PCM16 24kHz mono
+                ffmpeg_proc = subprocess.Popen(
+                    [ffmpeg_bin, "-y", "-i", rec_file,
+                     "-f", "s16le", "-ar", "24000", "-ac", "1", "-"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                )
+                # stt reads PCM16 from stdin
+                stt_proc = subprocess.Popen(
+                    [stt_bin, "--stdin"],
+                    stdin=ffmpeg_proc.stdout,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    env=env,
+                )
+                ffmpeg_proc.stdout.close()
+
+                stdout, stderr = stt_proc.communicate(timeout=30)
                 transcript = stdout.decode("utf-8", errors="replace").strip()
                 stderr_text = stderr.decode("utf-8", errors="replace").strip() if stderr else ""
             except Exception as e:
                 transcript = ""
                 stderr_text = str(e)
-                # Clean up parec if still running
-                if parec_proc:
-                    try:
-                        parec_proc.kill()
-                    except Exception:
-                        pass
+            finally:
+                # Clean up recording file
+                try:
+                    os.unlink(rec_file)
+                except Exception:
+                    pass
 
             if transcript:
                 self._tts.stop()
@@ -1358,15 +1384,30 @@ class IoMcpApp(App):
             event.prevent_default()
             event.stop()
         elif session and session.voice_recording and event.key == "escape":
-            for proc in [getattr(self, '_parec_process', None), self._voice_process]:
-                if proc:
-                    try:
-                        proc.kill()
-                    except Exception:
-                        pass
+            # Kill recording process and stop termux-microphone-record
+            if self._voice_process:
+                try:
+                    self._voice_process.kill()
+                except Exception:
+                    pass
+            termux_exec_bin = _find_binary("termux-exec")
+            if termux_exec_bin:
+                try:
+                    subprocess.run(
+                        [termux_exec_bin, "termux-microphone-record", "-q"],
+                        timeout=3, capture_output=True,
+                    )
+                except Exception:
+                    pass
             session.voice_recording = False
-            self._parec_process = None
             self._voice_process = None
+            # Clean up recording file
+            rec_file = getattr(self, '_voice_rec_file', None)
+            if rec_file:
+                try:
+                    os.unlink(rec_file)
+                except Exception:
+                    pass
             self._tts.speak_async("Recording cancelled")
             self._restore_choices()
             event.prevent_default()
