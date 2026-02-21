@@ -74,34 +74,36 @@ class IoMcpApp(App):
     #preamble {
         margin: 1 2;
         color: $success;
-        text-wrap: wrap;
+        width: 1fr;
     }
 
     #status {
         margin: 1 2;
         color: $warning;
-        text-wrap: wrap;
+        width: 1fr;
     }
 
     #choices {
         margin: 0 1;
         height: 1fr;
+        overflow-x: hidden;
     }
 
     ChoiceItem {
         padding: 0 1;
         height: auto;
+        width: 1fr;
     }
 
     ChoiceItem > .choice-label {
         color: $text;
-        text-wrap: wrap;
+        width: 1fr;
     }
 
     ChoiceItem > .choice-summary {
         color: $text-muted;
         margin-left: 2;
-        text-wrap: wrap;
+        width: 1fr;
     }
 
     ChoiceItem.-highlight > .choice-label {
