@@ -241,6 +241,7 @@ class IoMcpApp(App):
         Binding("l", "next_tab", "Next tab", show=False),
         Binding("h", "prev_tab", "Prev tab", show=False),
         Binding("n", "next_choices_tab", "Next choices", show=False),
+        Binding("r", "hot_reload", "Reload", show=False),
         Binding("1", "pick_1", "", show=False),
         Binding("2", "pick_2", "", show=False),
         Binding("3", "pick_3", "", show=False),
@@ -1469,6 +1470,44 @@ class IoMcpApp(App):
                 session.selection = {"selected": "quit", "summary": "User quit"}
                 session.selection_event.set()
         self.exit()
+
+    def action_hot_reload(self) -> None:
+        """Hot-reload the tui module, monkey-patching methods onto this app.
+
+        Reimports io_mcp.tui and copies all methods from the fresh IoMcpApp
+        class onto this instance's class. Sessions, MCP server, and
+        connections stay alive — only method implementations change.
+        Also reloads EXTRA_OPTIONS.
+        """
+        import importlib
+        self._tts.stop()
+
+        try:
+            # Reload the modules
+            import io_mcp.tts as tts_mod
+            import io_mcp.tui as tui_mod
+            importlib.reload(tts_mod)
+            importlib.reload(tui_mod)
+
+            # Update EXTRA_OPTIONS global
+            global EXTRA_OPTIONS
+            EXTRA_OPTIONS = tui_mod.EXTRA_OPTIONS
+
+            # Monkey-patch all methods from the reloaded class
+            fresh_cls = tui_mod.IoMcpApp
+            for name in dir(fresh_cls):
+                if name.startswith("__") and name.endswith("__"):
+                    continue
+                attr = getattr(fresh_cls, name)
+                if callable(attr) or isinstance(attr, (staticmethod, classmethod, property)):
+                    try:
+                        setattr(self.__class__, name, attr)
+                    except (AttributeError, TypeError):
+                        pass
+
+            self._tts.speak_async("Reloaded")
+        except Exception as e:
+            self._tts.speak_async(f"Reload failed: {str(e)[:80]}")
 
     def _do_select(self) -> None:
         """Finalize the current selection."""
