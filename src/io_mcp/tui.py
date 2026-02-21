@@ -846,15 +846,17 @@ class IoMcpApp(App):
             return
         session.voice_recording = True
         session.reading_options = False
-        self._tts.stop()
-        self._tts.speak_async("Recording. Press space when done.")
 
-        # Hide choices, show recording status
+        # UI first
         self.query_one("#choices").display = False
         self.query_one("#dwell-bar").display = False
         status = self.query_one("#status", Label)
         status.update("🎙 Recording... (press space to stop)")
         status.display = True
+
+        # TTS after UI
+        self._tts.stop()
+        self._tts.speak_async("Recording. Press space when done.")
 
         # Find binaries
         termux_exec_bin = _find_binary("termux-exec")
@@ -1080,7 +1082,6 @@ class IoMcpApp(App):
         """Enter edit mode for a specific setting."""
         self._setting_edit_mode = True
         self._setting_edit_key = key
-        self._tts.stop()
 
         if key == "speed":
             self._setting_edit_values = [f"{v/10:.1f}" for v in range(5, 26)]
@@ -1089,7 +1090,6 @@ class IoMcpApp(App):
                 self._setting_edit_values.index(current)
                 if current in self._setting_edit_values else 0
             )
-            self._tts.pregenerate(self._setting_edit_values)
 
         elif key == "voice":
             self._setting_edit_values = self.settings.get_voices()
@@ -1098,7 +1098,6 @@ class IoMcpApp(App):
                 self._setting_edit_values.index(current)
                 if current in self._setting_edit_values else 0
             )
-            self._tts.pregenerate(self._setting_edit_values)
 
         elif key == "provider":
             self._setting_edit_values = ["openai", "azure-speech"]
@@ -1108,6 +1107,7 @@ class IoMcpApp(App):
                 if current in self._setting_edit_values else 0
             )
 
+        # UI first
         list_view = self.query_one("#choices", ListView)
         list_view.clear()
         for i, val in enumerate(self._setting_edit_values):
@@ -1116,8 +1116,16 @@ class IoMcpApp(App):
         list_view.index = self._setting_edit_index
         list_view.focus()
 
+        # TTS after UI
+        self._tts.stop()
         current_val = self._setting_edit_values[self._setting_edit_index]
         self._tts.speak_async(f"Editing {key}. Current: {current_val}. Scroll to change, Enter to confirm.")
+
+        # Pregenerate in background
+        if key in ("speed", "voice"):
+            threading.Thread(
+                target=self._tts.pregenerate, args=(self._setting_edit_values,), daemon=True
+            ).start()
 
     def _apply_setting_edit(self) -> None:
         """Apply the current edit selection."""
@@ -1324,15 +1332,18 @@ class IoMcpApp(App):
         self._freeform_spoken_pos = 0
         session.reading_options = False
         self._cancel_dwell()
-        self._tts.stop()
-        self._tts.speak_async("Type your reply")
 
+        # UI first
         self.query_one("#choices").display = False
         self.query_one("#dwell-bar").display = False
         inp = self.query_one("#freeform-input", Input)
         inp.value = ""
         inp.styles.display = "block"
         inp.focus()
+
+        # TTS after UI
+        self._tts.stop()
+        self._tts.speak_async("Type your reply")
 
     @on(Input.Changed, "#freeform-input")
     def on_freeform_changed(self, event: Input.Changed) -> None:
