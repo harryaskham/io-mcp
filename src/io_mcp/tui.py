@@ -2,6 +2,8 @@
 
 Presents multi-choice options with scroll/keyboard navigation and
 optional dwell-to-select. Designed for smart ring + earphones usage.
+
+Supports multiple concurrent agent sessions via tabs.
 """
 
 from __future__ import annotations
@@ -24,6 +26,7 @@ from textual.timer import Timer
 from textual.widget import Widget
 from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, Static
 
+from .session import Session, SessionManager, SpeechEntry
 from .tts import TTSEngine
 
 
@@ -139,11 +142,17 @@ class Settings:
 # ─── Main TUI App ───────────────────────────────────────────────────────────
 
 class IoMcpApp(App):
-    """Textual app for io-mcp choice presentation."""
+    """Textual app for io-mcp choice presentation with multi-session support."""
 
     CSS = """
     Screen {
         background: $surface;
+    }
+
+    #tab-bar {
+        margin: 0 2;
+        height: 1;
+        color: $accent;
     }
 
     #preamble {
@@ -156,6 +165,19 @@ class IoMcpApp(App):
         margin: 1 2;
         color: $warning;
         width: 1fr;
+    }
+
+    #speech-log {
+        margin: 0 2;
+        height: auto;
+        max-height: 6;
+        color: $text-muted;
+    }
+
+    .speech-entry {
+        color: $text-muted;
+        margin: 0;
+        padding: 0;
     }
 
     #choices {
@@ -214,6 +236,9 @@ class IoMcpApp(App):
         Binding("s", "toggle_settings", "Settings", show=True),
         Binding("p", "replay_prompt", "Replay", show=False),
         Binding("P", "replay_prompt_full", "Replay all", show=False),
+        Binding("l", "next_tab", "Next tab", show=False),
+        Binding("h", "prev_tab", "Prev tab", show=False),
+        Binding("n", "next_choices_tab", "Next choices", show=False),
         Binding("1", "pick_1", "", show=False),
         Binding("2", "pick_2", "", show=False),
         Binding("3", "pick_3", "", show=False),
@@ -247,31 +272,17 @@ class IoMcpApp(App):
         self._last_scroll_time: float = 0.0
         self._dwell_time = dwell_time
 
-        # State for present_choices blocking
-        self._choices: list[dict] = []          # real choices (1-indexed)
-        self._all_items: list[dict] = []        # extras + real (full list)
-        self._extras_count: int = 0             # number of extra items prepended
-        self._preamble = ""
-        self._selection: Optional[dict] = None
-        self._selection_event = threading.Event()
-        self._active = False
+        # Session manager
+        self.manager = SessionManager()
 
-        # True while intro TTS is playing — suppress scroll TTS
-        self._intro_speaking = False
-        # True while sequential option readout is playing
-        self._reading_options = False
-
-        # Freeform text input mode
-        self._input_mode = False
+        # Freeform text input
         self._freeform_spoken_pos = 0
 
-        # Voice input mode
-        self._voice_recording = False
+        # Voice input
         self._voice_process: Optional[subprocess.Popen] = None
 
-        # Settings
+        # Settings (global, not per-session)
         self.settings = Settings()
-        self._in_settings = False
         self._settings_items: list[dict] = []
         self._setting_edit_mode = False
         self._setting_edit_values: list[str] = []
@@ -282,51 +293,101 @@ class IoMcpApp(App):
         self._dwell_timer: Optional[Timer] = None
         self._dwell_start: float = 0.0
 
+        # Flag: is foreground currently speaking (blocks bg playback)
+        self._fg_speaking = False
+
+    # ─── Helpers to get focused session ────────────────────────────
+
+    def _focused(self) -> Optional[Session]:
+        """Get the currently focused session."""
+        return self.manager.focused()
+
+    def _is_focused(self, session_id: int) -> bool:
+        """Check if a session is the focused one."""
+        return self.manager.active_session_id == session_id
+
+    # ─── Widget composition ────────────────────────────────────────
+
     def compose(self) -> ComposeResult:
         yield Header(name="io-mcp", show_clock=False)
+        yield Static("", id="tab-bar")
         status_text = "Ready — demo mode" if self._demo else "Waiting for agent..."
         yield Label(status_text, id="status")
         yield Label("", id="preamble")
+        yield Vertical(id="speech-log")
         yield ListView(id="choices")
         yield Input(placeholder="Type your reply, press Enter to send, Escape to cancel", id="freeform-input")
         yield DwellBar(id="dwell-bar")
-        yield Static("↕ Scroll  ⏎ Select  i Type  ␣ Voice  s Settings  p Replay  q Quit", id="footer-help")
+        yield Static("↕ Scroll  ⏎ Select  i Type  ␣ Voice  s Settings  h/l Tabs  n Next  q Quit", id="footer-help")
 
     def on_mount(self) -> None:
         self.title = "io-mcp"
+        self.query_one("#tab-bar").display = False
         self.query_one("#preamble").display = False
         self.query_one("#choices").display = False
         self.query_one("#dwell-bar").display = False
+        self.query_one("#speech-log").display = False
+
+    # ─── Tab bar rendering ─────────────────────────────────────────
+
+    def _update_tab_bar(self) -> None:
+        """Update the tab bar display."""
+        tab_bar = self.query_one("#tab-bar", Static)
+        if self.manager.count() <= 0:
+            tab_bar.display = False
+            return
+        tab_bar.update(self.manager.tab_bar_text())
+        # Only show tab bar when multiple sessions exist
+        tab_bar.display = self.manager.count() > 1
+
+    # ─── Speech log rendering ──────────────────────────────────────
+
+    def _update_speech_log(self) -> None:
+        """Update the speech log display for the focused session."""
+        log_widget = self.query_one("#speech-log", Vertical)
+        log_widget.remove_children()
+
+        session = self._focused()
+        if session is None:
+            log_widget.display = False
+            return
+
+        # Show last 5 speech entries
+        recent = session.speech_log[-5:]
+        if not recent:
+            log_widget.display = False
+            return
+
+        for entry in recent:
+            label = Label(f"💬 {entry.text}", classes="speech-entry")
+            log_widget.mount(label)
+        log_widget.display = True
 
     # ─── Choice presentation (called from MCP server thread) ─────────
 
-    def present_choices(self, preamble: str, choices: list[dict]) -> dict:
-        """Show choices and block until user selects. Thread-safe."""
-        self._preamble = preamble
-        self._choices = list(choices)
-        self._selection = None
-        self._selection_event.clear()
-        self._active = True
-        self._intro_speaking = True
-        self._reading_options = False
-        self._in_settings = False
-        self._setting_edit_mode = False
+    def present_choices(self, session: Session, preamble: str, choices: list[dict]) -> dict:
+        """Show choices and block until user selects. Thread-safe.
+
+        Each session has its own selection_event so multiple sessions
+        can block independently.
+        """
+        session.preamble = preamble
+        session.choices = list(choices)
+        session.selection = None
+        session.selection_event.clear()
+        session.active = True
+        session.intro_speaking = True
+        session.reading_options = False
+        session.in_settings = False
 
         # Build the full list: extras + real choices
-        # Extras get indices 0, -1, -2, -3
-        self._extras_count = len(EXTRA_OPTIONS)
-        self._all_items = list(EXTRA_OPTIONS) + self._choices
+        session.extras_count = len(EXTRA_OPTIONS)
+        session.all_items = list(EXTRA_OPTIONS) + session.choices
 
         # Build TTS texts
         numbered_labels = [
             f"{i+1}. {c.get('label', '')}" for i, c in enumerate(choices)
         ]
-        numbered_full = [
-            f"{i+1}. {c.get('label', '')}. {c.get('summary', '')}"
-            for i, c in enumerate(choices)
-            if c.get('summary', '')  # skip empty summaries
-        ]
-        # For items with no summary, just use label
         numbered_full_all = []
         for i, c in enumerate(choices):
             s = c.get('summary', '')
@@ -338,8 +399,14 @@ class IoMcpApp(App):
         titles_readout = " ".join(numbered_labels)
         full_intro = f"{preamble} Your options are: {titles_readout}"
 
-        # Show UI immediately
-        self.call_from_thread(self._show_choices)
+        is_fg = self._is_focused(session.session_id)
+
+        # Show UI immediately if this is the focused session
+        if is_fg:
+            self.call_from_thread(self._show_choices)
+
+        # Update tab bar (session now has active choices indicator)
+        self.call_from_thread(self._update_tab_bar)
 
         # Pregenerate per-option clips in background
         bg_texts = (
@@ -352,21 +419,48 @@ class IoMcpApp(App):
         )
         pregen_thread.start()
 
-        # Speak preamble + titles
-        self._tts.speak(full_intro)
+        if is_fg:
+            # Foreground: speak intro and read options
+            self._fg_speaking = True
+            self._tts.speak(full_intro)
 
-        # Now read all options 1+ in order (interruptible by scroll)
-        self._intro_speaking = False
-        self._reading_options = True
-        for i, text in enumerate(numbered_full_all):
-            if not self._reading_options or not self._active:
-                break
-            self._tts.speak(text)
+            session.intro_speaking = False
+            session.reading_options = True
+            for i, text in enumerate(numbered_full_all):
+                if not session.reading_options or not session.active:
+                    break
+                self._tts.speak(text)
+            session.reading_options = False
+            self._fg_speaking = False
 
-        self._reading_options = False
+            # If user hasn't scrolled, read current highlight
+            if session.active:
+                self._speak_current_highlight(session)
 
-        # If user hasn't scrolled, read current highlight
-        if self._active:
+            # Try playing any background queued speech
+            self._try_play_background_queue()
+        else:
+            # Background: queue intro for later, read abbreviated version
+            session.intro_speaking = False
+            entry = SpeechEntry(text=full_intro)
+            session.unplayed_speech.append(entry)
+            session.speech_log.append(SpeechEntry(text=f"[choices] {preamble}"))
+
+            # Try to speak in background if fg is idle
+            self._try_play_background_queue()
+
+        # Block until selection
+        session.selection_event.wait()
+        session.active = False
+        self.call_from_thread(self._update_tab_bar)
+
+        return session.selection or {"selected": "timeout", "summary": ""}
+
+    def _speak_current_highlight(self, session: Session) -> None:
+        """Read out the currently highlighted item."""
+        if not self._is_focused(session.session_id):
+            return
+        try:
             list_view = self.query_one("#choices", ListView)
             idx = list_view.index or 0
             item = self._get_item_at_display_index(idx)
@@ -374,7 +468,7 @@ class IoMcpApp(App):
                 logical = item.choice_index
                 if logical > 0:
                     ci = logical - 1
-                    c = self._choices[ci]
+                    c = session.choices[ci]
                     s = c.get('summary', '')
                     text = f"{logical}. {c.get('label', '')}. {s}" if s else f"{logical}. {c.get('label', '')}"
                 else:
@@ -386,12 +480,8 @@ class IoMcpApp(App):
                         text = ""
                 if text:
                     self._tts.speak_async(text)
-
-        # Block until selection
-        self._selection_event.wait()
-        self._active = False
-
-        return self._selection or {"selected": "timeout", "summary": ""}
+        except Exception:
+            pass
 
     def _get_item_at_display_index(self, idx: int) -> Optional[ChoiceItem]:
         """Get ChoiceItem at a display position."""
@@ -402,9 +492,13 @@ class IoMcpApp(App):
         return item if isinstance(item, ChoiceItem) else None
 
     def _show_choices(self) -> None:
-        """Update the UI with new choices (runs on textual thread)."""
+        """Update the UI with choices from the focused session (runs on textual thread)."""
+        session = self._focused()
+        if session is None:
+            return
+
         preamble_widget = self.query_one("#preamble", Label)
-        preamble_widget.update(self._preamble)
+        preamble_widget.update(session.preamble)
         preamble_widget.display = True
 
         self.query_one("#status").display = False
@@ -421,15 +515,18 @@ class IoMcpApp(App):
             ))
 
         # Add real choices (indices 1, 2, 3, ...)
-        for i, c in enumerate(self._choices):
+        for i, c in enumerate(session.choices):
             list_view.append(ChoiceItem(
                 c.get("label", "???"), c.get("summary", ""),
                 index=i + 1, display_index=len(EXTRA_OPTIONS) + i,
             ))
 
         list_view.display = True
-        # Start selection at index 1 (first real option)
-        list_view.index = len(EXTRA_OPTIONS)  # first real choice
+        # Restore scroll position or default to first real choice
+        if session.scroll_index > 0:
+            list_view.index = session.scroll_index
+        else:
+            list_view.index = len(EXTRA_OPTIONS)  # first real choice
         list_view.focus()
 
         if self._dwell_time > 0:
@@ -441,13 +538,18 @@ class IoMcpApp(App):
         else:
             self.query_one("#dwell-bar").display = False
 
+        # Update speech log
+        self._update_speech_log()
+
     def _show_waiting(self, label: str) -> None:
         """Show waiting state after selection."""
         self.query_one("#choices").display = False
         self.query_one("#preamble").display = False
         self.query_one("#dwell-bar").display = False
         status = self.query_one("#status", Label)
-        after_text = f"Selected: {label}" if self._demo else f"Selected: {label} — waiting for agent..."
+        session = self._focused()
+        session_name = session.name if session else ""
+        after_text = f"Selected: {label}" if self._demo else f"[{session_name}] Selected: {label} — waiting for agent..."
         status.update(after_text)
         status.display = True
 
@@ -456,68 +558,286 @@ class IoMcpApp(App):
         self.query_one("#choices").display = False
         self.query_one("#preamble").display = False
         self.query_one("#dwell-bar").display = False
+        self.query_one("#speech-log").display = False
         status = self.query_one("#status", Label)
         status_text = "Ready — demo mode" if self._demo else "Waiting for agent..."
         status.update(status_text)
         status.display = True
 
+    # ─── Speech with priority ─────────────────────────────────────
+
+    def session_speak(self, session: Session, text: str, block: bool = True) -> None:
+        """Speak text for a session, respecting priority rules.
+
+        Foreground: plays immediately, interrupts background.
+        Background: queued, played when foreground is idle.
+        Always logs to session's speech_log.
+        """
+        # Log the speech
+        entry = SpeechEntry(text=text)
+        session.speech_log.append(entry)
+
+        # Update speech log UI if this is the focused session
+        if self._is_focused(session.session_id):
+            try:
+                self.call_from_thread(self._update_speech_log)
+            except Exception:
+                pass
+
+        if self._is_focused(session.session_id):
+            # Foreground: play immediately
+            self._fg_speaking = True
+            if block:
+                self._tts.speak(text)
+            else:
+                self._tts.speak_async(text)
+            self._fg_speaking = False
+        else:
+            # Background: queue
+            entry.played = False
+            session.unplayed_speech.append(entry)
+            self._try_play_background_queue()
+
+    def session_speak_async(self, session: Session, text: str) -> None:
+        """Non-blocking speak for a session."""
+        self.session_speak(session, text, block=False)
+
     def speak(self, text: str) -> None:
-        """Blocking TTS (can be called from any thread)."""
-        self._tts.speak(text)
+        """Legacy blocking TTS — uses focused session or plays directly."""
+        session = self._focused()
+        if session:
+            self.session_speak(session, text, block=True)
+        else:
+            self._tts.speak(text)
 
     def speak_async(self, text: str) -> None:
-        """Non-blocking TTS (can be called from any thread)."""
-        self._tts.speak_async(text)
+        """Legacy non-blocking TTS — uses focused session."""
+        session = self._focused()
+        if session:
+            self.session_speak(session, text, block=False)
+        else:
+            self._tts.speak_async(text)
 
-    # ─── Prompt replay ────────────────────────────────────────────────
+    def _try_play_background_queue(self) -> None:
+        """Try to play queued background speech if foreground is idle."""
+        if self._fg_speaking:
+            return
+
+        # Find any session with unplayed speech
+        for session in self.manager.all_sessions():
+            if session.session_id == self.manager.active_session_id:
+                continue  # skip foreground
+            while session.unplayed_speech:
+                if self._fg_speaking:
+                    return  # foreground took over
+                entry = session.unplayed_speech.pop(0)
+                entry.played = True
+                self._tts.speak(entry.text)  # blocking so we play in order
+
+    # ─── Tab switching ─────────────────────────────────────────────
+
+    def _switch_to_session(self, session: Session) -> None:
+        """Switch UI to a different session. Called from main thread (action methods)."""
+        # Save current scroll position
+        old_session = self._focused()
+        if old_session and old_session.session_id != session.session_id:
+            try:
+                list_view = self.query_one("#choices", ListView)
+                old_session.scroll_index = list_view.index or 0
+            except Exception:
+                pass
+
+        # Stop current TTS
+        self._tts.stop()
+        if old_session:
+            old_session.reading_options = False
+
+        # Focus new session
+        self.manager.focus(session.session_id)
+
+        # Update UI directly (we're on the main thread)
+        self._update_tab_bar()
+
+        if session.active:
+            # Session has active choices — show them
+            self._show_choices()
+
+            # Play back unplayed speech then read prompt+options in bg thread
+            def _play_inbox():
+                while session.unplayed_speech:
+                    entry = session.unplayed_speech.pop(0)
+                    entry.played = True
+                    self._fg_speaking = True
+                    self._tts.speak(entry.text)
+                    self._fg_speaking = False
+
+                # Then read prompt + options
+                if session.active:
+                    numbered_labels = [
+                        f"{i+1}. {c.get('label', '')}" for i, c in enumerate(session.choices)
+                    ]
+                    titles_readout = " ".join(numbered_labels)
+                    full_intro = f"{session.preamble} Your options are: {titles_readout}"
+                    self._fg_speaking = True
+                    self._tts.speak(full_intro)
+                    self._fg_speaking = False
+
+                    # Read all options
+                    session.reading_options = True
+                    for i, c in enumerate(session.choices):
+                        if not session.reading_options or not session.active:
+                            break
+                        s = c.get('summary', '')
+                        text = f"{i+1}. {c.get('label', '')}. {s}" if s else f"{i+1}. {c.get('label', '')}"
+                        self._fg_speaking = True
+                        self._tts.speak(text)
+                        self._fg_speaking = False
+                    session.reading_options = False
+
+            threading.Thread(target=_play_inbox, daemon=True).start()
+        else:
+            # No active choices — show speech log and waiting state
+            self._update_speech_log()
+
+            # Play unplayed speech in bg thread
+            def _play_inbox_only():
+                while session.unplayed_speech:
+                    entry = session.unplayed_speech.pop(0)
+                    entry.played = True
+                    self._fg_speaking = True
+                    self._tts.speak(entry.text)
+                    self._fg_speaking = False
+
+            if session.unplayed_speech:
+                threading.Thread(target=_play_inbox_only, daemon=True).start()
+
+            self._show_session_waiting(session)
+
+    def _show_session_waiting(self, session: Session) -> None:
+        """Show waiting state for a specific session."""
+        self.query_one("#choices").display = False
+        self.query_one("#preamble").display = False
+        self.query_one("#dwell-bar").display = False
+        self._update_speech_log()
+        status = self.query_one("#status", Label)
+        status.update(f"[{session.name}] Waiting for agent...")
+        status.display = True
+
+    def action_next_tab(self) -> None:
+        """Switch to next tab."""
+        session = self._focused()
+        if session and (session.input_mode or session.voice_recording):
+            return
+        new_session = self.manager.next_tab()
+        if new_session:
+            self._tts.stop()
+            self._tts.speak_async(new_session.name)
+            self._switch_to_session(new_session)
+
+    def action_prev_tab(self) -> None:
+        """Switch to previous tab."""
+        session = self._focused()
+        if session and (session.input_mode or session.voice_recording):
+            return
+        new_session = self.manager.prev_tab()
+        if new_session:
+            self._tts.stop()
+            self._tts.speak_async(new_session.name)
+            self._switch_to_session(new_session)
+
+    def action_next_choices_tab(self) -> None:
+        """Cycle to next tab with active choices."""
+        session = self._focused()
+        if session and (session.input_mode or session.voice_recording):
+            return
+        new_session = self.manager.next_with_choices()
+        if new_session:
+            self._tts.stop()
+            self._tts.speak_async(new_session.name)
+            self._switch_to_session(new_session)
+        else:
+            self._tts.speak_async("No other tabs with choices")
+
+    # ─── Session lifecycle ─────────────────────────────────────────
+
+    def on_session_created(self, session: Session) -> None:
+        """Called when a new session is created (from MCP thread)."""
+        try:
+            self.call_from_thread(self._update_tab_bar)
+        except Exception:
+            pass
+
+    def on_session_removed(self, session_id: int) -> None:
+        """Called when a session is removed."""
+        new_active = self.manager.remove(session_id)
+        try:
+            self.call_from_thread(self._update_tab_bar)
+            if new_active is not None:
+                new_session = self.manager.get(new_active)
+                if new_session:
+                    self._switch_to_session(new_session)
+            else:
+                self.call_from_thread(self._show_idle)
+        except Exception:
+            pass
+
+    # ─── Prompt replay ────────────────────────────────────────────
 
     def action_replay_prompt(self) -> None:
         """Replay just the preamble."""
-        if not self._active or not self._preamble:
+        session = self._focused()
+        if not session or not session.active or not session.preamble:
             return
-        self._reading_options = False  # interrupt any ongoing readout
+        session.reading_options = False
         self._tts.stop()
-        self._tts.speak_async(self._preamble)
+        self._tts.speak_async(session.preamble)
 
     def action_replay_prompt_full(self) -> None:
         """Replay preamble + all options."""
-        if not self._active:
+        session = self._focused()
+        if not session or not session.active:
             return
-        self._reading_options = False
+        session.reading_options = False
         self._tts.stop()
 
         def _replay():
-            self._tts.speak(self._preamble)
+            self._fg_speaking = True
+            self._tts.speak(session.preamble)
             numbered_labels = [
-                f"{i+1}. {c.get('label', '')}" for i, c in enumerate(self._choices)
+                f"{i+1}. {c.get('label', '')}" for i, c in enumerate(session.choices)
             ]
             self._tts.speak("Your options are: " + " ".join(numbered_labels))
-            self._reading_options = True
-            for i, c in enumerate(self._choices):
-                if not self._reading_options or not self._active:
+            session.reading_options = True
+            for i, c in enumerate(session.choices):
+                if not session.reading_options or not session.active:
                     break
                 s = c.get('summary', '')
                 text = f"{i+1}. {c.get('label', '')}. {s}" if s else f"{i+1}. {c.get('label', '')}"
                 self._tts.speak(text)
-            self._reading_options = False
+            session.reading_options = False
+            self._fg_speaking = False
 
         threading.Thread(target=_replay, daemon=True).start()
 
-    # ─── Voice input ──────────────────────────────────────────────────
+    # ─── Voice input ──────────────────────────────────────────────
 
     def action_voice_input(self) -> None:
         """Toggle voice recording mode."""
-        if not self._active:
+        session = self._focused()
+        if not session or not session.active:
             return
-        if self._voice_recording:
+        if session.voice_recording:
             self._stop_voice_recording()
         else:
             self._start_voice_recording()
 
     def _start_voice_recording(self) -> None:
         """Start recording audio via stt tool."""
-        self._voice_recording = True
-        self._reading_options = False
+        session = self._focused()
+        if not session:
+            return
+        session.voice_recording = True
+        session.reading_options = False
         self._tts.stop()
         self._tts.speak_async("Recording. Press space when done.")
 
@@ -528,7 +848,7 @@ class IoMcpApp(App):
         status.update("🎙 Recording... (press space to stop)")
         status.display = True
 
-        # Start stt in raw mode (captures from mic, outputs on close)
+        # Start stt in raw mode
         stt_bin = shutil.which("stt")
         if stt_bin:
             env = os.environ.copy()
@@ -541,17 +861,20 @@ class IoMcpApp(App):
                     env=env,
                 )
             except Exception:
-                self._voice_recording = False
+                session.voice_recording = False
                 self._tts.speak_async("Voice input not available")
                 self._restore_choices()
         else:
-            self._voice_recording = False
+            session.voice_recording = False
             self._tts.speak_async("stt tool not found")
             self._restore_choices()
 
     def _stop_voice_recording(self) -> None:
         """Stop recording and process transcription."""
-        self._voice_recording = False
+        session = self._focused()
+        if not session:
+            return
+        session.voice_recording = False
         proc = self._voice_process
         self._voice_process = None
 
@@ -564,7 +887,6 @@ class IoMcpApp(App):
 
         def _process():
             try:
-                # Send SIGINT to stop recording gracefully
                 import signal
                 proc.send_signal(signal.SIGINT)
                 stdout, _ = proc.communicate(timeout=15)
@@ -583,8 +905,8 @@ class IoMcpApp(App):
                     "charitably. If completely uninterpretable, present the same "
                     "options again and ask the user to retry."
                 )
-                self._selection = {"selected": wrapped, "summary": "(voice input)"}
-                self._selection_event.set()
+                session.selection = {"selected": wrapped, "summary": "(voice input)"}
+                session.selection_event.set()
                 self.call_from_thread(self._show_waiting, f"🎙 {transcript[:50]}")
             else:
                 self._tts.speak_async("No speech detected. Back to choices.")
@@ -602,20 +924,23 @@ class IoMcpApp(App):
             self.query_one("#dwell-bar").display = True
             self._start_dwell()
 
-    # ─── Settings menu ────────────────────────────────────────────────
+    # ─── Settings menu ────────────────────────────────────────────
 
     def action_toggle_settings(self) -> None:
         """Toggle settings menu. Always available regardless of agent connection."""
-        if self._in_settings:
+        session = self._focused()
+        if session and session.in_settings:
             self._exit_settings()
             return
         self._enter_settings()
 
     def _enter_settings(self) -> None:
         """Show settings menu."""
-        self._in_settings = True
+        session = self._focused()
+        if session:
+            session.in_settings = True
+            session.reading_options = False
         self._setting_edit_mode = False
-        self._reading_options = False
         self._tts.stop()
 
         self._settings_items = [
@@ -628,7 +953,6 @@ class IoMcpApp(App):
             {"label": "Close settings", "key": "close", "summary": ""},
         ]
 
-        # Update UI
         preamble_widget = self.query_one("#preamble", Label)
         preamble_widget.update("Settings")
         preamble_widget.display = True
@@ -646,18 +970,18 @@ class IoMcpApp(App):
 
     def _exit_settings(self) -> None:
         """Leave settings and restore choices."""
-        self._in_settings = False
+        session = self._focused()
+        if session:
+            session.in_settings = False
         self._setting_edit_mode = False
         self._tts.stop()
 
-        if self._active:
+        if session and session.active:
             self._tts.speak_async("Back to choices")
-            # Restore the real choices
-            self.call_from_thread(self._show_choices)
+            self._show_choices()
         else:
             self._tts.speak_async("Settings closed")
-            # No active choices — show waiting state
-            self.call_from_thread(self._show_idle)
+            self._show_idle()
 
     def _enter_setting_edit(self, key: str) -> None:
         """Enter edit mode for a specific setting."""
@@ -666,14 +990,12 @@ class IoMcpApp(App):
         self._tts.stop()
 
         if key == "speed":
-            # Generate values from 0.5 to 2.5 in 0.1 increments
             self._setting_edit_values = [f"{v/10:.1f}" for v in range(5, 26)]
             current = f"{self.settings.speed:.1f}"
             self._setting_edit_index = (
                 self._setting_edit_values.index(current)
                 if current in self._setting_edit_values else 0
             )
-            # Pregenerate number audio
             self._tts.pregenerate(self._setting_edit_values)
 
         elif key == "voice":
@@ -693,7 +1015,6 @@ class IoMcpApp(App):
                 if current in self._setting_edit_values else 0
             )
 
-        # Show in list
         list_view = self.query_one("#choices", ListView)
         list_view.clear()
         for i, val in enumerate(self._setting_edit_values):
@@ -720,23 +1041,20 @@ class IoMcpApp(App):
             self.settings.voice = value
         elif key == "provider":
             self.settings.provider = value
-            # Reset voice to default for new provider
             voices = self.settings.get_voices()
             if self.settings.voice not in voices:
                 self.settings.voice = voices[0]
 
         self.settings.apply_to_env()
-        # Clear TTS cache since settings changed
         self._tts.clear_cache()
 
         self._setting_edit_mode = False
         self._tts.stop()
         self._tts.speak_async(f"{key} set to {value}")
 
-        # Re-enter settings menu
         self._enter_settings()
 
-    # ─── Dwell timer ─────────────────────────────────────────────────
+    # ─── Dwell timer ─────────────────────────────────────────────
 
     def _start_dwell(self) -> None:
         self._cancel_dwell()
@@ -749,7 +1067,8 @@ class IoMcpApp(App):
             self._dwell_timer = None
 
     def _tick_dwell(self) -> None:
-        if not self._active or self._dwell_time <= 0:
+        session = self._focused()
+        if not session or not session.active or self._dwell_time <= 0:
             self._cancel_dwell()
             return
         elapsed = time.time() - self._dwell_start
@@ -760,13 +1079,15 @@ class IoMcpApp(App):
             self._cancel_dwell()
             self._do_select()
 
-    # ─── Event handlers ──────────────────────────────────────────────
+    # ─── Event handlers ──────────────────────────────────────────
 
     @on(ListView.Highlighted)
     def on_highlight_changed(self, event: ListView.Highlighted) -> None:
         """Speak label + description when highlight changes."""
         if event.item is None:
             return
+
+        session = self._focused()
 
         # In setting edit mode, read the value
         if self._setting_edit_mode:
@@ -776,7 +1097,7 @@ class IoMcpApp(App):
             return
 
         # In settings mode
-        if self._in_settings:
+        if session and session.in_settings:
             if isinstance(event.item, ChoiceItem):
                 s = self._settings_items[event.item.display_index] if event.item.display_index < len(self._settings_items) else None
                 if s:
@@ -784,26 +1105,24 @@ class IoMcpApp(App):
                     self._tts.speak_async(text)
             return
 
-        if not self._active:
+        if not session or not session.active:
             return
-        if self._intro_speaking:
+        if session.intro_speaking:
             return
 
         # If we're reading options sequentially and user scrolled, interrupt
-        if self._reading_options:
-            self._reading_options = False
+        if session.reading_options:
+            session.reading_options = False
             self._tts.stop()
 
         if isinstance(event.item, ChoiceItem):
             logical = event.item.choice_index
             if logical > 0:
-                # Real option
                 ci = logical - 1
-                c = self._choices[ci]
+                c = session.choices[ci]
                 s = c.get('summary', '')
                 text = f"{logical}. {c.get('label', '')}. {s}" if s else f"{logical}. {c.get('label', '')}"
             else:
-                # Extra option: logical 0 → last extra, -1 → second-to-last, etc.
                 ei = len(EXTRA_OPTIONS) - 1 + logical
                 if 0 <= ei < len(EXTRA_OPTIONS):
                     e = EXTRA_OPTIONS[ei]
@@ -819,10 +1138,11 @@ class IoMcpApp(App):
     @on(ListView.Selected)
     def on_list_selected(self, event: ListView.Selected) -> None:
         """Handle Enter/click on a list item."""
+        session = self._focused()
         if self._setting_edit_mode:
             self._apply_setting_edit()
             return
-        if self._in_settings:
+        if session and session.in_settings:
             if isinstance(event.item, ChoiceItem):
                 idx = event.item.display_index
                 if idx < len(self._settings_items):
@@ -832,19 +1152,21 @@ class IoMcpApp(App):
                     else:
                         self._enter_setting_edit(key)
             return
-        if not self._active:
+        if not session or not session.active:
             return
         self._do_select()
 
     def action_cursor_down(self) -> None:
-        if self._input_mode or self._voice_recording:
+        session = self._focused()
+        if session and (session.input_mode or session.voice_recording):
             return
         list_view = self.query_one("#choices", ListView)
         if list_view.display:
             list_view.action_cursor_down()
 
     def action_cursor_up(self) -> None:
-        if self._input_mode or self._voice_recording:
+        session = self._focused()
+        if session and (session.input_mode or session.voice_recording):
             return
         list_view = self.query_one("#choices", ListView)
         if list_view.display:
@@ -859,7 +1181,8 @@ class IoMcpApp(App):
         return True
 
     def on_mouse_scroll_down(self, event: MouseScrollDown) -> None:
-        if (self._active or self._in_settings or self._setting_edit_mode) and self._scroll_allowed():
+        session = self._focused()
+        if session and (session.active or session.in_settings or self._setting_edit_mode) and self._scroll_allowed():
             list_view = self.query_one("#choices", ListView)
             if list_view.display:
                 if self._invert_scroll:
@@ -870,7 +1193,8 @@ class IoMcpApp(App):
                 event.stop()
 
     def on_mouse_scroll_up(self, event: MouseScrollUp) -> None:
-        if (self._active or self._in_settings or self._setting_edit_mode) and self._scroll_allowed():
+        session = self._focused()
+        if session and (session.active or session.in_settings or self._setting_edit_mode) and self._scroll_allowed():
             list_view = self.query_one("#choices", ListView)
             if list_view.display:
                 if self._invert_scroll:
@@ -884,7 +1208,8 @@ class IoMcpApp(App):
         if self._setting_edit_mode:
             self._apply_setting_edit()
             return
-        if self._in_settings:
+        session = self._focused()
+        if session and session.in_settings:
             list_view = self.query_one("#choices", ListView)
             idx = list_view.index or 0
             if idx < len(self._settings_items):
@@ -894,16 +1219,17 @@ class IoMcpApp(App):
                 else:
                     self._enter_setting_edit(key)
             return
-        if self._active and not self._input_mode and not self._voice_recording:
+        if session and session.active and not session.input_mode and not session.voice_recording:
             self._do_select()
 
     def action_freeform_input(self) -> None:
         """Switch to freeform text input mode."""
-        if not self._active or self._input_mode or self._voice_recording:
+        session = self._focused()
+        if not session or not session.active or session.input_mode or session.voice_recording:
             return
-        self._input_mode = True
+        session.input_mode = True
         self._freeform_spoken_pos = 0
-        self._reading_options = False
+        session.reading_options = False
         self._cancel_dwell()
         self._tts.stop()
         self._tts.speak_async("Type your reply")
@@ -917,7 +1243,8 @@ class IoMcpApp(App):
 
     @on(Input.Changed, "#freeform-input")
     def on_freeform_changed(self, event: Input.Changed) -> None:
-        if not self._input_mode:
+        session = self._focused()
+        if not session or not session.input_mode:
             return
         text = event.value
         if len(text) <= self._freeform_spoken_pos:
@@ -932,22 +1259,27 @@ class IoMcpApp(App):
 
     @on(Input.Submitted, "#freeform-input")
     def on_freeform_submitted(self, event: Input.Submitted) -> None:
+        session = self._focused()
+        if not session:
+            return
         text = event.value.strip()
         if not text:
             return
-        self._input_mode = False
+        session.input_mode = False
         event.input.styles.display = "none"
 
         self._freeform_tts.stop()
         self._tts.stop()
         self._tts.speak_async(f"Selected: {text}")
 
-        self._selection = {"selected": text, "summary": "(freeform input)"}
-        self._selection_event.set()
+        session.selection = {"selected": text, "summary": "(freeform input)"}
+        session.selection_event.set()
         self._show_waiting(text)
 
     def _cancel_freeform(self) -> None:
-        self._input_mode = False
+        session = self._focused()
+        if session:
+            session.input_mode = False
         self._freeform_tts.stop()
         inp = self.query_one("#freeform-input", Input)
         inp.styles.display = "none"
@@ -956,21 +1288,21 @@ class IoMcpApp(App):
 
     def on_key(self, event) -> None:
         """Handle Escape in freeform/voice/settings mode."""
-        if self._input_mode and event.key == "escape":
+        session = self._focused()
+        if session and session.input_mode and event.key == "escape":
             self._cancel_freeform()
             event.prevent_default()
             event.stop()
-        elif self._voice_recording and event.key == "escape":
-            # Cancel voice recording
+        elif session and session.voice_recording and event.key == "escape":
             if self._voice_process:
                 try:
                     self._voice_process.kill()
                 except Exception:
                     pass
-            self._voice_recording = False
+            session.voice_recording = False
             self._voice_process = None
             self._tts.speak_async("Recording cancelled")
-            self.call_from_thread(self._restore_choices)
+            self._restore_choices()
             event.prevent_default()
             event.stop()
         elif self._setting_edit_mode and event.key == "escape":
@@ -978,17 +1310,17 @@ class IoMcpApp(App):
             self._enter_settings()
             event.prevent_default()
             event.stop()
-        elif self._in_settings and event.key == "escape":
+        elif session and session.in_settings and event.key == "escape":
             self._exit_settings()
             event.prevent_default()
             event.stop()
 
     def _pick_by_number(self, n: int) -> None:
         """Immediately select option by 1-based number."""
-        if not self._active or self._input_mode or self._voice_recording or self._in_settings:
+        session = self._focused()
+        if not session or not session.active or session.input_mode or session.voice_recording or session.in_settings:
             return
-        # n is 1-based for real choices; find the display index
-        display_idx = self._extras_count + n - 1
+        display_idx = session.extras_count + n - 1
         list_view = self.query_one("#choices", ListView)
         if display_idx < 0 or display_idx >= len(list_view.children):
             return
@@ -1006,18 +1338,21 @@ class IoMcpApp(App):
     def action_pick_9(self) -> None: self._pick_by_number(9)
 
     def action_quit_app(self) -> None:
-        if self._active:
-            self._cancel_dwell()
-            self._selection = {"selected": "quit", "summary": "User quit"}
-            self._selection_event.set()
+        # Set quit for all active sessions
+        for session in self.manager.all_sessions():
+            if session.active:
+                self._cancel_dwell()
+                session.selection = {"selected": "quit", "summary": "User quit"}
+                session.selection_event.set()
         self.exit()
 
     def _do_select(self) -> None:
         """Finalize the current selection."""
-        if not self._active or not self._choices:
+        session = self._focused()
+        if not session or not session.active or not session.choices:
             return
         self._cancel_dwell()
-        self._reading_options = False
+        session.reading_options = False
 
         list_view = self.query_one("#choices", ListView)
         idx = list_view.index or 0
@@ -1034,17 +1369,17 @@ class IoMcpApp(App):
 
         # Real choice
         ci = logical - 1
-        if ci >= len(self._choices):
+        if ci >= len(session.choices):
             ci = 0
-        chosen = self._choices[ci]
+        chosen = session.choices[ci]
         label = chosen.get("label", "")
         summary = chosen.get("summary", "")
 
         self._tts.stop()
         self._tts.speak_async(f"Selected: {label}")
 
-        self._selection = {"selected": label, "summary": summary}
-        self._selection_event.set()
+        session.selection = {"selected": label, "summary": summary}
+        session.selection_event.set()
         self._show_waiting(label)
 
     def _handle_extra_select(self, logical_index: int) -> None:
@@ -1055,7 +1390,6 @@ class IoMcpApp(App):
         """
         self._tts.stop()
 
-        # Convert logical index to array index
         ei = len(EXTRA_OPTIONS) - 1 + logical_index
         if ei < 0 or ei >= len(EXTRA_OPTIONS):
             return
@@ -1117,7 +1451,9 @@ class TUI:
     def present_choices(self, preamble: str, choices: list[dict]) -> dict:
         if self._app is None:
             return {"selected": "error", "summary": "TUI not started"}
-        return self._app.present_choices(preamble, choices)
+        # Legacy: create a default session
+        session, _ = self._app.manager.get_or_create(0)
+        return self._app.present_choices(session, preamble, choices)
 
     def speak(self, text: str) -> None:
         self._tts.speak(text)

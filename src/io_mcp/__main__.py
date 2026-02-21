@@ -1,14 +1,19 @@
 """
 io-mcp — MCP server for agent I/O via scroll-wheel and TTS.
 
-Exposes two MCP tools via SSE transport on port 8444:
+Exposes MCP tools via SSE transport on port 8444:
 
   present_choices(preamble, choices)
       Show choices in the TUI, block until user scrolls and selects.
       Returns JSON: {"selected": "label", "summary": "..."}.
 
   speak(text)
-      Non-blocking TTS narration through earphones. Returns immediately.
+      Blocking TTS narration through earphones.
+
+  speak_async(text)
+      Non-blocking TTS narration.
+
+Multiple agents can connect simultaneously — each gets a session tab.
 
 Textual TUI runs in the main thread (needs signal handlers).
 MCP SSE server runs in a background thread via uvicorn.
@@ -78,7 +83,7 @@ def _kill_existing_instance() -> None:
 
 def _run_mcp_server(app: IoMcpApp, host: str, port: int, append_options: list[str] | None = None) -> None:
     """Run the MCP SSE server in a background thread."""
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.fastmcp import FastMCP, Context
 
     server = FastMCP("io-mcp", host=host, port=port)
     _append = append_options or []
@@ -87,6 +92,7 @@ def _run_mcp_server(app: IoMcpApp, host: str, port: int, append_options: list[st
     async def present_choices(
         preamble: str,
         choices: list[dict],
+        ctx: Context,
     ) -> str:
         """Present multi-choice options to the user via scroll-wheel TUI.
 
@@ -112,6 +118,12 @@ def _run_mcp_server(app: IoMcpApp, host: str, port: int, append_options: list[st
         if not choices:
             return json.dumps({"selected": "error", "summary": "No choices provided"})
 
+        # Get or create session for this MCP client
+        session_id = id(ctx.session)
+        session, created = app.manager.get_or_create(session_id)
+        if created:
+            app.on_session_created(session)
+
         # Append persistent options from --append-option flags
         all_choices = list(choices)
         for opt in _append:
@@ -126,13 +138,13 @@ def _run_mcp_server(app: IoMcpApp, host: str, port: int, append_options: list[st
 
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
-            None, app.present_choices, preamble, all_choices
+            None, app.present_choices, session, preamble, all_choices
         )
 
         return json.dumps(result)
 
     @server.tool()
-    async def speak(text: str) -> str:
+    async def speak(text: str, ctx: Context) -> str:
         """Speak text aloud via TTS through the user's earphones.
 
         Use this to narrate what you're doing — give short verbal status
@@ -153,13 +165,19 @@ def _run_mcp_server(app: IoMcpApp, host: str, port: int, append_options: list[st
         str
             Confirmation message.
         """
+        # Get or create session for this MCP client
+        session_id = id(ctx.session)
+        session, created = app.manager.get_or_create(session_id)
+        if created:
+            app.on_session_created(session)
+
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, app.speak, text)
+        await loop.run_in_executor(None, app.session_speak, session, text, True)
         preview = text[:100] + ("..." if len(text) > 100 else "")
         return f"Spoke: {preview}"
 
     @server.tool()
-    async def speak_async(text: str) -> str:
+    async def speak_async(text: str, ctx: Context) -> str:
         """Speak text aloud via TTS WITHOUT blocking. Returns immediately.
 
         Use this for quick status updates where you don't need to wait
@@ -180,7 +198,13 @@ def _run_mcp_server(app: IoMcpApp, host: str, port: int, append_options: list[st
         str
             Confirmation message.
         """
-        app.speak_async(text)
+        # Get or create session for this MCP client
+        session_id = id(ctx.session)
+        session, created = app.manager.get_or_create(session_id)
+        if created:
+            app.on_session_created(session)
+
+        app.session_speak_async(session, text)
         preview = text[:100] + ("..." if len(text) > 100 else "")
         return f"Spoke: {preview}"
 
@@ -264,6 +288,10 @@ def main() -> None:
         def _demo_loop():
             import time
             time.sleep(0.5)  # let textual mount
+            # Create a demo session
+            demo_session, _ = app.manager.get_or_create(-1)
+            demo_session.name = "Demo"
+
             round_num = 0
             while True:
                 round_num += 1
@@ -283,6 +311,7 @@ def main() -> None:
                         choices.append({"label": title, "summary": desc})
 
                 result = app.present_choices(
+                    demo_session,
                     f"Demo round {round_num}. Pick any option to test scrolling and TTS.",
                     choices,
                 )
