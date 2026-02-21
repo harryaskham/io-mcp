@@ -27,17 +27,19 @@ from textual.widget import Widget
 from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, Static
 
 from .session import Session, SessionManager, SpeechEntry
-from .tts import TTSEngine
+from .tts import PORTAUDIO_LIB, TTSEngine
 
 
 # ─── Extra options (negative indices) ──────────────────────────────────────
 EXTRA_OPTIONS = [
     {"label": "Record response", "summary": "Speak your reply (voice input)"},
+    {"label": "Previous tab", "summary": "Switch to the previous session tab"},
+    {"label": "Next tab", "summary": "Switch to the next session tab"},
     {"label": "Fast toggle", "summary": "Toggle speed between current and 1.8x"},
     {"label": "Voice toggle", "summary": "Quick-switch between voices"},
     {"label": "Settings", "summary": "Open settings menu"},
 ]
-# Display order (top to bottom): -3=Record, -2=Fast, -1=Voice, 0=Settings
+# Display order (top to bottom): -5=Record, -4=Prev tab, -3=Next tab, -2=Fast, -1=Voice, 0=Settings
 # Logical index to array: ei = len(EXTRA_OPTIONS) - 1 + logical_index
 # Reached by scrolling up past the first real option
 
@@ -853,11 +855,12 @@ class IoMcpApp(App):
         if stt_bin:
             env = os.environ.copy()
             env["PULSE_SERVER"] = os.environ.get("PULSE_SERVER", "127.0.0.1")
+            env["LD_LIBRARY_PATH"] = PORTAUDIO_LIB
             try:
                 self._voice_process = subprocess.Popen(
                     [stt_bin],
                     stdout=subprocess.PIPE,
-                    stderr=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
                     env=env,
                 )
             except Exception:
@@ -889,10 +892,12 @@ class IoMcpApp(App):
             try:
                 import signal
                 proc.send_signal(signal.SIGINT)
-                stdout, _ = proc.communicate(timeout=15)
+                stdout, stderr = proc.communicate(timeout=15)
                 transcript = stdout.decode("utf-8", errors="replace").strip()
-            except Exception:
+                stderr_text = stderr.decode("utf-8", errors="replace").strip() if stderr else ""
+            except Exception as e:
                 transcript = ""
+                stderr_text = str(e)
 
             if transcript:
                 self._tts.stop()
@@ -909,7 +914,10 @@ class IoMcpApp(App):
                 session.selection_event.set()
                 self.call_from_thread(self._show_waiting, f"🎙 {transcript[:50]}")
             else:
-                self._tts.speak_async("No speech detected. Back to choices.")
+                if stderr_text:
+                    self._tts.speak_async(f"Recording failed: {stderr_text[:100]}")
+                else:
+                    self._tts.speak_async("No speech detected. Back to choices.")
                 self.call_from_thread(self._restore_choices)
 
         threading.Thread(target=_process, daemon=True).start()
@@ -1397,6 +1405,10 @@ class IoMcpApp(App):
         label = EXTRA_OPTIONS[ei]["label"]
         if label == "Record response":
             self.action_voice_input()
+        elif label == "Next tab":
+            self.action_next_tab()
+        elif label == "Previous tab":
+            self.action_prev_tab()
         elif label == "Fast toggle":
             msg = self.settings.toggle_fast()
             self._tts.clear_cache()
