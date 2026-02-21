@@ -847,16 +847,15 @@ class IoMcpApp(App):
         session.voice_recording = True
         session.reading_options = False
 
-        # UI first
+        # Stop all audio immediately before mic opens
+        self._tts.stop()
+
+        # UI update
         self.query_one("#choices").display = False
         self.query_one("#dwell-bar").display = False
         status = self.query_one("#status", Label)
         status.update("🎙 Recording... (press space to stop)")
         status.display = True
-
-        # TTS after UI
-        self._tts.stop()
-        self._tts.speak_async("Recording. Press space when done.")
 
         # Find binaries
         termux_exec_bin = _find_binary("termux-exec")
@@ -881,14 +880,18 @@ class IoMcpApp(App):
             self._restore_choices()
             return
 
-        # Record to a temp file in home dir (accessible from both native and proot)
-        self._voice_rec_file = os.path.expanduser("~/voice-recording.ogg")
+        # Record to shared storage (accessible from both native Termux and proot)
+        rec_dir = "/sdcard/io-mcp"
+        os.makedirs(rec_dir, exist_ok=True)
+        self._voice_rec_file = os.path.join(rec_dir, "voice-recording.ogg")
+        # Native Termux sees /storage/emulated/0 instead of /sdcard
+        native_rec_file = "/storage/emulated/0/io-mcp/voice-recording.ogg"
 
         try:
             # Start recording via termux-exec (runs in native Termux context)
             self._voice_process = subprocess.Popen(
                 [termux_exec_bin, "termux-microphone-record",
-                 "-f", self._voice_rec_file,
+                 "-f", native_rec_file,
                  "-e", "opus", "-r", "24000", "-c", "1"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
