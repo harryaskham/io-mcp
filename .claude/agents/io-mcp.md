@@ -7,7 +7,7 @@ skills:
 mcpServers:
   io-mcp:
     type: http
-    url: http://localhost:8444/mcp
+    url: "${IO_MCP_URL}"
 hooks:
   Stop:
     - hooks:
