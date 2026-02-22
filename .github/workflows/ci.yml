@@ -27,4 +27,4 @@ jobs:
         run: uv run pytest tests/ -v
 
       - name: Check imports
-        run: uv run python -c "import io_mcp.__main__; import io_mcp.tui; import io_mcp.config; import io_mcp.tts; import io_mcp.session; print('All imports OK')"
+        run: uv run python -c "import io_mcp.__main__; import io_mcp.tui; import io_mcp.config; import io_mcp.tts; import io_mcp.session; import io_mcp.settings; import io_mcp.server; import io_mcp.api; print('All imports OK')"
