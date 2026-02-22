@@ -74,9 +74,6 @@ class Session:
     # ── User message inbox (queued for next MCP response) ─────────
     pending_messages: list[str] = field(default_factory=list)
 
-    # ── Queued user messages (drained on next MCP response) ───────
-    pending_messages: list[str] = field(default_factory=list)
-
     def touch(self) -> None:
         """Update the last_activity timestamp."""
         self.last_activity = time.time()
