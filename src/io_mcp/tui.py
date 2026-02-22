@@ -1534,6 +1534,9 @@ class IoMcpApp(App):
                     except (AttributeError, TypeError):
                         pass
 
+            # Ensure TTS is unmuted after reload
+            self._tts._muted = False
+
             self._tts.speak_async("Reloaded")
         except Exception as e:
             self._tts.speak_async(f"Reload failed: {str(e)[:80]}")
