@@ -29,6 +29,7 @@ from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, St
 from .session import Session, SessionManager, SpeechEntry, HistoryEntry
 from .settings import Settings
 from .tts import PORTAUDIO_LIB, TTSEngine, _find_binary
+from . import api as frontend_api
 
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
@@ -404,6 +405,12 @@ class IoMcpApp(App):
         session.reading_options = False
         session.in_settings = False
 
+        # Emit event for remote frontends
+        try:
+            frontend_api.emit_choices_presented(session.session_id, preamble, choices)
+        except Exception:
+            pass
+
         # Build the full list: extras + real choices
         session.extras_count = len(EXTRA_OPTIONS)
         session.all_items = list(EXTRA_OPTIONS) + session.choices
@@ -598,14 +605,16 @@ class IoMcpApp(App):
 
     def session_speak(self, session: Session, text: str, block: bool = True,
                       priority: int = 0) -> None:
-        """Speak text for a session, respecting priority rules.
-
-        Foreground: plays immediately, interrupts background.
-        Background: queued, played when foreground is idle.
-        Priority 1 (urgent): always interrupts current playback.
-        Always logs to session's speech_log.
-        """
+        """Speak text for a session, respecting priority rules."""
         self._touch_session(session)
+
+        # Emit event for remote frontends
+        try:
+            frontend_api.emit_speech_requested(
+                session.session_id, text, blocking=block, priority=priority)
+        except Exception:
+            pass
+
         # Log the speech
         entry = SpeechEntry(text=text, priority=priority)
         session.speech_log.append(entry)
@@ -1942,6 +1951,13 @@ class IoMcpApp(App):
 
         session.selection = {"selected": label, "summary": summary}
         session.selection_event.set()
+
+        # Emit event for remote frontends
+        try:
+            frontend_api.emit_selection_made(session.session_id, label, summary)
+        except Exception:
+            pass
+
         self._show_waiting(label)
 
     def _handle_extra_select(self, logical_index: int) -> None:
