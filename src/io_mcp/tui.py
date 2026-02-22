@@ -253,6 +253,10 @@ class IoMcpApp(App):
         # Flag: is foreground currently speaking (blocks bg playback)
         self._fg_speaking = False
 
+        # Haptic feedback
+        self._termux_vibrate = _find_binary("termux-vibrate")
+        self._haptic_enabled = self._termux_vibrate is not None
+
     # ─── Helpers to get focused session ────────────────────────────
 
     def _focused(self) -> Optional[Session]:
@@ -262,6 +266,37 @@ class IoMcpApp(App):
     def _is_focused(self, session_id: str) -> bool:
         """Check if a session is the focused one."""
         return self.manager.active_session_id == session_id
+
+    # ─── Haptic feedback ────────────────────────────────────────────
+
+    def _vibrate(self, duration_ms: int = 30) -> None:
+        """Trigger haptic feedback via termux-vibrate (fire-and-forget).
+
+        Uses termux-exec if available (needed on Nix-on-Droid/proot),
+        otherwise falls back to direct termux-vibrate.
+
+        Args:
+            duration_ms: Vibration duration in milliseconds.
+                         30ms for scroll, 100ms for selection.
+        """
+        if not self._haptic_enabled:
+            return
+        try:
+            cmd: list[str] = []
+            termux_exec = _find_binary("termux-exec")
+            if termux_exec:
+                cmd = [termux_exec, "termux-vibrate", "-d", str(duration_ms), "-f"]
+            elif self._termux_vibrate:
+                cmd = [self._termux_vibrate, "-d", str(duration_ms), "-f"]
+            else:
+                return
+            subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            pass  # Don't let vibration errors affect UX
 
     # ─── Widget composition ────────────────────────────────────────
 
@@ -553,8 +588,9 @@ class IoMcpApp(App):
             emotion_ov = getattr(session, 'emotion_override', None)
             self._fg_speaking = True
             if block:
-                self._tts.speak(text, voice_override=voice_ov,
-                               emotion_override=emotion_ov)
+                # Use streaming for blocking calls (lower latency)
+                self._tts.speak_streaming(text, voice_override=voice_ov,
+                                         emotion_override=emotion_ov, block=True)
             else:
                 self._tts.speak_async(text, voice_override=voice_ov,
                                      emotion_override=emotion_ov)
@@ -1384,6 +1420,9 @@ class IoMcpApp(App):
         if event.item is None:
             return
 
+        # Haptic feedback on scroll (short buzz)
+        self._vibrate(30)
+
         session = self._focused()
 
         # In setting edit mode, read the value
@@ -1573,6 +1612,7 @@ class IoMcpApp(App):
         session.input_mode = False
         event.input.styles.display = "none"
 
+        self._vibrate(100)  # Haptic feedback on freeform submit
         self._freeform_tts.stop()
         self._tts.stop()
         self._tts.speak_async(f"Selected: {text}")
@@ -1758,6 +1798,9 @@ class IoMcpApp(App):
         label = chosen.get("label", "")
         summary = chosen.get("summary", "")
 
+        # Haptic feedback on selection (longer buzz)
+        self._vibrate(100)
+
         self._tts.stop()
         self._tts.speak_async(f"Selected: {label}")
 
@@ -1772,6 +1815,7 @@ class IoMcpApp(App):
         Maps logical_index to EXTRA_OPTIONS array via: ei = len(EXTRA_OPTIONS) - 1 + logical_index.
         """
         self._tts.stop()
+        self._vibrate(100)  # Haptic feedback on extra selection
 
         ei = len(EXTRA_OPTIONS) - 1 + logical_index
         if ei < 0 or ei >= len(EXTRA_OPTIONS):

@@ -58,11 +58,13 @@ class TTSEngine:
 
     Audio is generated to WAV files, then played via paplay.
     pregenerate() creates clips in parallel so scrolling is instant.
+    speak_streaming() pipes tts stdout → paplay for faster first-audio.
     """
 
     def __init__(self, local: bool = False, speed: float = 1.0,
                  config: Optional["IoMcpConfig"] = None):
         self._process: Optional[subprocess.Popen] = None
+        self._streaming_tts_proc: Optional[subprocess.Popen] = None
         self._lock = threading.Lock()
         self._local = local
         self._speed = speed
@@ -253,15 +255,107 @@ class TTSEngine:
                            emotion_override=emotion_override)
         threading.Thread(target=_do, daemon=True).start()
 
-    def stop(self) -> None:
-        """Kill any in-progress playback (non-blocking)."""
-        with self._lock:
-            if self._process and self._process.poll() is None:
+    def speak_streaming(self, text: str, voice_override: Optional[str] = None,
+                        emotion_override: Optional[str] = None,
+                        block: bool = True) -> None:
+        """Speak text by piping tts stdout directly to paplay (no file).
+
+        This reduces time-to-first-audio because playback starts as soon
+        as the TTS service sends initial WAV data, rather than waiting for
+        the entire response. Falls back to cached play if streaming is
+        unavailable (local mode or missing binaries).
+
+        Args:
+            text: Text to speak.
+            voice_override: Optional voice name for per-session rotation.
+            emotion_override: Optional emotion preset for per-session rotation.
+            block: If True, wait for playback to finish before returning.
+        """
+        if not self._paplay or self._muted:
+            return
+
+        # Check cache first — if we have a cached file, no need to stream
+        key = self._cache_key(text, voice_override, emotion_override)
+        cached = self._cache.get(key)
+        if cached and os.path.isfile(cached):
+            self.stop()
+            self._start_playback(cached)
+            if block:
+                self._wait_for_playback()
+            return
+
+        # Streaming only works with API tts backend (not espeak-ng local)
+        if self._local or not self._tts_bin or not self._config:
+            # Fall back to non-streaming
+            self.play_cached(text, block=block, voice_override=voice_override,
+                           emotion_override=emotion_override)
+            return
+
+        # Build tts command
+        cmd = [self._tts_bin] + self._config.tts_cli_args(
+            text, voice_override=voice_override,
+            emotion_override=emotion_override)
+
+        self.stop()
+
+        try:
+            with self._lock:
+                # Pipe tts stdout directly to paplay — audio starts immediately
+                # WAV header is in the stream, so paplay can decode it directly
+                tts_proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    env=self._env,
+                    preexec_fn=os.setsid,
+                )
+                play_proc = subprocess.Popen(
+                    [self._paplay],
+                    stdin=tts_proc.stdout,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    env=self._env,
+                    preexec_fn=os.setsid,
+                )
+                # Allow tts_proc to receive SIGPIPE if paplay exits
+                if tts_proc.stdout:
+                    tts_proc.stdout.close()
+                self._process = play_proc
+                self._streaming_tts_proc = tts_proc
+
+            if block:
                 try:
-                    os.killpg(os.getpgid(self._process.pid), signal.SIGKILL)
-                except (OSError, ProcessLookupError):
+                    play_proc.wait(timeout=60)
+                except Exception:
                     pass
-                self._process = None
+                try:
+                    tts_proc.wait(timeout=5)
+                except Exception:
+                    pass
+        except Exception:
+            # Fall back to non-streaming on any error
+            self.play_cached(text, block=block, voice_override=voice_override,
+                           emotion_override=emotion_override)
+
+    def speak_streaming_async(self, text: str, voice_override: Optional[str] = None,
+                              emotion_override: Optional[str] = None) -> None:
+        """Speak text via streaming pipe without blocking caller."""
+        def _do():
+            self.speak_streaming(text, voice_override=voice_override,
+                               emotion_override=emotion_override, block=False)
+        threading.Thread(target=_do, daemon=True).start()
+
+    def stop(self) -> None:
+        """Kill any in-progress playback and streaming TTS (non-blocking)."""
+        with self._lock:
+            for proc in (self._process, self._streaming_tts_proc):
+                if proc and proc.poll() is None:
+                    try:
+                        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                    except (OSError, ProcessLookupError):
+                        pass
+            self._process = None
+            self._streaming_tts_proc = None
 
     def mute(self) -> None:
         """Stop playback and prevent any new audio from playing."""
