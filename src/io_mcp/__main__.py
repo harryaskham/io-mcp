@@ -142,8 +142,11 @@ def _run_mcp_server(app: IoMcpApp, host: str, port: int,
         )
 
         import logging
-        _log = logging.getLogger("mcp")
-        _log.setLevel(logging.DEBUG)
+        # Suppress uvicorn and MCP server logs — they print over the TUI
+        for logger_name in ("mcp", "uvicorn", "uvicorn.access", "uvicorn.error", "httpx"):
+            _log = logging.getLogger(logger_name)
+            _log.setLevel(logging.WARNING)
+            _log.handlers = []  # Remove any existing handlers
 
         with open("/tmp/io-mcp-server.log", "w") as f:
             f.write(f"Starting MCP server on {host}:{port}\n")
