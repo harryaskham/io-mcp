@@ -27,6 +27,7 @@ from textual.widget import Widget
 from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, Static
 
 from .session import Session, SessionManager, SpeechEntry
+from .settings import Settings
 from .tts import PORTAUDIO_LIB, TTSEngine, _find_binary
 
 from typing import TYPE_CHECKING
@@ -86,126 +87,6 @@ class DwellBar(Static):
         remaining = self.dwell_time * (1.0 - self.progress)
         bar = "█" * filled + "░" * empty
         return f"  [{bar}] {remaining:.1f}s"
-
-
-# ─── Settings state ─────────────────────────────────────────────────────────
-
-class Settings:
-    """Runtime settings managed via the in-TUI settings menu.
-
-    Backed by IoMcpConfig — reads/writes config.yml on changes.
-    """
-
-    def __init__(self, config: Optional["IoMcpConfig"] = None):
-        self._config = config
-        self._pre_fast_speed: float | None = None  # for fast toggle
-
-    @property
-    def speed(self) -> float:
-        if self._config:
-            return self._config.tts_speed
-        return float(os.environ.get("TTS_SPEED", "1.0"))
-
-    @speed.setter
-    def speed(self, value: float) -> None:
-        if self._config:
-            self._config.set_tts_speed(value)
-            self._config.save()
-
-    @property
-    def voice(self) -> str:
-        if self._config:
-            return self._config.tts_voice
-        return os.environ.get("OPENAI_TTS_VOICE", "sage")
-
-    @voice.setter
-    def voice(self, value: str) -> None:
-        if self._config:
-            self._config.set_tts_voice(value)
-            self._config.save()
-
-    @property
-    def tts_model(self) -> str:
-        if self._config:
-            return self._config.tts_model_name
-        return "gpt-4o-mini-tts"
-
-    @tts_model.setter
-    def tts_model(self, value: str) -> None:
-        if self._config:
-            self._config.set_tts_model(value)
-            self._config.save()
-
-    @property
-    def stt_model(self) -> str:
-        if self._config:
-            return self._config.stt_model_name
-        return "whisper"
-
-    @stt_model.setter
-    def stt_model(self, value: str) -> None:
-        if self._config:
-            self._config.set_stt_model(value)
-            self._config.save()
-
-    @property
-    def emotion(self) -> str:
-        if self._config:
-            return self._config.tts_emotion
-        return "neutral"
-
-    @emotion.setter
-    def emotion(self, value: str) -> None:
-        if self._config:
-            self._config.set_tts_emotion(value)
-            self._config.save()
-
-    def get_emotions(self) -> list[str]:
-        if self._config:
-            return self._config.emotion_preset_names
-        return ["neutral"]
-
-    def get_voices(self) -> list[str]:
-        if self._config:
-            return self._config.tts_voice_options
-        return ["sage", "ballad", "alloy"]
-
-    def get_tts_models(self) -> list[str]:
-        if self._config:
-            return self._config.tts_model_names
-        return ["gpt-4o-mini-tts"]
-
-    def get_stt_models(self) -> list[str]:
-        if self._config:
-            return self._config.stt_model_names
-        return ["whisper"]
-
-    def apply_to_env(self):
-        """Push current settings to env vars (legacy compat)."""
-        os.environ["TTS_SPEED"] = str(self.speed)
-
-    def toggle_fast(self) -> str:
-        if self._pre_fast_speed is not None:
-            self.speed = self._pre_fast_speed
-            self._pre_fast_speed = None
-            msg = f"Speed reset to {self.speed}"
-        else:
-            self._pre_fast_speed = self.speed
-            self.speed = 1.8
-            msg = "Speed set to 1.8"
-        return msg
-
-    def toggle_voice(self) -> str:
-        voices = self.get_voices()
-        if not voices:
-            return "No voices available"
-        current = self.voice
-        if current in voices:
-            idx = voices.index(current)
-            self.voice = voices[(idx + 1) % len(voices)]
-        else:
-            self.voice = voices[0]
-        return f"Voice: {self.voice}"
 
 
 # ─── Main TUI App ───────────────────────────────────────────────────────────
