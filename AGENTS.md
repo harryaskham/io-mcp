@@ -262,6 +262,19 @@ uv run pytest tests/ # Run tests (56 tests)
 
 ## Important Notes for Agents
 
+### Speech is Critical — Never Go Silent
+
+**ALWAYS narrate what you're doing via `speak_async()`.** The user is listening through earphones and cannot see the screen. Long silences feel broken. Follow these rules:
+
+- **Before every tool call**: Say what you're about to do. "Reading the config file." "Running tests." "Building the APK."
+- **Before long operations**: Explain what will happen. "This build will take a minute. I'll update you when it's done."
+- **After completing work**: Confirm the result. "Tests passed." "Build succeeded." "File updated."
+- **When presenting choices**: The `present_choices` tool handles its own TTS, but prefix it with context via `speak_async()`.
+- **Use `speak_async()` for narration** (non-blocking) and `speak()` only when you need to wait for the user to hear it before proceeding.
+- **Use `speak_urgent()` for critical alerts** that must interrupt current audio.
+
+### Other Important Notes
+
 - Config is at `~/.config/io-mcp/config.yml` — use `set_*` tools or `reload_config` to change settings
 - Local `.io-mcp.yml` in cwd is merged on top (for project-specific extra options)
 - TTS/STT tools are invoked with explicit CLI flags from config (not env vars)
@@ -274,7 +287,6 @@ uv run pytest tests/ # Run tests (56 tests)
 - Settings menu works independently of agent connection state
 - Stale sessions (inactive 5+ min) are auto-removed; focused and active sessions are preserved
 - Use `rename_session()` on connect to set a descriptive tab name
-- Use `speak_urgent()` for time-sensitive messages that must interrupt current playback
 - User messages queued via `m` key appear in your next tool response — check for them
 - Haptic feedback auto-detected via `termux-vibrate`; no-op on non-Android
-- Streaming TTS (`speak_streaming`) used automatically for blocking speak calls — lower latency
+- Streaming TTS used automatically for blocking speak calls — lower latency
