@@ -1,0 +1,6 @@
+{
+  "io-mcp": {
+    "type": "http",
+    "url": "${IO_MCP_URL}"
+  }
+}
