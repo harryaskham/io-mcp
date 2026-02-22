@@ -850,7 +850,14 @@ class IoMcpApp(App):
 
         # Mute TTS — stops current audio and prevents any new playback
         # until unmute() is called in _stop_voice_recording
-        self._tts.mute()
+        # Mute TTS — stops current audio and prevents any new playback
+        # until unmute() is called in _stop_voice_recording.
+        # Graceful fallback if TTSEngine predates mute() (pre-reload).
+        if hasattr(self._tts, 'mute'):
+            self._tts.mute()
+        else:
+            self._tts.stop()
+            self._tts._muted = True
 
         # UI update
         self.query_one("#choices").display = False
@@ -947,7 +954,10 @@ class IoMcpApp(App):
                         pass
 
             # Unmute TTS now that recording is stopped
-            self._tts.unmute()
+            if hasattr(self._tts, 'unmute'):
+                self._tts.unmute()
+            else:
+                self._tts._muted = False
 
             # Check file exists
             if not rec_file or not os.path.isfile(rec_file):
@@ -1430,7 +1440,10 @@ class IoMcpApp(App):
                     os.unlink(rec_file)
                 except Exception:
                     pass
-            self._tts.unmute()
+            if hasattr(self._tts, 'unmute'):
+                self._tts.unmute()
+            else:
+                self._tts._muted = False
             self._tts.speak_async("Recording cancelled")
             self._restore_choices()
             event.prevent_default()
