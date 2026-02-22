@@ -226,6 +226,41 @@ class IoMcpApp(App):
         config: Optional["IoMcpConfig"] = None,
         **kwargs,
     ) -> None:
+        # Build key bindings from config before super().__init__
+        kb = config.key_bindings if config else {}
+        down_key = kb.get("cursorDown", "j")
+        up_key = kb.get("cursorUp", "k")
+        select_key = kb.get("select", "enter")
+        voice_key = kb.get("voiceInput", "space")
+        freeform_key = kb.get("freeformInput", "i")
+        message_key = kb.get("queueMessage", "m")
+        settings_key = kb.get("settings", "s")
+        replay_key = kb.get("replayPrompt", "p")
+        replay_all_key = kb.get("replayAll", "P")
+        next_tab_key = kb.get("nextTab", "l")
+        prev_tab_key = kb.get("prevTab", "h")
+        next_choices_key = kb.get("nextChoicesTab", "n")
+        reload_key = kb.get("hotReload", "r")
+        quit_key = kb.get("quit", "q")
+
+        self._bindings = [
+            Binding(f"{down_key},down", "cursor_down", "Down", show=False),
+            Binding(f"{up_key},up", "cursor_up", "Up", show=False),
+            Binding(select_key, "select", "Select", show=True),
+            Binding(freeform_key, "freeform_input", "Type reply", show=True),
+            Binding(message_key, "queue_message", "Message", show=True),
+            Binding(voice_key, "voice_input", "Voice", show=True),
+            Binding(settings_key, "toggle_settings", "Settings", show=True),
+            Binding(replay_key, "replay_prompt", "Replay", show=False),
+            Binding(replay_all_key, "replay_prompt_full", "Replay all", show=False),
+            Binding(next_tab_key, "next_tab", "Next tab", show=False),
+            Binding(prev_tab_key, "prev_tab", "Prev tab", show=False),
+            Binding(next_choices_key, "next_choices_tab", "Next choices", show=False),
+            Binding(reload_key, "hot_reload", "Reload", show=False),
+        ] + [Binding(str(i), f"pick_{i}", "", show=False) for i in range(1, 10)]
+        if quit_key:
+            self._bindings.append(Binding(quit_key, "quit", "Quit", show=False))
+
         super().__init__(**kwargs)
         self._tts = tts
         self._freeform_tts = freeform_tts or tts

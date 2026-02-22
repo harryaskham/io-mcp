@@ -110,6 +110,22 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "session": {
             "cleanupTimeoutSeconds": 300,
         },
+        "keyBindings": {
+            "cursorDown": "j",
+            "cursorUp": "k",
+            "select": "enter",
+            "voiceInput": "space",
+            "freeformInput": "i",
+            "queueMessage": "m",
+            "settings": "s",
+            "replayPrompt": "p",
+            "replayAll": "P",
+            "nextTab": "l",
+            "prevTab": "h",
+            "nextChoicesTab": "n",
+            "hotReload": "r",
+            "quit": "q",
+        },
     },
     "emotionPresets": {
         "happy": "Speak in a warm, cheerful, and upbeat tone. Sound genuinely pleased and positive.",
@@ -450,6 +466,14 @@ class IoMcpConfig:
             .get("session", {})
             .get("cleanupTimeoutSeconds", 300)
         )
+
+    @property
+    def key_bindings(self) -> dict[str, str]:
+        """User-configurable key bindings. Returns action→key mapping."""
+        defaults = DEFAULT_CONFIG.get("config", {}).get("keyBindings", {})
+        user = self.expanded.get("config", {}).get("keyBindings", {})
+        merged = {**defaults, **user}
+        return merged
 
     # ─── Config mutation ────────────────────────────────────────────
 
