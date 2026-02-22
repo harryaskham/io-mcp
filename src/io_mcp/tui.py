@@ -32,14 +32,14 @@ from .tts import PORTAUDIO_LIB, TTSEngine, _find_binary
 
 # ─── Extra options (negative indices) ──────────────────────────────────────
 EXTRA_OPTIONS = [
-    {"label": "Record response", "summary": "Speak your reply (voice input)"},
     {"label": "Previous tab", "summary": "Switch to the previous session tab"},
     {"label": "Next tab", "summary": "Switch to the next session tab"},
     {"label": "Fast toggle", "summary": "Toggle speed between current and 1.8x"},
     {"label": "Voice toggle", "summary": "Quick-switch between voices"},
     {"label": "Settings", "summary": "Open settings menu"},
+    {"label": "Record response", "summary": "Speak your reply (voice input)"},
 ]
-# Display order (top to bottom): -5=Record, -4=Prev tab, -3=Next tab, -2=Fast, -1=Voice, 0=Settings
+# Display order (top to bottom): -5=Prev tab, -4=Next tab, -3=Fast, -2=Voice, -1=Settings, 0=Record
 # Logical index to array: ei = len(EXTRA_OPTIONS) - 1 + logical_index
 # Reached by scrolling up past the first real option
 
@@ -429,12 +429,14 @@ class IoMcpApp(App):
             self._tts.speak(full_intro)
 
             session.intro_speaking = False
-            session.reading_options = True
-            for i, text in enumerate(numbered_full_all):
-                if not session.reading_options or not session.active:
-                    break
-                self._tts.speak(text)
-            session.reading_options = False
+            # Only read options if intro wasn't interrupted by scrolling
+            if session.active and not session.selection:
+                session.reading_options = True
+                for i, text in enumerate(numbered_full_all):
+                    if not session.reading_options or not session.active:
+                        break
+                    self._tts.speak(text)
+                session.reading_options = False
             self._fg_speaking = False
 
             # If user hasn't scrolled, read current highlight
@@ -1226,10 +1228,11 @@ class IoMcpApp(App):
 
         if not session or not session.active:
             return
-        if session.intro_speaking:
-            return
 
-        # If we're reading options sequentially and user scrolled, interrupt
+        # If intro or options are being read and user scrolled, interrupt
+        if session.intro_speaking:
+            session.intro_speaking = False
+            self._tts.stop()
         if session.reading_options:
             session.reading_options = False
             self._tts.stop()
