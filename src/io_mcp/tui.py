@@ -1023,38 +1023,64 @@ class IoMcpApp(App):
             env["LD_LIBRARY_PATH"] = PORTAUDIO_LIB
 
             try:
-                # Convert recorded audio to PCM16 24kHz mono, pipe to stt
+                # Convert recorded audio to WAV for direct API upload
                 ffmpeg_bin = _find_binary("ffmpeg")
                 if not ffmpeg_bin:
                     self._tts.speak_async("ffmpeg not found")
                     self.call_from_thread(self._restore_choices)
                     return
 
-                ffmpeg_proc = subprocess.Popen(
+                # Convert to WAV (for direct API upload, not piped through VAD)
+                import tempfile
+                wav_file = os.path.join(tempfile.gettempdir(), "io-mcp-stt.wav")
+                ffmpeg_result = subprocess.run(
                     [ffmpeg_bin, "-y", "-i", rec_file,
-                     "-f", "s16le", "-ar", "24000", "-ac", "1", "-"],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.DEVNULL,
+                     "-ar", "24000", "-ac", "1", wav_file],
+                    capture_output=True, timeout=30,
                 )
+                if ffmpeg_result.returncode != 0:
+                    self._tts.speak_async("Audio conversion failed")
+                    self.call_from_thread(self._restore_choices)
+                    return
 
-                # Build stt command from config (explicit flags)
-                if self._config:
-                    stt_args = [stt_bin] + self._config.stt_cli_args()
-                else:
-                    stt_args = [stt_bin, "--stdin"]
+                # Try direct API transcription first (faster, no VAD chunking)
+                transcript = ""
+                stderr_text = ""
+                if self._config and self._config.stt_api_key:
+                    transcript = self._transcribe_via_api(wav_file)
 
-                stt_proc = subprocess.Popen(
-                    stt_args,
-                    stdin=ffmpeg_proc.stdout,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    env=env,
-                )
-                ffmpeg_proc.stdout.close()
+                # Fallback to stt CLI if API call failed
+                if not transcript:
+                    ffmpeg_proc = subprocess.Popen(
+                        [ffmpeg_bin, "-y", "-i", rec_file,
+                         "-f", "s16le", "-ar", "24000", "-ac", "1", "-"],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.DEVNULL,
+                    )
 
-                stdout, stderr = stt_proc.communicate(timeout=120)
-                transcript = stdout.decode("utf-8", errors="replace").strip()
-                stderr_text = stderr.decode("utf-8", errors="replace").strip() if stderr else ""
+                    # Build stt command from config (explicit flags)
+                    if self._config:
+                        stt_args = [stt_bin] + self._config.stt_cli_args()
+                    else:
+                        stt_args = [stt_bin, "--stdin"]
+
+                    stt_proc = subprocess.Popen(
+                        stt_args,
+                        stdin=ffmpeg_proc.stdout,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        env=env,
+                    )
+                    ffmpeg_proc.stdout.close()
+                    stdout, stderr = stt_proc.communicate(timeout=120)
+                    transcript = stdout.decode("utf-8", errors="replace").strip()
+                    stderr_text = stderr.decode("utf-8", errors="replace").strip() if stderr else ""
+
+                # Clean up WAV
+                try:
+                    os.unlink(wav_file)
+                except Exception:
+                    pass
             except Exception as e:
                 transcript = ""
                 stderr_text = str(e)
@@ -1097,6 +1123,76 @@ class IoMcpApp(App):
         if self._dwell_time > 0:
             self.query_one("#dwell-bar").display = True
             self._start_dwell()
+
+    def _transcribe_via_api(self, wav_path: str) -> str:
+        """Send a WAV file directly to the transcription API.
+
+        Bypasses the stt tool's VAD pipeline — sends the entire recording
+        as a single API request for faster, more reliable transcription
+        of pre-recorded audio.
+
+        Returns the transcript text, or empty string on failure.
+        """
+        import urllib.request
+        import uuid
+
+        if not self._config:
+            return ""
+
+        model = self._config.stt_model_name
+        api_key = self._config.stt_api_key
+        base_url = self._config.stt_base_url
+
+        if not api_key:
+            return ""
+
+        # mai-ears-1 uses a different API endpoint (chat completions)
+        # Fall back to stt CLI for that model
+        if model == "mai-ears-1":
+            return ""
+
+        try:
+            with open(wav_path, "rb") as f:
+                wav_data = f.read()
+
+            # Build multipart/form-data
+            boundary = uuid.uuid4().hex
+            body = (
+                (
+                    f"--{boundary}\r\n"
+                    f'Content-Disposition: form-data; name="file"; filename="audio.wav"\r\n'
+                    f"Content-Type: audio/wav\r\n\r\n"
+                ).encode()
+                + wav_data
+                + (
+                    f"\r\n--{boundary}\r\n"
+                    f'Content-Disposition: form-data; name="model"\r\n\r\n'
+                    f"{model}\r\n"
+                    f"--{boundary}\r\n"
+                    f'Content-Disposition: form-data; name="response_format"\r\n\r\n'
+                    f"json\r\n"
+                    f"--{boundary}--\r\n"
+                ).encode()
+            )
+
+            url = f"{base_url.rstrip('/')}/v1/audio/transcriptions"
+            req = urllib.request.Request(
+                url,
+                data=body,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": f"multipart/form-data; boundary={boundary}",
+                },
+                method="POST",
+            )
+
+            import json as json_mod
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                result = json_mod.loads(resp.read())
+                return result.get("text", "").strip()
+
+        except Exception:
+            return ""
 
     # ─── Settings menu ────────────────────────────────────────────
 
