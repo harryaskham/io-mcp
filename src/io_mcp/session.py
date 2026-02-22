@@ -231,7 +231,8 @@ class SessionManager:
                 if session.active:
                     continue
                 # Check if stale
-                if now - session.last_activity > timeout_seconds:
+                activity = getattr(session, 'last_activity', now)
+                if now - activity > timeout_seconds:
                     to_remove.append(sid)
 
         # Remove outside the lock (remove() acquires its own lock)

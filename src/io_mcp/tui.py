@@ -323,7 +323,12 @@ class IoMcpApp(App):
         # Start periodic session cleanup (every 60 seconds, 5 min timeout)
         self._cleanup_timer = self.set_interval(60, self._cleanup_stale_sessions)
 
-    def _cleanup_stale_sessions(self) -> None:
+    def _touch_session(self, session: Session) -> None:
+        """Update last_activity, safe for old Session objects without the field."""
+        try:
+            session.last_activity = time.time()
+        except AttributeError:
+            pass
         """Remove sessions that have been inactive for 5+ minutes.
 
         Only removes non-focused sessions without active choices.
@@ -376,7 +381,7 @@ class IoMcpApp(App):
         Each session has its own selection_event so multiple sessions
         can block independently.
         """
-        session.touch()
+        self._touch_session(session)
         session.preamble = preamble
         session.choices = list(choices)
         session.selection = None
@@ -585,7 +590,7 @@ class IoMcpApp(App):
         Background: queued, played when foreground is idle.
         Always logs to session's speech_log.
         """
-        session.touch()
+        self._touch_session(session)
         # Log the speech
         entry = SpeechEntry(text=text)
         session.speech_log.append(entry)
