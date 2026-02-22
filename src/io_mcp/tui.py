@@ -332,6 +332,8 @@ class IoMcpApp(App):
 
         # Start periodic session cleanup (every 60 seconds, 5 min timeout)
         self._cleanup_timer = self.set_interval(60, self._cleanup_stale_sessions)
+        # Heartbeat: check every 15s if agent has been silent too long
+        self._heartbeat_timer = self.set_interval(15, self._check_heartbeat)
 
     def _touch_session(self, session: Session) -> None:
         """Update last_activity, safe for old Session objects without the field."""
@@ -354,6 +356,31 @@ class IoMcpApp(App):
         removed = self.manager.cleanup_stale(timeout_seconds=timeout)
         if removed:
             self._update_tab_bar()
+
+    def _check_heartbeat(self) -> None:
+        """Speak a heartbeat if the agent has been silent for 30+ seconds.
+
+        Only speaks for the focused session, and only once per silence period.
+        Resets when the agent makes its next MCP tool call.
+        """
+        import time as _time
+        session = self._focused()
+        if not session:
+            return
+        # Only heartbeat for connected sessions (has had at least one tool call)
+        last_call = getattr(session, 'last_tool_call', 0)
+        if last_call == 0:
+            return
+        # Don't heartbeat during active choices (agent is waiting for user)
+        if session.active:
+            return
+        # Don't heartbeat if already spoken
+        if getattr(session, 'heartbeat_spoken', False):
+            return
+        elapsed = _time.time() - last_call
+        if elapsed >= 30:
+            session.heartbeat_spoken = True
+            self._tts.speak_async("Agent is still working...")
 
     # ─── Tab bar rendering ─────────────────────────────────────────
 

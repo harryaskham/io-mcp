@@ -158,6 +158,7 @@ def create_mcp_server(
             return response + msg_text
 
     def _safe_get_session(ctx: Context):
+        import time as _time
         session_id = _get_session_id(ctx)
         session, created = frontend.manager.get_or_create(session_id)
         if created:
@@ -165,6 +166,9 @@ def create_mcp_server(
                 frontend.on_session_created(session)
             except Exception:
                 pass
+        # Track tool call time for heartbeat
+        session.last_tool_call = _time.time()
+        session.heartbeat_spoken = False
         return session
 
     def _safe_tool(fn):

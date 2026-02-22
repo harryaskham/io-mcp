@@ -67,6 +67,8 @@ class Session:
 
     # ── Activity tracking (for auto-cleanup) ──────────────────────
     last_activity: float = field(default_factory=time.time)
+    last_tool_call: float = field(default_factory=time.time)
+    heartbeat_spoken: bool = False
 
     # ── Selection history ─────────────────────────────────────────
     history: list[HistoryEntry] = field(default_factory=list)
