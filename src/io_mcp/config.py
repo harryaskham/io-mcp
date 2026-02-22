@@ -211,7 +211,61 @@ class IoMcpConfig:
                 print(f"WARNING: Failed to load local config from {local_path}: {e}", flush=True)
 
         expanded = _expand_config(raw)
-        return cls(raw=raw, expanded=expanded, config_path=path)
+        cfg = cls(raw=raw, expanded=expanded, config_path=path)
+        cfg._validate()
+        return cfg
+
+    def _validate(self) -> None:
+        """Validate config structure and report warnings for issues."""
+        warnings: list[str] = []
+
+        # Check required top-level keys
+        for key in ("providers", "models", "config"):
+            if key not in self.raw:
+                warnings.append(f"Missing top-level key '{key}' — using defaults")
+
+        # Check TTS model exists in models
+        tts_model = self.runtime.get("tts", {}).get("model", "")
+        tts_models = self.raw.get("models", {}).get("tts", {})
+        if tts_model and tts_model not in tts_models:
+            warnings.append(f"TTS model '{tts_model}' not found in models.tts — available: {list(tts_models.keys())}")
+
+        # Check STT model exists in models
+        stt_model = self.runtime.get("stt", {}).get("model", "")
+        stt_models = self.raw.get("models", {}).get("stt", {})
+        if stt_model and stt_model not in stt_models:
+            warnings.append(f"STT model '{stt_model}' not found in models.stt — available: {list(stt_models.keys())}")
+
+        # Check TTS voice is valid for current model
+        tts_voice = self.runtime.get("tts", {}).get("voice", "")
+        if tts_model and tts_model in tts_models:
+            model_def = tts_models[tts_model]
+            voice_options = model_def.get("voice", {}).get("options", [])
+            if voice_options and tts_voice and tts_voice not in voice_options:
+                warnings.append(f"TTS voice '{tts_voice}' not in options for {tts_model}: {voice_options}")
+
+        # Check providers referenced by models exist
+        for category in ("tts", "stt"):
+            for name, model_def in self.raw.get("models", {}).get(category, {}).items():
+                provider = model_def.get("provider", "")
+                if provider and provider not in self.raw.get("providers", {}):
+                    warnings.append(f"Model '{name}' references provider '{provider}' which is not defined")
+
+        # Check emotion preset exists
+        emotion = self.runtime.get("tts", {}).get("emotion", "")
+        presets = self.raw.get("emotionPresets", {})
+        if emotion and presets and emotion not in presets:
+            # Not an error — could be a custom instruction string
+            pass
+
+        # Check speed is in valid range
+        speed = self.runtime.get("tts", {}).get("speed", 1.0)
+        if not isinstance(speed, (int, float)) or speed < 0.1 or speed > 5.0:
+            warnings.append(f"TTS speed {speed} is out of range (0.1-5.0)")
+
+        # Report warnings
+        for w in warnings:
+            print(f"  Config WARNING: {w}", flush=True)
 
     def save(self) -> None:
         """Write the raw config back to disk."""
