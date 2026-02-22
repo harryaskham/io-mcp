@@ -98,10 +98,12 @@ def _get_session_id(ctx: Context) -> str:
     return str(id(session))
 
 
-def _run_mcp_server(app: IoMcpApp, host: str, port: int, append_options: list[str] | None = None) -> None:
+def _run_mcp_server(app: IoMcpApp, host: str, port: int,
+                    append_options: list[str] | None = None,
+                    append_silent_options: list[str] | None = None) -> None:
     """Run the MCP streamable-http server in a background thread."""
     try:
-        _run_mcp_server_inner(app, host, port, append_options)
+        _run_mcp_server_inner(app, host, port, append_options, append_silent_options)
     except Exception:
         import traceback
         crash = traceback.format_exc()
@@ -111,7 +113,9 @@ def _run_mcp_server(app: IoMcpApp, host: str, port: int, append_options: list[st
         log.error("MCP server thread crashed — see /tmp/io-mcp-crash.log")
 
 
-def _run_mcp_server_inner(app: IoMcpApp, host: str, port: int, append_options: list[str] | None = None) -> None:
+def _run_mcp_server_inner(app: IoMcpApp, host: str, port: int,
+                          append_options: list[str] | None = None,
+                          append_silent_options: list[str] | None = None) -> None:
     """Inner implementation of MCP server startup."""
 
     with open("/tmp/io-mcp-server.log", "w") as f:
@@ -120,6 +124,17 @@ def _run_mcp_server_inner(app: IoMcpApp, host: str, port: int, append_options: l
 
     server = FastMCP("io-mcp", host=host, port=port)
     _append = append_options or []
+    _append_silent = append_silent_options or []
+
+    # Build config-based extra options
+    _config_extras: list[dict] = []
+    if app._config:
+        for opt in app._config.extra_options:
+            _config_extras.append({
+                "label": opt.get("title", ""),
+                "summary": opt.get("description", ""),
+                "_silent": opt.get("silent", False),
+            })
 
     @server.tool()
     async def present_choices(
@@ -168,6 +183,20 @@ def _run_mcp_server_inner(app: IoMcpApp, host: str, port: int, append_options: l
             # Don't duplicate if Claude already included it
             if not any(c.get("label", "").lower() == title.lower() for c in all_choices):
                 all_choices.append({"label": title, "summary": desc})
+
+        # Append silent options from --append-silent-option flags
+        for opt in _append_silent:
+            if "::" in opt:
+                title, desc = opt.split("::", 1)
+            else:
+                title, desc = opt, ""
+            if not any(c.get("label", "").lower() == title.lower() for c in all_choices):
+                all_choices.append({"label": title, "summary": desc, "_silent": True})
+
+        # Append config-based extra options
+        for opt in _config_extras:
+            if not any(c.get("label", "").lower() == opt["label"].lower() for c in all_choices):
+                all_choices.append(dict(opt))
 
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
@@ -288,6 +317,11 @@ def main() -> None:
         help="Always append this option to every choice list (repeatable)"
     )
     parser.add_argument(
+        "--append-silent-option", action="append", default=[], metavar="LABEL",
+        help="Append option that is NOT read aloud during intro (repeatable). "
+        "Format: 'title' or 'title::description'"
+    )
+    parser.add_argument(
         "--demo", action="store_true",
         help="Demo mode: show test choices immediately, no MCP server"
     )
@@ -392,7 +426,7 @@ def main() -> None:
         # Start MCP streamable-http server in background thread
         mcp_thread = threading.Thread(
             target=_run_mcp_server,
-            args=(app, args.host, args.port, args.append_option),
+            args=(app, args.host, args.port, args.append_option, args.append_silent_option),
             daemon=True,
         )
         mcp_thread.start()

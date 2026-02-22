@@ -344,6 +344,9 @@ class IoMcpApp(App):
         self._setting_edit_index: int = 0
         self._setting_edit_key: str = ""
 
+        # Settings state (app-level, not per-session)
+        self._in_settings = False
+
         # Dwell timer
         self._dwell_timer: Optional[Timer] = None
         self._dwell_start: float = 0.0
@@ -439,17 +442,18 @@ class IoMcpApp(App):
         session.extras_count = len(EXTRA_OPTIONS)
         session.all_items = list(EXTRA_OPTIONS) + session.choices
 
-        # Build TTS texts
-        numbered_labels = [
-            f"{i+1}. {c.get('label', '')}" for i, c in enumerate(choices)
-        ]
+        # Build TTS texts (skip silent options in intro readout)
+        numbered_labels = []
         numbered_full_all = []
         for i, c in enumerate(choices):
+            is_silent = c.get('_silent', False)
+            label_text = f"{i+1}. {c.get('label', '')}"
             s = c.get('summary', '')
-            if s:
-                numbered_full_all.append(f"{i+1}. {c.get('label', '')}. {s}")
-            else:
-                numbered_full_all.append(f"{i+1}. {c.get('label', '')}")
+            full_text = f"{i+1}. {c.get('label', '')}. {s}" if s else label_text
+
+            if not is_silent:
+                numbered_labels.append(label_text)
+            numbered_full_all.append(full_text)
 
         titles_readout = " ".join(numbered_labels)
         full_intro = f"{preamble} Your options are: {titles_readout}"
@@ -486,6 +490,9 @@ class IoMcpApp(App):
                 for i, text in enumerate(numbered_full_all):
                     if not session.reading_options or not session.active:
                         break
+                    # Skip silent options in the readout
+                    if i < len(choices) and choices[i].get('_silent', False):
+                        continue
                     self._tts.speak(text)
                 session.reading_options = False
             self._fg_speaking = False
@@ -1095,8 +1102,7 @@ class IoMcpApp(App):
 
     def action_toggle_settings(self) -> None:
         """Toggle settings menu. Always available regardless of agent connection."""
-        session = self._focused()
-        if session and session.in_settings:
+        if self._in_settings:
             self._exit_settings()
             return
         self._enter_settings()
@@ -1107,6 +1113,7 @@ class IoMcpApp(App):
         if session:
             session.in_settings = True
             session.reading_options = False
+        self._in_settings = True
         self._setting_edit_mode = False
 
         self._settings_items = [
@@ -1143,6 +1150,7 @@ class IoMcpApp(App):
         session = self._focused()
         if session:
             session.in_settings = False
+        self._in_settings = False
         self._setting_edit_mode = False
 
         # UI first, then TTS
@@ -1282,7 +1290,7 @@ class IoMcpApp(App):
             return
 
         # In settings mode
-        if session and session.in_settings:
+        if self._in_settings:
             if isinstance(event.item, ChoiceItem):
                 s = self._settings_items[event.item.display_index] if event.item.display_index < len(self._settings_items) else None
                 if s:
@@ -1328,7 +1336,7 @@ class IoMcpApp(App):
         if self._setting_edit_mode:
             self._apply_setting_edit()
             return
-        if session and session.in_settings:
+        if self._in_settings:
             if isinstance(event.item, ChoiceItem):
                 idx = event.item.display_index
                 if idx < len(self._settings_items):
@@ -1368,7 +1376,7 @@ class IoMcpApp(App):
 
     def on_mouse_scroll_down(self, event: MouseScrollDown) -> None:
         session = self._focused()
-        if session and (session.active or session.in_settings or self._setting_edit_mode) and self._scroll_allowed():
+        if (self._in_settings or self._setting_edit_mode or (session and session.active)) and self._scroll_allowed():
             list_view = self.query_one("#choices", ListView)
             if list_view.display:
                 if self._invert_scroll:
@@ -1380,7 +1388,7 @@ class IoMcpApp(App):
 
     def on_mouse_scroll_up(self, event: MouseScrollUp) -> None:
         session = self._focused()
-        if session and (session.active or session.in_settings or self._setting_edit_mode) and self._scroll_allowed():
+        if (self._in_settings or self._setting_edit_mode or (session and session.active)) and self._scroll_allowed():
             list_view = self.query_one("#choices", ListView)
             if list_view.display:
                 if self._invert_scroll:
@@ -1399,7 +1407,7 @@ class IoMcpApp(App):
         if session and session.voice_recording:
             self._stop_voice_recording()
             return
-        if session and session.in_settings:
+        if self._in_settings:
             list_view = self.query_one("#choices", ListView)
             idx = list_view.index or 0
             if idx < len(self._settings_items):
@@ -1528,11 +1536,15 @@ class IoMcpApp(App):
             self._exit_settings()
             event.prevent_default()
             event.stop()
+        elif self._in_settings and event.key == "escape":
+            self._exit_settings()
+            event.prevent_default()
+            event.stop()
 
     def _pick_by_number(self, n: int) -> None:
         """Immediately select option by 1-based number."""
         session = self._focused()
-        if not session or not session.active or session.input_mode or session.voice_recording or session.in_settings:
+        if not session or not session.active or session.input_mode or session.voice_recording or self._in_settings:
             return
         display_idx = session.extras_count + n - 1
         list_view = self.query_one("#choices", ListView)

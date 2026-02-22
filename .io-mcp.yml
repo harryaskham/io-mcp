@@ -1,0 +1,34 @@
+# Project-local io-mcp config — merged with ~/.config/io-mcp/config.yml
+# These options appear at the end of every choice list (silent = not read during intro)
+
+extraOptions:
+  - title: Commit and push
+    description: Stage all changes, commit with a descriptive message, and push to the remote
+    silent: true
+  - title: Summarize session
+    description: Summarize all changes made in this coding session
+    silent: true
+  - title: Build and release
+    description: Build the project and deploy/release it (push APK for mobile, nix build for CLI)
+    silent: true
+  - title: Branch and PR
+    description: Commit changes to a new branch and create a pull request
+    silent: true
+  - title: Merge last PR
+    description: Merge the most recently created pull request
+    silent: true
+  - title: Add tests
+    description: Write tests for recent changes and ensure all old and new tests pass
+    silent: true
+  - title: Propose next work
+    description: Analyze the codebase and suggest the next most impactful thing to work on
+    silent: true
+  - title: Cosmos monorepo
+    description: Navigate to ~/cosmos and show options based on open beads, plus propose new ones
+    silent: true
+  - title: Mono monorepo
+    description: Navigate to ~/mono and show options based on open beads, plus propose new ones
+    silent: true
+  - title: Collective monorepo
+    description: Navigate to ~/collective and show options based on open beads, plus propose new ones
+    silent: true

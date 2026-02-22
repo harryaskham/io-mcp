@@ -1,6 +1,9 @@
 """Configuration system for io-mcp.
 
 Reads/writes config from $HOME/.config/io-mcp/config.yml (or --config-file).
+Also merges with a local .io-mcp.yml if found in the current directory
+(local takes precedence over global config).
+
 Config strings can include shell variables like ${OPENAI_API_KEY} which are
 expanded at load time.
 
@@ -8,6 +11,7 @@ The config defines:
   - providers: named API endpoints with baseUrl and apiKey
   - models: stt, tts, and realtime model definitions with provider associations
   - config: runtime settings (selected models, voice, speed, etc.)
+  - extraOptions: options appended to every choice list (with optional silent flag)
 """
 
 from __future__ import annotations
@@ -152,7 +156,11 @@ class IoMcpConfig:
 
     @classmethod
     def load(cls, config_path: Optional[str] = None) -> "IoMcpConfig":
-        """Load config from file, creating with defaults if not found."""
+        """Load config from file, creating with defaults if not found.
+
+        Also merges with a local .io-mcp.yml if found in the current directory.
+        Local config takes precedence over the global config.
+        """
         path = config_path or DEFAULT_CONFIG_FILE
         raw = copy.deepcopy(DEFAULT_CONFIG)
 
@@ -173,6 +181,18 @@ class IoMcpConfig:
                 print(f"  Config: created {path}", flush=True)
             except Exception as e:
                 print(f"WARNING: Failed to write default config to {path}: {e}", flush=True)
+
+        # Merge local .io-mcp.yml (cwd takes precedence)
+        local_path = os.path.join(os.getcwd(), ".io-mcp.yml")
+        if os.path.isfile(local_path):
+            try:
+                with open(local_path, "r") as f:
+                    local_config = yaml.safe_load(f)
+                if local_config and isinstance(local_config, dict):
+                    raw = _deep_merge(raw, local_config)
+                    print(f"  Config: merged local {local_path}", flush=True)
+            except Exception as e:
+                print(f"WARNING: Failed to load local config from {local_path}: {e}", flush=True)
 
         expanded = _expand_config(raw)
         return cls(raw=raw, expanded=expanded, config_path=path)
@@ -307,6 +327,18 @@ class IoMcpConfig:
     @property
     def realtime_api_key(self) -> str:
         return self.realtime_provider.get("apiKey", "")
+
+    # ─── Extra options ────────────────────────────────────────────
+
+    @property
+    def extra_options(self) -> list[dict[str, Any]]:
+        """Get extra options from config.
+
+        Each option has: title, description, silent (bool).
+        Non-silent options are read aloud in the intro.
+        Silent options are only read when scrolled to.
+        """
+        return self.expanded.get("extraOptions", [])
 
     # ─── Config mutation ────────────────────────────────────────────
 
