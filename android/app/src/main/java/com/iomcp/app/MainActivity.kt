@@ -1,7 +1,6 @@
 package com.iomcp.app
 
 import android.os.Bundle
-import android.speech.tts.TextToSpeech
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -9,6 +8,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -16,6 +17,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.*
@@ -25,56 +27,35 @@ import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
-import java.util.Locale
 
 private const val TAG = "IoMcpApp"
 private const val API_BASE = "http://localhost:8445"
 
-class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
-    private var tts: TextToSpeech? = null
-    private var ttsReady = false
-
+/**
+ * Stateless frontend for io-mcp.
+ *
+ * This app mirrors the TUI state — it shows choices, accepts selections,
+ * and forwards actions to the Python server. All TTS is handled by the TUI
+ * running in Termux. The Android app provides:
+ * - Visual display of choices and session state
+ * - Touch-based selection with haptic feedback
+ * - Freeform text input for messages/replies
+ * - No TTS (avoids duplicate audio with TUI)
+ */
+class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        tts = TextToSpeech(this, this)
-
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
-                IoMcpScreen(
-                    onSpeak = { text -> speak(text) },
-                    onStopSpeaking = { tts?.stop() },
-                )
+                IoMcpScreen()
             }
         }
-    }
-
-    override fun onInit(status: Int) {
-        if (status == TextToSpeech.SUCCESS) {
-            tts?.language = Locale.US
-            tts?.setSpeechRate(1.3f)
-            ttsReady = true
-            Log.i(TAG, "TTS initialized")
-        }
-    }
-
-    private fun speak(text: String) {
-        if (ttsReady) {
-            tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "io-mcp")
-        }
-    }
-
-    override fun onDestroy() {
-        tts?.shutdown()
-        super.onDestroy()
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun IoMcpScreen(
-    onSpeak: (String) -> Unit,
-    onStopSpeaking: () -> Unit,
-) {
+fun IoMcpScreen() {
     val scope = rememberCoroutineScope()
     val haptic = LocalHapticFeedback.current
 
@@ -86,6 +67,8 @@ fun IoMcpScreen(
     var sessionId by remember { mutableStateOf("") }
     var statusText by remember { mutableStateOf("Connecting to io-mcp...") }
     var sessions by remember { mutableStateOf<List<SessionInfo>>(emptyList()) }
+    var messageText by remember { mutableStateOf("") }
+    var speechLog by remember { mutableStateOf<List<String>>(emptyList()) }
 
     // SSE connection
     LaunchedEffect(Unit) {
@@ -101,10 +84,16 @@ fun IoMcpScreen(
                     choices = c
                     selectedIndex = 0
                     statusText = ""
-                    onSpeak(p)
                 },
                 onSpeechRequested = { _, text, _, _ ->
-                    onSpeak(text)
+                    // Add to speech log (visual only — TUI handles audio)
+                    speechLog = (speechLog + text).takeLast(5)
+                },
+                onSelectionMade = { _, label, _ ->
+                    // Clear choices when selection is made (from TUI)
+                    choices = emptyList()
+                    preamble = ""
+                    statusText = "Selected: $label — waiting..."
                 },
                 onDisconnected = {
                     connected = false
@@ -158,12 +147,35 @@ fun IoMcpScreen(
                     selectedTabIndex = sessions.indexOfFirst { it.id == sessionId }.coerceAtLeast(0),
                     modifier = Modifier.padding(bottom = 8.dp),
                 ) {
-                    sessions.forEachIndexed { index, session ->
+                    sessions.forEachIndexed { _, session ->
                         Tab(
                             selected = session.id == sessionId,
                             onClick = { sessionId = session.id },
                             text = { Text(session.name) },
                         )
+                    }
+                }
+            }
+
+            // Speech log (last 5 TTS messages, visual only)
+            if (speechLog.isNotEmpty() && choices.isEmpty()) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    ),
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        speechLog.forEach { text ->
+                            Text(
+                                text = "💬 $text",
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(vertical = 2.dp),
+                            )
+                        }
                     }
                 }
             }
@@ -193,10 +205,8 @@ fun IoMcpScreen(
                             onClick = {
                                 selectedIndex = index
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                onStopSpeaking()
-                                onSpeak("Selected: ${choice.label}")
 
-                                // Send selection to server
+                                // Send selection to server (TUI handles TTS)
                                 scope.launch(Dispatchers.IO) {
                                     sendSelection(sessionId, choice.label, choice.summary)
                                     withContext(Dispatchers.Main) {
@@ -206,21 +216,13 @@ fun IoMcpScreen(
                                     }
                                 }
                             },
-                            onFocus = {
-                                if (index != selectedIndex) {
-                                    selectedIndex = index
-                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                    onStopSpeaking()
-                                    onSpeak("${index + 1}. ${choice.label}. ${choice.summary}")
-                                }
-                            },
                         )
                     }
                 }
             } else if (statusText.isEmpty()) {
                 // Waiting state
                 Box(
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier.weight(1f),
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
@@ -228,6 +230,52 @@ fun IoMcpScreen(
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                }
+            } else {
+                Spacer(modifier = Modifier.weight(1f))
+            }
+
+            // Message input (always visible at bottom)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                OutlinedTextField(
+                    value = messageText,
+                    onValueChange = { messageText = it },
+                    placeholder = { Text("Message for agent...") },
+                    modifier = Modifier.weight(1f),
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(
+                        onSend = {
+                            if (messageText.isNotBlank() && sessionId.isNotEmpty()) {
+                                val msg = messageText
+                                messageText = ""
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                scope.launch(Dispatchers.IO) {
+                                    sendMessage(sessionId, msg)
+                                }
+                            }
+                        },
+                    ),
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Button(
+                    onClick = {
+                        if (messageText.isNotBlank() && sessionId.isNotEmpty()) {
+                            val msg = messageText
+                            messageText = ""
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            scope.launch(Dispatchers.IO) {
+                                sendMessage(sessionId, msg)
+                            }
+                        }
+                    },
+                ) {
+                    Text("Send")
                 }
             }
         }
@@ -241,7 +289,6 @@ fun ChoiceCard(
     index: Int,
     isSelected: Boolean,
     onClick: () -> Unit,
-    onFocus: () -> Unit,
 ) {
     Card(
         onClick = onClick,
@@ -284,6 +331,7 @@ suspend fun connectToSSE(
     onConnected: () -> Unit,
     onChoicesPresented: (sessionId: String, preamble: String, choices: List<Choice>) -> Unit,
     onSpeechRequested: (sessionId: String, text: String, blocking: Boolean, priority: Int) -> Unit,
+    onSelectionMade: (sessionId: String, label: String, summary: String) -> Unit,
     onDisconnected: () -> Unit,
 ) {
     while (true) {
@@ -292,10 +340,10 @@ suspend fun connectToSSE(
             val connection = url.openConnection() as HttpURLConnection
             connection.setRequestProperty("Accept", "text/event-stream")
             connection.connectTimeout = 5000
-            connection.readTimeout = 0 // no timeout for SSE
+            connection.readTimeout = 0
 
             val reader = BufferedReader(InputStreamReader(connection.inputStream))
-            onConnected()
+            withContext(Dispatchers.Main) { onConnected() }
 
             var eventType = ""
             val dataBuilder = StringBuilder()
@@ -311,7 +359,6 @@ suspend fun connectToSSE(
                         dataBuilder.append(line.removePrefix("data: "))
                     }
                     line.isEmpty() && dataBuilder.isNotEmpty() -> {
-                        // Process complete event
                         try {
                             val data = JSONObject(dataBuilder.toString())
                             val sid = data.optString("session_id", "")
@@ -341,6 +388,13 @@ suspend fun connectToSSE(
                                         onSpeechRequested(sid, text, blocking, priority)
                                     }
                                 }
+                                "selection_made" -> {
+                                    val label = payload.optString("label", "")
+                                    val summary = payload.optString("summary", "")
+                                    withContext(Dispatchers.Main) {
+                                        onSelectionMade(sid, label, summary)
+                                    }
+                                }
                             }
                         } catch (e: Exception) {
                             Log.w(TAG, "Failed to parse SSE event: ${e.message}")
@@ -354,10 +408,8 @@ suspend fun connectToSSE(
             Log.w(TAG, "SSE connection failed: ${e.message}")
         }
 
-        withContext(Dispatchers.Main) {
-            onDisconnected()
-        }
-        delay(3000) // Reconnect after 3 seconds
+        withContext(Dispatchers.Main) { onDisconnected() }
+        delay(3000)
     }
 }
 
@@ -374,9 +426,27 @@ suspend fun sendSelection(sessionId: String, label: String, summary: String) {
             put("summary", summary)
         }
         connection.outputStream.write(body.toString().toByteArray())
-        connection.responseCode // trigger the request
+        connection.responseCode
     } catch (e: Exception) {
         Log.e(TAG, "Failed to send selection: ${e.message}")
+    }
+}
+
+suspend fun sendMessage(sessionId: String, text: String) {
+    try {
+        val url = URL("$API_BASE/api/sessions/$sessionId/message")
+        val connection = url.openConnection() as HttpURLConnection
+        connection.requestMethod = "POST"
+        connection.setRequestProperty("Content-Type", "application/json")
+        connection.doOutput = true
+
+        val body = JSONObject().apply {
+            put("text", text)
+        }
+        connection.outputStream.write(body.toString().toByteArray())
+        connection.responseCode
+    } catch (e: Exception) {
+        Log.e(TAG, "Failed to send message: ${e.message}")
     }
 }
 
