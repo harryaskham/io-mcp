@@ -270,6 +270,112 @@ def _run_mcp_server_inner(app: IoMcpApp, host: str, port: int,
         preview = text[:100] + ("..." if len(text) > 100 else "")
         return f"Spoke: {preview}"
 
+    @server.tool()
+    async def set_speed(speed: float, ctx: Context) -> str:
+        """Set the TTS playback speed.
+
+        Parameters
+        ----------
+        speed:
+            Speed multiplier (0.5 to 2.5). Higher = faster speech.
+
+        Returns
+        -------
+        str
+            Confirmation of the new speed setting.
+        """
+        if app._config:
+            app._config.set_tts_speed(speed)
+            app._config.save()
+            app._tts.clear_cache()
+            return f"Speed set to {speed}"
+        return "No config available"
+
+    @server.tool()
+    async def set_voice(voice: str, ctx: Context) -> str:
+        """Set the TTS voice.
+
+        Parameters
+        ----------
+        voice:
+            Voice name. Available voices depend on the current TTS model.
+            For gpt-4o-mini-tts: alloy, ash, ballad, coral, echo, fable, onyx, nova, sage, shimmer, verse.
+            For mai-voice-1: en-US-Noa:MAI-Voice-1, en-US-Teo:MAI-Voice-1.
+
+        Returns
+        -------
+        str
+            Confirmation of the new voice setting.
+        """
+        if app._config:
+            app._config.set_tts_voice(voice)
+            app._config.save()
+            app._tts.clear_cache()
+            return f"Voice set to {voice}"
+        return "No config available"
+
+    @server.tool()
+    async def set_tts_model(model: str, ctx: Context) -> str:
+        """Set the TTS model. This also resets the voice to the new model's default.
+
+        Parameters
+        ----------
+        model:
+            Model name. Available: gpt-4o-mini-tts, mai-voice-1.
+
+        Returns
+        -------
+        str
+            Confirmation of the new model and voice.
+        """
+        if app._config:
+            app._config.set_tts_model(model)
+            app._config.save()
+            app._tts.clear_cache()
+            return f"TTS model set to {model}, voice reset to {app._config.tts_voice}"
+        return "No config available"
+
+    @server.tool()
+    async def set_stt_model(model: str, ctx: Context) -> str:
+        """Set the STT (speech-to-text) model.
+
+        Parameters
+        ----------
+        model:
+            Model name. Available: whisper, gpt-4o-mini-transcribe, mai-ears-1.
+
+        Returns
+        -------
+        str
+            Confirmation of the new STT model.
+        """
+        if app._config:
+            app._config.set_stt_model(model)
+            app._config.save()
+            return f"STT model set to {model}"
+        return "No config available"
+
+    @server.tool()
+    async def get_settings(ctx: Context) -> str:
+        """Get the current io-mcp settings.
+
+        Returns
+        -------
+        str
+            JSON string with current TTS model, voice, speed, and STT model.
+        """
+        if app._config:
+            return json.dumps({
+                "tts_model": app._config.tts_model_name,
+                "tts_voice": app._config.tts_voice,
+                "tts_speed": app._config.tts_speed,
+                "tts_voice_options": app._config.tts_voice_options,
+                "tts_models": app._config.tts_model_names,
+                "stt_model": app._config.stt_model_name,
+                "stt_models": app._config.stt_model_names,
+            })
+        return json.dumps({"error": "No config available"})
+
     # Run streamable-http server (blocks this thread)
     # Log to file since Textual captures stdout/stderr
     _log = logging.getLogger("uvicorn")
@@ -286,6 +392,46 @@ def _run_mcp_server_inner(app: IoMcpApp, host: str, port: int,
 
     with open("/tmp/io-mcp-server.log", "a") as f:
         f.write("server.run() returned (should not happen)\n")
+
+
+def _acquire_wake_lock() -> None:
+    """Acquire Android wake lock via termux-exec to prevent the device
+    from sleeping and killing the process. Only works on Nix-on-Droid.
+
+    For keeping the screen on, users should enable:
+      Settings → Developer options → Stay awake (while charging)
+    or use `termux-exec settings put system screen_off_timeout 2147483647`
+    """
+    import shutil
+    termux_exec = shutil.which("termux-exec")
+    if not termux_exec:
+        return
+    try:
+        import subprocess
+        subprocess.Popen(
+            [termux_exec, "termux-wake-lock"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        print("  Wake lock: acquired", flush=True)
+    except Exception:
+        pass
+
+
+def _release_wake_lock() -> None:
+    """Release Android wake lock."""
+    import shutil
+    termux_exec = shutil.which("termux-exec")
+    if not termux_exec:
+        return
+    try:
+        import subprocess
+        subprocess.run(
+            [termux_exec, "termux-wake-unlock"],
+            timeout=3, capture_output=True,
+        )
+    except Exception:
+        pass
 
 
 def main() -> None:
@@ -422,6 +568,10 @@ def main() -> None:
         # Write PID file so global hooks can detect io-mcp is running
         _write_pid_file()
         atexit.register(_remove_pid_file)
+
+        # Acquire wake lock on Android to prevent sleep
+        _acquire_wake_lock()
+        atexit.register(_release_wake_lock)
 
         # Start MCP streamable-http server in background thread
         mcp_thread = threading.Thread(
