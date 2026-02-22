@@ -264,6 +264,9 @@ class IoMcpApp(App):
         self._termux_vibrate = _find_binary("termux-vibrate")
         self._haptic_enabled = self._termux_vibrate is not None
 
+        # TTS deduplication — track last spoken text to avoid repeats
+        self._last_spoken_text: str = ""
+
     # ─── Helpers to get focused session ────────────────────────────
 
     def _focused(self) -> Optional[Session]:
@@ -404,6 +407,7 @@ class IoMcpApp(App):
         session.intro_speaking = True
         session.reading_options = False
         session.in_settings = False
+        self._last_spoken_text = ""  # Reset dedup for new choices
 
         # Emit event for remote frontends
         try:
@@ -470,9 +474,8 @@ class IoMcpApp(App):
                 session.reading_options = False
             self._fg_speaking = False
 
-            # If user hasn't scrolled, read current highlight
-            if session.active:
-                self._speak_current_highlight(session)
+            # Don't re-read the current highlight after intro — it was just read
+            # The user can scroll to trigger readout of individual items
 
             # Try playing any background queued speech
             self._try_play_background_queue()
@@ -1555,7 +1558,10 @@ class IoMcpApp(App):
                 else:
                     text = ""
             if text:
-                self._tts.speak_async(text)
+                # Deduplicate — don't repeat the same text twice in a row
+                if text != self._last_spoken_text:
+                    self._last_spoken_text = text
+                    self._tts.speak_async(text)
 
             if self._dwell_time > 0:
                 self._start_dwell()
