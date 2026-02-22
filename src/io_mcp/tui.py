@@ -965,14 +965,27 @@ class IoMcpApp(App):
             env["LD_LIBRARY_PATH"] = PORTAUDIO_LIB
 
             try:
-                # Use stt --file to transcribe the recording directly
-                # (avoids ffmpeg→stdin pipe issues with VAD timing)
+                # Convert recorded audio to PCM16 24kHz mono, pipe to stt
+                ffmpeg_bin = _find_binary("ffmpeg")
+                if not ffmpeg_bin:
+                    self._tts.speak_async("ffmpeg not found")
+                    self.call_from_thread(self._restore_choices)
+                    return
+
+                ffmpeg_proc = subprocess.Popen(
+                    [ffmpeg_bin, "-y", "-i", rec_file,
+                     "-f", "s16le", "-ar", "24000", "-ac", "1", "-"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                )
                 stt_proc = subprocess.Popen(
-                    [stt_bin, "--file", rec_file],
+                    [stt_bin, "--stdin"],
+                    stdin=ffmpeg_proc.stdout,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     env=env,
                 )
+                ffmpeg_proc.stdout.close()
 
                 stdout, stderr = stt_proc.communicate(timeout=120)
                 transcript = stdout.decode("utf-8", errors="replace").strip()
@@ -1315,6 +1328,10 @@ class IoMcpApp(App):
             self._apply_setting_edit()
             return
         session = self._focused()
+        # Enter stops voice recording (same as space)
+        if session and session.voice_recording:
+            self._stop_voice_recording()
+            return
         if session and session.in_settings:
             list_view = self.query_one("#choices", ListView)
             idx = list_view.index or 0
