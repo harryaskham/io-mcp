@@ -99,11 +99,22 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "model": "mai-voice-1",
             "voice": "en-US-Noa:MAI-Voice-1",
             "speed": 1.3,
+            "emotion": "happy",
         },
         "stt": {
             "model": "whisper",
             "realtime": False,
         },
+    },
+    "emotionPresets": {
+        "happy": "Speak in a warm, cheerful, and upbeat tone. Sound genuinely pleased and positive.",
+        "calm": "Speak in a soothing, relaxed, and measured tone. Be gentle and unhurried.",
+        "excited": "Speak with high energy and enthusiasm. Sound genuinely thrilled and animated.",
+        "serious": "Speak in a focused, professional, and matter-of-fact tone. Be clear and direct.",
+        "friendly": "Speak in a warm, conversational, and approachable tone. Like talking to a good friend.",
+        "neutral": "Speak in a natural, even tone without strong emotion.",
+        "storyteller": "Speak like a captivating narrator. Vary pace and emphasis for dramatic effect.",
+        "gentle": "Speak softly and kindly, as if comforting someone. Warm and tender.",
     },
 }
 
@@ -260,6 +271,25 @@ class IoMcpConfig:
         return float(self.runtime.get("tts", {}).get("speed", 1.0))
 
     @property
+    def tts_emotion(self) -> str:
+        return self.runtime.get("tts", {}).get("emotion", "neutral")
+
+    @property
+    def tts_instructions(self) -> str:
+        """Get the TTS instructions text for the current emotion preset."""
+        emotion = self.tts_emotion
+        presets = self.expanded.get("emotionPresets", {})
+        # If the emotion matches a preset, use its text
+        if emotion in presets:
+            return presets[emotion]
+        # Otherwise treat the emotion value itself as custom instructions
+        return emotion
+
+    @property
+    def emotion_preset_names(self) -> list[str]:
+        return list(self.expanded.get("emotionPresets", {}).keys())
+
+    @property
     def tts_voice_options(self) -> list[str]:
         voice_def = self.tts_model_def.get("voice", {})
         return voice_def.get("options", [])
@@ -363,6 +393,11 @@ class IoMcpConfig:
         self.raw.setdefault("config", {}).setdefault("tts", {})["speed"] = speed
         self.expanded = _expand_config(self.raw)
 
+    def set_tts_emotion(self, emotion: str) -> None:
+        """Set the TTS emotion preset (or custom instructions)."""
+        self.raw.setdefault("config", {}).setdefault("tts", {})["emotion"] = emotion
+        self.expanded = _expand_config(self.raw)
+
     def set_stt_model(self, model_name: str) -> None:
         """Set the STT model."""
         self.raw.setdefault("config", {}).setdefault("stt", {})["model"] = model_name
@@ -396,6 +431,12 @@ class IoMcpConfig:
             args.extend(["--voice", self.tts_voice])
 
         args.extend(["--speed", str(self.tts_speed)])
+
+        # Add emotion/instructions
+        instructions = self.tts_instructions
+        if instructions:
+            args.extend(["--instructions", instructions])
+
         args.extend(["--stdout", "--response-format", "wav"])
         return args
 

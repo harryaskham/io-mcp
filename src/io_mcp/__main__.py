@@ -336,6 +336,33 @@ def _run_mcp_server_inner(app: IoMcpApp, host: str, port: int,
         return "No config available"
 
     @server.tool()
+    async def set_emotion(emotion: str, ctx: Context) -> str:
+        """Set the TTS emotion/voice style.
+
+        Uses emotion presets that map to voice instructions. The emotion
+        affects how the TTS voice sounds — its tone, energy, and warmth.
+
+        Parameters
+        ----------
+        emotion:
+            Preset name or custom instruction text.
+            Presets: happy, calm, excited, serious, friendly, neutral, storyteller, gentle.
+            Or pass any custom instruction string for the voice style.
+
+        Returns
+        -------
+        str
+            Confirmation of the new emotion setting.
+        """
+        if app._config:
+            app._config.set_tts_emotion(emotion)
+            app._config.save()
+            app._tts.clear_cache()
+            instructions = app._config.tts_instructions
+            return f"Emotion set to '{emotion}': {instructions[:80]}"
+        return "No config available"
+
+    @server.tool()
     async def set_stt_model(model: str, ctx: Context) -> str:
         """Set the STT (speech-to-text) model.
 
@@ -369,8 +396,10 @@ def _run_mcp_server_inner(app: IoMcpApp, host: str, port: int,
                 "tts_model": app._config.tts_model_name,
                 "tts_voice": app._config.tts_voice,
                 "tts_speed": app._config.tts_speed,
+                "tts_emotion": app._config.tts_emotion,
                 "tts_voice_options": app._config.tts_voice_options,
                 "tts_models": app._config.tts_model_names,
+                "emotion_presets": app._config.emotion_preset_names,
                 "stt_model": app._config.stt_model_name,
                 "stt_models": app._config.stt_model_names,
             })

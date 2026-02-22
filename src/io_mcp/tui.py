@@ -147,6 +147,23 @@ class Settings:
             self._config.set_stt_model(value)
             self._config.save()
 
+    @property
+    def emotion(self) -> str:
+        if self._config:
+            return self._config.tts_emotion
+        return "neutral"
+
+    @emotion.setter
+    def emotion(self, value: str) -> None:
+        if self._config:
+            self._config.set_tts_emotion(value)
+            self._config.save()
+
+    def get_emotions(self) -> list[str]:
+        if self._config:
+            return self._config.emotion_preset_names
+        return ["neutral"]
+
     def get_voices(self) -> list[str]:
         if self._config:
             return self._config.tts_voice_options
@@ -1217,6 +1234,8 @@ class IoMcpApp(App):
              "summary": f"Current: {self.settings.speed:.1f}"},
             {"label": "Voice", "key": "voice",
              "summary": f"Current: {self.settings.voice}"},
+            {"label": "Emotion", "key": "emotion",
+             "summary": f"Current: {self.settings.emotion}"},
             {"label": "TTS model", "key": "tts_model",
              "summary": f"Current: {self.settings.tts_model}"},
             {"label": "STT model", "key": "stt_model",
@@ -1288,6 +1307,14 @@ class IoMcpApp(App):
                 if current in self._setting_edit_values else 0
             )
 
+        elif key == "emotion":
+            self._setting_edit_values = self.settings.get_emotions()
+            current = self.settings.emotion
+            self._setting_edit_index = (
+                self._setting_edit_values.index(current)
+                if current in self._setting_edit_values else 0
+            )
+
         elif key == "stt_model":
             self._setting_edit_values = self.settings.get_stt_models()
             current = self.settings.stt_model
@@ -1332,6 +1359,8 @@ class IoMcpApp(App):
         elif key == "tts_model":
             self.settings.tts_model = value
             # Voice list may have changed — voice is reset to new model default
+        elif key == "emotion":
+            self.settings.emotion = value
         elif key == "stt_model":
             self.settings.stt_model = value
 

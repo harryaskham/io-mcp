@@ -107,6 +107,7 @@ class TTSEngine:
                 f"|model={self._config.tts_model_name}"
                 f"|voice={self._config.tts_voice}"
                 f"|speed={self._config.tts_speed}"
+                f"|emotion={self._config.tts_emotion}"
             )
         else:
             params = f"{text}|local={self._local}|speed={self._speed}"
