@@ -120,6 +120,14 @@ class IoMcpApp(App):
         width: 1fr;
     }
 
+    #agent-activity {
+        margin: 0 2;
+        height: 1;
+        color: $accent;
+        width: 1fr;
+        display: none;
+    }
+
     #speech-log {
         margin: 0 2;
         height: auto;
@@ -315,6 +323,7 @@ class IoMcpApp(App):
         yield Static("", id="tab-bar")
         status_text = "Ready — demo mode" if self._demo else "Waiting for agent..."
         yield Label(status_text, id="status")
+        yield Label("", id="agent-activity")
         yield Label("", id="preamble")
         yield Vertical(id="speech-log")
         yield ListView(id="choices")
@@ -397,14 +406,26 @@ class IoMcpApp(App):
     # ─── Speech log rendering ──────────────────────────────────────
 
     def _update_speech_log(self) -> None:
-        """Update the speech log display for the focused session."""
+        """Update the speech log display and agent activity indicator."""
         log_widget = self.query_one("#speech-log", Vertical)
         log_widget.remove_children()
+
+        activity = self.query_one("#agent-activity", Label)
 
         session = self._focused()
         if session is None:
             log_widget.display = False
+            activity.display = False
             return
+
+        # Update agent activity line (most recent speech, truncated)
+        if session.speech_log:
+            last = session.speech_log[-1].text
+            truncated = last[:80] + ("..." if len(last) > 80 else "")
+            activity.update(f"🔊 {truncated}")
+            activity.display = True
+        else:
+            activity.display = False
 
         # Show last 5 speech entries
         recent = session.speech_log[-5:]
