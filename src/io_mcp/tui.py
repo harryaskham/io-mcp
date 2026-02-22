@@ -882,13 +882,22 @@ class IoMcpApp(App):
     # ─── Voice input ──────────────────────────────────────────────
 
     def action_voice_input(self) -> None:
-        """Toggle voice recording mode."""
+        """Toggle voice recording mode.
+        Works both for choice selection and message queueing (when _message_mode is True).
+        """
         session = self._focused()
-        if not session or not session.active:
+        if not session:
+            return
+        # Allow voice input even when session is not active (for message queueing)
+        if not session.active and not self._message_mode:
             return
         if session.voice_recording:
             self._stop_voice_recording()
         else:
+            # Hide the freeform input if we're in message mode
+            if self._message_mode:
+                inp = self.query_one("#freeform-input", Input)
+                inp.styles.display = "none"
             self._start_voice_recording()
 
     def _start_voice_recording(self) -> None:
@@ -1089,18 +1098,29 @@ class IoMcpApp(App):
 
             if transcript:
                 self._tts.stop()
-                self._tts.speak_async(f"Got: {transcript}")
 
-                wrapped = (
-                    f"<transcription>\n{transcript}\n</transcription>\n"
-                    "Note: This is a speech-to-text transcription that may contain "
-                    "slight errors or similar-sounding words. Please interpret "
-                    "charitably. If completely uninterpretable, present the same "
-                    "options again and ask the user to retry."
-                )
-                session.selection = {"selected": wrapped, "summary": "(voice input)"}
-                session.selection_event.set()
-                self.call_from_thread(self._show_waiting, f"🎙 {transcript[:50]}")
+                # If in message queue mode, queue instead of selecting
+                if self._message_mode:
+                    self._message_mode = False
+                    msgs = getattr(session, 'pending_messages', None)
+                    if msgs is not None:
+                        msgs.append(transcript)
+                    count = len(msgs) if msgs else 1
+                    self._tts.speak_async(f"Message queued: {transcript[:50]}. {count} pending.")
+                    self.call_from_thread(self._restore_choices)
+                else:
+                    self._tts.speak_async(f"Got: {transcript}")
+
+                    wrapped = (
+                        f"<transcription>\n{transcript}\n</transcription>\n"
+                        "Note: This is a speech-to-text transcription that may contain "
+                        "slight errors or similar-sounding words. Please interpret "
+                        "charitably. If completely uninterpretable, present the same "
+                        "options again and ask the user to retry."
+                    )
+                    session.selection = {"selected": wrapped, "summary": "(voice input)"}
+                    session.selection_event.set()
+                    self.call_from_thread(self._show_waiting, f"🎙 {transcript[:50]}")
             else:
                 if stderr_text:
                     self._tts.speak_async(f"Recording failed: {stderr_text[:100]}")
@@ -1180,17 +1200,19 @@ class IoMcpApp(App):
                     self.call_from_thread(self._restore_choices)
                     return
 
-                # Read out notifications
+                # Read out notifications — batch into one TTS call for speed
                 count = len(interesting)
-                self._tts.speak(f"{count} notification{'s' if count != 1 else ''}")
+                parts = [f"{count} notification{'s' if count != 1 else ''}."]
 
-                for n in interesting[:10]:  # limit to 10
-                    text = f"{n['app']}: {n['title']}"
-                    if n['content'] and n['content'] != n['title']:
-                        text += f". {n['content']}"
-                    self._tts.speak(text)
+                for n in interesting[:5]:  # limit to 5
+                    title = n['title'][:60] if n['title'] else ""
+                    content = n['content'][:40] if n['content'] and n['content'] != n['title'] else ""
+                    text = f"{n['app']}: {title}"
+                    if content:
+                        text += f". {content}"
+                    parts.append(text)
 
-                self._tts.speak_async("End of notifications")
+                self._tts.speak(" ".join(parts))
                 self.call_from_thread(self._restore_choices)
 
             except Exception as e:
@@ -1642,7 +1664,9 @@ class IoMcpApp(App):
         self._tts.speak_async("Type your reply")
 
     def action_queue_message(self) -> None:
-        """Open text input to queue a message for the agent's next response."""
+        """Open text input to queue a message for the agent's next response.
+        Also supports voice input — press space to record a voice message.
+        """
         session = self._focused()
         if not session:
             return
@@ -1656,13 +1680,13 @@ class IoMcpApp(App):
         self.query_one("#choices").display = False
         self.query_one("#dwell-bar").display = False
         inp = self.query_one("#freeform-input", Input)
-        inp.placeholder = "Type a message to queue for the agent, press Enter to send"
+        inp.placeholder = "Type message (Enter to send) or press Space to record voice message"
         inp.value = ""
         inp.styles.display = "block"
         inp.focus()
 
         self._tts.stop()
-        self._tts.speak_async("Type a message for the agent")
+        self._tts.speak_async("Type or speak a message for the agent")
 
     @on(Input.Changed, "#freeform-input")
     def on_freeform_changed(self, event: Input.Changed) -> None:
