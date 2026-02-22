@@ -337,12 +337,28 @@ def main() -> None:
         _acquire_wake_lock()
         atexit.register(_release_wake_lock)
 
-        # Start MCP streamable-http server in background thread
-        mcp_thread = threading.Thread(
-            target=_run_mcp_server,
-            args=(app, args.host, args.port, args.append_option, args.append_silent_option),
-            daemon=True,
-        )
+        # Start MCP streamable-http server in background thread with watchdog
+        def _run_with_watchdog():
+            """Run the MCP server with auto-restart on crash."""
+            import time as _time
+            restart_count = 0
+            max_restarts = 5
+            while restart_count < max_restarts:
+                try:
+                    _run_mcp_server(app, args.host, args.port,
+                                   args.append_option, args.append_silent_option)
+                    break  # Normal exit
+                except Exception:
+                    restart_count += 1
+                    import traceback
+                    with open("/tmp/io-mcp-crash.log", "a") as f:
+                        f.write(f"\n--- Crash #{restart_count} ---\n")
+                        f.write(traceback.format_exc())
+                    backoff = min(2 ** restart_count, 30)
+                    print(f"  MCP server crashed (#{restart_count}), restarting in {backoff}s...", flush=True)
+                    _time.sleep(backoff)
+
+        mcp_thread = threading.Thread(target=_run_with_watchdog, daemon=True)
         mcp_thread.start()
 
         # Start frontend API server for remote clients (Android app, etc.)
