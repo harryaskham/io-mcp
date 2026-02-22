@@ -301,17 +301,38 @@ fun IoMcpScreen() {
                 Spacer(modifier = Modifier.weight(1f))
             }
 
-            // Message input (always visible at bottom)
+            // Bottom bar: message input + mic + send
+            var isRecording by remember { mutableStateOf(false) }
+
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                // Mic button (toggles voice recording via TUI)
+                IconButton(
+                    onClick = {
+                        if (sessionId.isNotEmpty()) {
+                            isRecording = !isRecording
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            scope.launch(Dispatchers.IO) { sendKey(sessionId, "space") }
+                        }
+                    },
+                    colors = IconButtonDefaults.iconButtonColors(
+                        containerColor = if (isRecording)
+                            MaterialTheme.colorScheme.error
+                        else
+                            MaterialTheme.colorScheme.secondaryContainer,
+                    ),
+                ) {
+                    Text(if (isRecording) "⏹" else "🎤", fontSize = 20.sp)
+                }
+                Spacer(modifier = Modifier.width(8.dp))
                 OutlinedTextField(
                     value = messageText,
                     onValueChange = { messageText = it },
-                    placeholder = { Text("Message for agent...") },
+                    placeholder = { Text("Message...") },
                     modifier = Modifier.weight(1f),
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
