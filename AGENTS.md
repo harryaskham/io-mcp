@@ -262,6 +262,16 @@ uv run pytest tests/ # Run tests (56 tests)
 
 ## Important Notes for Agents
 
+### NEVER Stop Without Presenting Choices
+
+**Every single response MUST end with a `present_choices()` call.** The user interacts entirely through the scroll wheel and choices — if you stop without presenting choices, the app becomes unresponsive and the user is stuck. There are NO exceptions to this rule.
+
+- After completing a task → present choices for what to do next
+- After an error → present choices: retry, skip, investigate, etc.
+- After answering a question → present choices for follow-up actions
+- When you have nothing to do → present choices: "Keep building", "Review changes", "Something else"
+- **NEVER** end your turn with just `speak()` or text output — always follow with `present_choices()`
+
 ### Speech is Critical — Never Go Silent
 
 **ALWAYS narrate what you're doing via `speak_async()`.** The user is listening through earphones and cannot see the screen. Long silences feel broken. Follow these rules:
