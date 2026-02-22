@@ -25,16 +25,18 @@ MCP server providing hands-free Claude Code interaction via scroll wheel (smart 
 ```
 
 - **Main thread**: Textual TUI — tabbed sessions, scroll/keyboard navigation, choice display
-- **Background thread**: MCP SSE server on port 8444 via FastMCP + uvicorn
-- **Three MCP tools**: `speak(text)` (blocking), `speak_async(text)` (non-blocking), and `present_choices(preamble, choices)`
-- **Multi-session**: Each SSE client gets its own session tab with independent choices, selection events, and speech inbox
-- **TTS pipeline**: `tts` CLI (gpt-4o-mini-tts) or `espeak-ng` → WAV → `paplay` via PulseAudio TCP bridge
+- **Background thread**: MCP streamable-http server on port 8444 via FastMCP + uvicorn
+- **MCP tools**: `speak`, `speak_async`, `present_choices`, plus settings tools (`set_speed`, `set_voice`, `set_tts_model`, `set_stt_model`, `set_emotion`, `get_settings`, `reload_config`, `pull_latest`)
+- **Multi-session**: Each client gets its own session tab with independent choices, selection events, speech inbox, and optional voice/emotion overrides
+- **TTS pipeline**: `tts` CLI → WAV → `paplay` via PulseAudio TCP bridge. Configured via `config.yml`
+- **Config system**: `~/.config/io-mcp/config.yml` merged with local `.io-mcp.yml`. Defines providers, models, voices, emotions, and extra options
 
 ## Source Layout
 
 ```
 src/io_mcp/
-├── __main__.py   # CLI entry point, MCP server setup, arg parsing
+├── __main__.py   # CLI entry point, MCP server + tools, arg parsing
+├── config.py     # IoMcpConfig: YAML config loading, env expansion, CLI arg generation
 ├── session.py    # Session/SpeechEntry dataclasses, SessionManager
 ├── tui.py        # Textual app: tabbed sessions, choices, settings, voice, extras
 └── tts.py        # TTSEngine: pregeneration, caching, blocking/async playback
@@ -42,83 +44,133 @@ src/io_mcp/
 
 ### Key modules
 
-- **`__main__.py`**: Parses CLI flags, creates TTSEngine instances (main + freeform), instantiates IoMcpApp, starts MCP server thread (or demo loop). Manages PID file at `/tmp/io-mcp.pid`. Uses `Context` injection from FastMCP to route tool calls to per-session state.
+- **`config.py`**: Configuration system backed by YAML files:
+  - Loads `~/.config/io-mcp/config.yml` (global) merged with `.io-mcp.yml` (local/project)
+  - Shell variable expansion: `${VAR}` and `${VAR:-default}` in config strings
+  - Defines providers (baseUrl, apiKey), models (TTS, STT, realtime), emotion presets
+  - Generates CLI args for `tts` and `stt` tools with explicit flags
+  - Supports per-session voice/emotion rotation for multi-agent setups
+  - Config mutations auto-save to disk
+- **`__main__.py`**: Parses CLI flags, loads `IoMcpConfig`, creates TTSEngine instances, instantiates IoMcpApp, starts MCP server thread. Manages PID file and wake lock on Android.
+  - MCP tools: `present_choices`, `speak`, `speak_async`, `set_speed`, `set_voice`, `set_tts_model`, `set_stt_model`, `set_emotion`, `get_settings`, `reload_config`, `pull_latest`
 - **`session.py`**: Per-session state management:
-  - `Session`: Dataclass holding per-session choices, preamble, selection_event, speech_log, unplayed_speech, scroll position, and input mode flags.
-  - `SpeechEntry`: Timestamped speech text with played/unplayed tracking.
-  - `SessionManager`: Thread-safe manager with `get_or_create()`, `remove()`, `next_tab()`, `prev_tab()`, `next_with_choices()`, `focused()`, and `tab_bar_text()`.
+  - `Session`: Dataclass with choices, preamble, selection_event, speech_log, unplayed_speech, scroll position, input mode flags, and optional voice/emotion overrides for rotation
+  - `SessionManager`: Thread-safe manager with tab navigation and session lifecycle
 - **`tui.py`**: Textual `App` subclass with multiple modes:
-  - **Multi-session tabs**: Tab bar shows all sessions, `h`/`l` to navigate, `n` to jump to next tab with open choices. State swapped on tab switch — one set of widgets, many session states.
-  - **Speech priority**: Foreground tab speech plays immediately and interrupts background. Background speech queued in `session.unplayed_speech`, played when foreground is idle. Tab switch drains inbox then reads prompt+options.
-  - **Speech log**: `speak()` calls display text in the UI as well as playing audio. Last 5 entries shown.
-  - **Choice presentation**: `present_choices(session, preamble, choices)` blocking API. Reads preamble + titles, then all option descriptions sequentially. Scroll interrupts readout.
-  - **Extras (negative indices)**: Hidden options at indices 0, -1, -2, -3 reached by scrolling up past option 1: record response, fast toggle, voice toggle, settings.
-  - **Voice input** (`space`): Records via `stt` CLI, wraps transcription in `<transcription>` tags.
-  - **Settings menu** (`s`): Speed, voice, provider settings. Global (not per-session).
-  - **Prompt replay** (`p`/`P`): `p` replays preamble only, `P` replays preamble + all options.
-  - **Freeform input** (`i`): Type text response, TTS reads back on delimiter.
-  - Scroll debounce, dwell-to-select, 1-9 instant select, invert scroll.
-- **`tts.py`**: `TTSEngine` with two backends (`--local` for espeak-ng, default gpt-4o-mini-tts). Pregenerates all choice audio in parallel via `ThreadPoolExecutor`. `speak()` blocks, `speak_async()` doesn't. Cache at `/tmp/io-mcp-tts-cache/`.
+  - **Multi-session tabs**: Tab bar shows all sessions, `h`/`l` to navigate, `n` to jump to next tab with open choices
+  - **Speech priority**: Foreground tab plays immediately; background speech queued and played when idle
+  - **Choice presentation**: Blocking API. Reads preamble + titles, then descriptions. Scroll interrupts readout. Silent options (from config) are skipped in readout but shown in UI
+  - **Extras (negative indices)**: Hidden options above real choices: record response, fast toggle, voice toggle, settings, next/prev tab
+  - **Voice input** (`space`/`Enter` to stop): Records via `termux-microphone-record`, transcribes via direct API or `stt` CLI
+  - **Settings menu** (`s`): Speed, voice, emotion, TTS model, STT model. Works with or without agent connected
+  - **Hot reload** (`r`): Reimports modules, monkey-patches methods, reloads config from disk
+  - **Freeform input** (`i`): Type text response, TTS reads back on delimiter
+- **`tts.py`**: `TTSEngine` with two backends (`--local` for espeak-ng, default uses `tts` CLI configured via config). Supports per-session voice/emotion overrides. Pregenerates choice audio in parallel. Cache includes model/voice/speed/emotion in key.
 
-## Plugin / Agent Structure
+## Configuration
 
+### Config files
+
+- **Global**: `~/.config/io-mcp/config.yml` (created with defaults on first run)
+- **Local**: `.io-mcp.yml` in the current working directory (merged on top, local wins)
+- **CLI override**: `--config-file PATH`
+
+### Config structure
+
+```yaml
+providers:
+  openai:
+    baseUrl: ${OPENAI_BASE_URL:-https://api.openai.com}
+    apiKey: ${OPENAI_API_KEY}
+  azure-foundry:
+    baseUrl: ${AZURE_WCUS_ENDPOINT:-https://harryaskham-sandbox-ais-wcus.services.ai.azure.com}
+    apiKey: ${AZURE_WCUS_API_KEY}
+  azure-speech:
+    baseUrl: ${AZURE_SPEECH_ENDPOINT:-https://eastus.tts.speech.microsoft.com}
+    apiKey: ${AZURE_SPEECH_API_KEY}
+
+models:
+  stt:
+    whisper: { provider: openai, supportsRealtime: true }
+    gpt-4o-mini-transcribe: { provider: openai, supportsRealtime: true }
+    mai-ears-1: { provider: azure-foundry, supportsRealtime: false }
+  tts:
+    gpt-4o-mini-tts:
+      provider: openai
+      voice: { default: sage, options: [alloy, ash, ballad, coral, echo, fable, onyx, nova, sage, shimmer, verse] }
+    mai-voice-1:
+      provider: azure-speech
+      voice: { default: en-US-Noa:MAI-Voice-1, options: [en-US-Noa:MAI-Voice-1, en-US-Teo:MAI-Voice-1] }
+
+config:
+  tts:
+    model: mai-voice-1
+    voice: en-US-Noa:MAI-Voice-1
+    speed: 1.3
+    emotion: happy
+    voiceRotation: []       # cycle voices across agent tabs
+    emotionRotation: []     # cycle emotions across agent tabs
+  stt:
+    model: whisper
+    realtime: false
+
+emotionPresets:
+  happy: "Speak in a warm, cheerful, and upbeat tone."
+  calm: "Speak in a soothing, relaxed, and measured tone."
+  excited: "Speak with high energy and enthusiasm."
+  serious: "Speak in a focused, professional tone."
+  friendly: "Speak in a warm, conversational tone."
+  neutral: "Speak in a natural, even tone."
+  storyteller: "Speak like a captivating narrator."
+  gentle: "Speak softly and kindly."
+
+# Project-local options (typically in .io-mcp.yml)
+extraOptions:
+  - title: Commit and push
+    description: Stage, commit, and push changes
+    silent: true    # not read aloud in intro, only when scrolled to
 ```
-.claude/agents/io-mcp.md          # Agent definition (YAML frontmatter + system prompt)
-.claude/hooks/enforce-choices.sh   # Stop hook — blocks unless present_choices() was called
-.claude/hooks/nudge-speak.sh       # PreToolUse hook — reminds to speak() before tools
-.claude/skills/io-mcp/SKILL.md    # Skill definition loaded by /io-mcp command
-.claude-plugin/plugin.json         # Plugin metadata for marketplace discovery
-```
 
-Installed via `cosmos-plugins` marketplace at `~/cosmos/.claude-plugin/marketplace.json`.
-Invoked via `claude --agent io-mcp` or `/io-mcp` skill command.
+## MCP Tools
 
-## Runtime Dependencies
-
-- **paplay** (pulseaudio) — audio playback
-- **espeak-ng** — local/fast TTS fallback
-- **tts** CLI (from `~/mono/tools/tts`) — gpt-4o-mini-tts API wrapper (optional, falls back to espeak-ng)
-- **stt** CLI (from `~/mono/tools/stt`) — speech-to-text for voice input (optional)
-- **PulseAudio TCP bridge** — `PULSE_SERVER=127.0.0.1` connecting proot to native Termux PulseAudio
-
-## Building
-
-```bash
-# Dev shell (editable install + runtime deps)
-nix develop
-
-# Build package
-nix build
-
-# Run directly
-nix run
-
-# Or via uv (without Nix)
-uv run io-mcp
-```
+| Tool | Description |
+|------|-------------|
+| `present_choices(preamble, choices)` | Show scroll-wheel choices, block until selection |
+| `speak(text)` | Blocking TTS narration |
+| `speak_async(text)` | Non-blocking TTS narration |
+| `set_speed(speed)` | Change TTS speed (0.5-2.5) |
+| `set_voice(voice)` | Change TTS voice |
+| `set_tts_model(model)` | Switch TTS model (resets voice) |
+| `set_stt_model(model)` | Switch STT model |
+| `set_emotion(emotion)` | Set emotion preset or custom instructions |
+| `get_settings()` | Read current settings as JSON |
+| `reload_config()` | Re-read config from disk, clear TTS cache |
+| `pull_latest()` | Git pull --rebase + hot reload |
 
 ## CLI Flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--local` | off | Use espeak-ng instead of gpt-4o-mini-tts |
-| `--port` | 8444 | SSE server port |
-| `--host` | 0.0.0.0 | SSE server bind address |
+| `--local` | off | Use espeak-ng instead of API TTS |
+| `--port` | 8444 | Server port |
+| `--host` | 0.0.0.0 | Server bind address |
 | `--dwell` | 0 (off) | Auto-select after N seconds |
 | `--scroll-debounce` | 0.15 | Min seconds between scroll events |
-| `--append-option` | "More options" | Always append this choice (repeatable). Format: `title` or `title::description` |
-| `--demo` | off | Demo mode — test choices loop, no MCP server |
-| `--freeform-tts` | local | TTS backend for freeform typing readback (api\|local) |
-| `--freeform-tts-speed` | 1.6 | Speed multiplier for freeform TTS |
-| `--freeform-tts-delimiters` | " .,;:!?" | Chars that trigger typing readback |
-| `--invert` | off | Reverse scroll direction interpretation |
+| `--append-option` | "More options" | Always append this choice (repeatable) |
+| `--append-silent-option` | (none) | Append option not read aloud (repeatable) |
+| `--config-file` | ~/.config/io-mcp/config.yml | Config file path |
+| `--demo` | off | Demo mode — test choices loop |
+| `--freeform-tts` | local | TTS for typing readback (api\|local) |
+| `--freeform-tts-speed` | 1.6 | Speed for freeform readback |
+| `--freeform-tts-delimiters` | " .,;:!?" | Chars that trigger readback |
+| `--invert` | off | Reverse scroll direction |
 
 ## Keyboard Shortcuts
 
 | Key | Action |
 |-----|--------|
 | `j`/`k`/`↑`/`↓` | Navigate choices |
-| `Enter` | Select highlighted choice |
+| `Enter` | Select / stop recording |
 | `1`-`9` | Instant select by number |
 | `h` | Previous tab |
 | `l` | Next tab |
@@ -128,27 +180,39 @@ uv run io-mcp
 | `s` | Open/close settings menu |
 | `p` | Replay prompt |
 | `P` | Replay prompt + all options |
+| `r` | Hot reload (reimport modules + reload config) |
 | `Escape` | Cancel current mode |
 | `q` | Quit |
 
-## Environment Variables for TTS
+## Runtime Dependencies
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `TTS_SPEED` | 1.0 | TTS speed multiplier |
-| `TTS_PROVIDER` | openai | TTS provider: openai or azure-speech |
-| `OPENAI_TTS_VOICE` | sage | OpenAI TTS voice |
-| `AZURE_SPEECH_VOICE` | en-US-Noa:MAI-Voice-1 | Azure Speech voice |
-| `PULSE_SERVER` | 127.0.0.1 | PulseAudio server for audio playback |
+- **paplay** (pulseaudio) — audio playback
+- **espeak-ng** — local/fast TTS fallback
+- **tts** CLI (from `~/mono/tools/tts`) — API TTS wrapper (optional, falls back to espeak-ng)
+- **stt** CLI (from `~/mono/tools/stt`) — speech-to-text (optional, also has direct API path)
+- **ffmpeg** — audio format conversion for voice recording
+- **termux-exec** — runs commands in native Termux from proot (for mic access)
+- **PulseAudio TCP bridge** — `PULSE_SERVER=127.0.0.1` connecting proot to native Termux
+
+## Building
+
+```bash
+nix develop          # Dev shell
+nix build            # Build package
+nix run              # Run directly
+uv run io-mcp        # Via uv (without Nix)
+uv run pytest tests/ # Run tests (51 tests)
+```
 
 ## Important Notes for Agents
 
-- The hardcoded `PORTAUDIO_LIB` path in `tts.py` is specific to the Nix-on-Droid environment
-- The `TTS_TOOL_DIR` in `tts.py` points to `~/mono/tools/tts` — a private repo
-- PID file at `/tmp/io-mcp.pid` is used by hooks to detect if io-mcp is running
-- Each session has its own `threading.Event` for cross-thread sync between MCP server and Textual app
-- Session identity is derived from `id(ctx.session)` where `ctx: Context` is injected by FastMCP
-- Audio cache is shared at `/tmp/io-mcp-tts-cache/` — cleared on cleanup
-- Settings changes (speed, voice, provider) clear the TTS cache to regenerate with new params
-- Extra options (negative indices) are local-only and not sent back to the Claude instance
-- Speech priority: foreground tab interrupts background; background speech queued and played opportunistically
+- Config is at `~/.config/io-mcp/config.yml` — use `set_*` tools or `reload_config` to change settings
+- Local `.io-mcp.yml` in cwd is merged on top (for project-specific extra options)
+- TTS/STT tools are invoked with explicit CLI flags from config (not env vars)
+- Per-session voice/emotion rotation: set `voiceRotation`/`emotionRotation` lists in config
+- Silent extra options (`silent: true`) appear in the list but aren't read during intro
+- Wake lock is acquired on Android startup to prevent device sleep
+- Hot reload (`r`) reimports code modules AND reloads config from disk
+- Audio cache key includes model + voice + speed + emotion — changes take effect immediately
+- Session identity uses `mcp_session_id` from streamable-http transport
+- Settings menu works independently of agent connection state
