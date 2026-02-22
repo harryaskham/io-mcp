@@ -234,6 +234,7 @@ fun IoMcpScreen(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChoiceCard(
     choice: Choice,
