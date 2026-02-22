@@ -30,7 +30,13 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 private const val TAG = "IoMcpApp"
-private const val API_BASE = "http://localhost:8445"
+// Default API endpoint — override via intent extra "api_base" or SharedPreferences
+private const val DEFAULT_API_BASE = "http://localhost:8445"
+
+fun getApiBase(context: android.content.Context): String {
+    val prefs = context.getSharedPreferences("io_mcp", android.content.Context.MODE_PRIVATE)
+    return prefs.getString("api_base", DEFAULT_API_BASE) ?: DEFAULT_API_BASE
+}
 
 /**
  * Stateless frontend for io-mcp.
@@ -46,15 +52,17 @@ private const val API_BASE = "http://localhost:8445"
  * - No TTS (avoids duplicate audio with TUI)
  */
 class MainActivity : ComponentActivity() {
-    // Shared session ID for key events
     var currentSessionId: String = ""
+    private val currentApiBase: String get() = getApiBase(this)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
+            val apiBase = currentApiBase
             MaterialTheme(colorScheme = darkColorScheme()) {
                 IoMcpScreen(
                     onSessionIdChanged = { currentSessionId = it },
+                    apiBase = apiBase,
                 )
             }
         }
@@ -74,7 +82,7 @@ class MainActivity : ComponentActivity() {
 
         // Fire and forget — send key to TUI
         kotlinx.coroutines.GlobalScope.launch(Dispatchers.IO) {
-            sendKey(sid, key)
+            sendKey(currentApiBase, sid, key)
         }
         return true
     }
@@ -84,6 +92,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun IoMcpScreen(
     onSessionIdChanged: (String) -> Unit = {},
+    apiBase: String = DEFAULT_API_BASE,
 ) {
     val scope = rememberCoroutineScope()
     val haptic = LocalHapticFeedback.current
@@ -104,6 +113,7 @@ fun IoMcpScreen(
     LaunchedEffect(Unit) {
         scope.launch(Dispatchers.IO) {
             connectToSSE(
+                apiBase = apiBase,
                 onConnected = {
                     connected = true
                     statusText = "Connected"
@@ -128,6 +138,15 @@ fun IoMcpScreen(
                 onRecordingState = { _, recording ->
                     isRecording = recording
                 },
+                onSessionCreated = { sid, name ->
+                    sessions = sessions + SessionInfo(sid, name, false)
+                },
+                onSessionRemoved = { sid ->
+                    sessions = sessions.filter { it.id != sid }
+                    if (sessionId == sid) {
+                        sessionId = sessions.firstOrNull()?.id ?: ""
+                    }
+                },
                 onDisconnected = {
                     connected = false
                     statusText = "Disconnected. Reconnecting..."
@@ -141,7 +160,7 @@ fun IoMcpScreen(
         if (connected) {
             while (true) {
                 try {
-                    sessions = fetchSessions()
+                    sessions = fetchSessions(apiBase)
                     // Auto-set sessionId to first active session if not set
                     if (sessionId.isEmpty() && sessions.isNotEmpty()) {
                         val active = sessions.firstOrNull { it.active } ?: sessions.first()
@@ -257,7 +276,7 @@ fun IoMcpScreen(
                         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                         // Send highlight to TUI (1-based index)
                         launch(Dispatchers.IO) {
-                            sendHighlight(sessionId, centerIndex + 1)
+                            sendHighlight(apiBase, sessionId, centerIndex + 1)
                         }
                     }
                 }
@@ -277,7 +296,7 @@ fun IoMcpScreen(
 
                                 // Send selection to server (TUI handles TTS)
                                 scope.launch(Dispatchers.IO) {
-                                    sendSelection(sessionId, choice.label, choice.summary)
+                                    sendSelection(apiBase, sessionId, choice.label, choice.summary)
                                     withContext(Dispatchers.Main) {
                                         choices = emptyList()
                                         preamble = ""
@@ -316,7 +335,7 @@ fun IoMcpScreen(
                     onClick = {
                         if (sessionId.isNotEmpty()) {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            scope.launch(Dispatchers.IO) { sendKey(sessionId, "space") }
+                            scope.launch(Dispatchers.IO) { sendKey(apiBase, sessionId, "space") }
                         }
                     },
                     colors = IconButtonDefaults.iconButtonColors(
@@ -343,7 +362,7 @@ fun IoMcpScreen(
                                 messageText = ""
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                 scope.launch(Dispatchers.IO) {
-                                    sendMessage(sessionId, msg)
+                                    sendMessage(apiBase, sessionId, msg)
                                 }
                             }
                         },
@@ -357,7 +376,7 @@ fun IoMcpScreen(
                             messageText = ""
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             scope.launch(Dispatchers.IO) {
-                                sendMessage(sessionId, msg)
+                                sendMessage(apiBase, sessionId, msg)
                             }
                         }
                     },
@@ -415,16 +434,19 @@ data class SessionInfo(val id: String, val name: String, val active: Boolean)
 // ─── Network functions ────────────────────────────────────────────────
 
 suspend fun connectToSSE(
+    apiBase: String,
     onConnected: () -> Unit,
     onChoicesPresented: (sessionId: String, preamble: String, choices: List<Choice>) -> Unit,
     onSpeechRequested: (sessionId: String, text: String, blocking: Boolean, priority: Int) -> Unit,
     onSelectionMade: (sessionId: String, label: String, summary: String) -> Unit,
     onRecordingState: (sessionId: String, recording: Boolean) -> Unit,
+    onSessionCreated: (sessionId: String, name: String) -> Unit,
+    onSessionRemoved: (sessionId: String) -> Unit,
     onDisconnected: () -> Unit,
 ) {
     while (true) {
         try {
-            val url = URL("$API_BASE/api/events")
+            val url = URL("$apiBase/api/events")
             val connection = url.openConnection() as HttpURLConnection
             connection.setRequestProperty("Accept", "text/event-stream")
             connection.connectTimeout = 5000
@@ -489,6 +511,17 @@ suspend fun connectToSSE(
                                         onRecordingState(sid, recording)
                                     }
                                 }
+                                "session_created" -> {
+                                    val name = payload.optString("name", "Agent")
+                                    withContext(Dispatchers.Main) {
+                                        onSessionCreated(sid, name)
+                                    }
+                                }
+                                "session_removed" -> {
+                                    withContext(Dispatchers.Main) {
+                                        onSessionRemoved(sid)
+                                    }
+                                }
                             }
                         } catch (e: Exception) {
                             Log.w(TAG, "Failed to parse SSE event: ${e.message}")
@@ -507,9 +540,9 @@ suspend fun connectToSSE(
     }
 }
 
-suspend fun sendSelection(sessionId: String, label: String, summary: String) {
+suspend fun sendSelection(apiBase: String, sessionId: String, label: String, summary: String) {
     try {
-        val url = URL("$API_BASE/api/sessions/$sessionId/select")
+        val url = URL("$apiBase/api/sessions/$sessionId/select")
         val connection = url.openConnection() as HttpURLConnection
         connection.requestMethod = "POST"
         connection.setRequestProperty("Content-Type", "application/json")
@@ -526,9 +559,9 @@ suspend fun sendSelection(sessionId: String, label: String, summary: String) {
     }
 }
 
-suspend fun sendHighlight(sessionId: String, index: Int) {
+suspend fun sendHighlight(apiBase: String, sessionId: String, index: Int) {
     try {
-        val url = URL("$API_BASE/api/sessions/$sessionId/highlight")
+        val url = URL("$apiBase/api/sessions/$sessionId/highlight")
         val connection = url.openConnection() as HttpURLConnection
         connection.requestMethod = "POST"
         connection.setRequestProperty("Content-Type", "application/json")
@@ -544,10 +577,10 @@ suspend fun sendHighlight(sessionId: String, index: Int) {
     }
 }
 
-suspend fun sendKey(sessionId: String, key: String) {
+suspend fun sendKey(apiBase: String, sessionId: String, key: String) {
     if (sessionId.isEmpty()) return
     try {
-        val url = URL("$API_BASE/api/sessions/$sessionId/key")
+        val url = URL("$apiBase/api/sessions/$sessionId/key")
         val connection = url.openConnection() as HttpURLConnection
         connection.requestMethod = "POST"
         connection.setRequestProperty("Content-Type", "application/json")
@@ -563,9 +596,9 @@ suspend fun sendKey(sessionId: String, key: String) {
     }
 }
 
-suspend fun sendMessage(sessionId: String, text: String) {
+suspend fun sendMessage(apiBase: String, sessionId: String, text: String) {
     try {
-        val url = URL("$API_BASE/api/sessions/$sessionId/message")
+        val url = URL("$apiBase/api/sessions/$sessionId/message")
         val connection = url.openConnection() as HttpURLConnection
         connection.requestMethod = "POST"
         connection.setRequestProperty("Content-Type", "application/json")
@@ -581,8 +614,8 @@ suspend fun sendMessage(sessionId: String, text: String) {
     }
 }
 
-suspend fun fetchSessions(): List<SessionInfo> {
-    val url = URL("$API_BASE/api/sessions")
+suspend fun fetchSessions(apiBase: String): List<SessionInfo> {
+    val url = URL("$apiBase/api/sessions")
     val connection = url.openConnection() as HttpURLConnection
     connection.connectTimeout = 3000
 

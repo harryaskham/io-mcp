@@ -845,9 +845,22 @@ class IoMcpApp(App):
         except Exception:
             pass
 
+        # Emit for remote frontends
+        try:
+            frontend_api.emit_session_created(session.session_id, session.name)
+        except Exception:
+            pass
+
     def on_session_removed(self, session_id: str) -> None:
         """Called when a session is removed."""
         new_active = self.manager.remove(session_id)
+
+        # Emit for remote frontends
+        try:
+            frontend_api.emit_session_removed(session_id)
+        except Exception:
+            pass
+
         try:
             self.call_from_thread(self._update_tab_bar)
             if new_active is not None:
