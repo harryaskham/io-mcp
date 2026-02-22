@@ -332,14 +332,17 @@ class IoMcpApp(App):
             pass
 
     def _cleanup_stale_sessions(self) -> None:
-        """Remove sessions that have been inactive for 5+ minutes.
+        """Remove sessions that have been inactive past the configured timeout.
 
         Only removes non-focused sessions without active choices.
         Updates the tab bar if any sessions were removed.
         """
         if not hasattr(self.manager, 'cleanup_stale'):
             return
-        removed = self.manager.cleanup_stale(timeout_seconds=300.0)
+        timeout = 300.0
+        if self._config and hasattr(self._config, 'session_cleanup_timeout'):
+            timeout = self._config.session_cleanup_timeout
+        removed = self.manager.cleanup_stale(timeout_seconds=timeout)
         if removed:
             self._update_tab_bar()
 

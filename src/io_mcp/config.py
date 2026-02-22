@@ -107,6 +107,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "model": "whisper",
             "realtime": False,
         },
+        "session": {
+            "cleanupTimeoutSeconds": 300,
+        },
     },
     "emotionPresets": {
         "happy": "Speak in a warm, cheerful, and upbeat tone. Sound genuinely pleased and positive.",
@@ -381,6 +384,17 @@ class IoMcpConfig:
         Silent options are only read when scrolled to.
         """
         return self.expanded.get("extraOptions", [])
+
+    # ─── Session settings ──────────────────────────────────────────
+
+    @property
+    def session_cleanup_timeout(self) -> float:
+        """Seconds of inactivity before a non-focused session is auto-removed."""
+        return float(
+            self.expanded.get("config", {})
+            .get("session", {})
+            .get("cleanupTimeoutSeconds", 300)
+        )
 
     # ─── Config mutation ────────────────────────────────────────────
 
