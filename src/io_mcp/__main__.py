@@ -345,6 +345,23 @@ def main() -> None:
         )
         mcp_thread.start()
 
+        # Start frontend API server for remote clients (Android app, etc.)
+        try:
+            from .api import start_api_server
+
+            class _ApiFrontend:
+                @property
+                def manager(self):
+                    return app.manager
+                @property
+                def config(self):
+                    return app._config
+
+            api_port = args.port + 1  # 8445 by default
+            start_api_server(_ApiFrontend(), port=api_port, host=args.host)
+        except Exception as e:
+            print(f"  Frontend API: failed to start — {e}", flush=True)
+
     # Run textual app in main thread (needs signal handlers)
     app.run()
 
