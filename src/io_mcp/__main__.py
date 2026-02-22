@@ -271,6 +271,33 @@ def _run_mcp_server_inner(app: IoMcpApp, host: str, port: int,
         return f"Spoke: {preview}"
 
     @server.tool()
+    async def speak_urgent(text: str, ctx: Context) -> str:
+        """Speak text with high priority, interrupting any current playback.
+
+        Use this for important alerts or time-sensitive information that
+        the user needs to hear immediately, even if other speech is playing.
+
+        Parameters
+        ----------
+        text:
+            The urgent text to speak. Keep it concise.
+
+        Returns
+        -------
+        str
+            Confirmation message.
+        """
+        session_id = _get_session_id(ctx)
+        session, created = app.manager.get_or_create(session_id)
+        if created:
+            app.on_session_created(session)
+
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, app.session_speak, session, text, True, 1)
+        preview = text[:100] + ("..." if len(text) > 100 else "")
+        return f"Urgently spoke: {preview}"
+
+    @server.tool()
     async def set_speed(speed: float, ctx: Context) -> str:
         """Set the TTS playback speed.
 

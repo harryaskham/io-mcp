@@ -591,16 +591,18 @@ class IoMcpApp(App):
 
     # ─── Speech with priority ─────────────────────────────────────
 
-    def session_speak(self, session: Session, text: str, block: bool = True) -> None:
+    def session_speak(self, session: Session, text: str, block: bool = True,
+                      priority: int = 0) -> None:
         """Speak text for a session, respecting priority rules.
 
         Foreground: plays immediately, interrupts background.
         Background: queued, played when foreground is idle.
+        Priority 1 (urgent): always interrupts current playback.
         Always logs to session's speech_log.
         """
         self._touch_session(session)
         # Log the speech
-        entry = SpeechEntry(text=text)
+        entry = SpeechEntry(text=text, priority=priority)
         session.speech_log.append(entry)
 
         # Update speech log UI if this is the focused session
@@ -614,6 +616,11 @@ class IoMcpApp(App):
             # Foreground: play immediately
             voice_ov = getattr(session, 'voice_override', None)
             emotion_ov = getattr(session, 'emotion_override', None)
+
+            # Urgent messages always interrupt
+            if priority >= 1:
+                self._tts.stop()
+
             self._fg_speaking = True
             if block:
                 # Use streaming for blocking calls (lower latency)
@@ -624,9 +631,12 @@ class IoMcpApp(App):
                                      emotion_override=emotion_ov)
             self._fg_speaking = False
         else:
-            # Background: queue
+            # Background: queue (urgent goes to front)
             entry.played = False
-            session.unplayed_speech.append(entry)
+            if priority >= 1:
+                session.unplayed_speech.insert(0, entry)
+            else:
+                session.unplayed_speech.append(entry)
             self._try_play_background_queue()
 
     def session_speak_async(self, session: Session, text: str) -> None:

@@ -19,6 +19,7 @@ class SpeechEntry:
     text: str
     timestamp: float = field(default_factory=time.time)
     played: bool = False
+    priority: int = 0  # 0=normal, 1=urgent (interrupts current playback)
 
 
 @dataclass
