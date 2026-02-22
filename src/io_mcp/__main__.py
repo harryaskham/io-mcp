@@ -160,7 +160,42 @@ def _run_mcp_server_inner(app: IoMcpApp, host: str, port: int,
             msg_text = "\n\n[User messages queued while you were working:\n" + "\n".join(f"- {m}" for m in messages) + "\n]"
             return response + msg_text
 
+    def _safe_get_session(ctx: Context):
+        """Get or create session from context, with error handling."""
+        session_id = _get_session_id(ctx)
+        session, created = app.manager.get_or_create(session_id)
+        if created:
+            try:
+                app.on_session_created(session)
+            except Exception:
+                pass
+        return session
+
+    def _safe_tool(fn):
+        """Decorator to catch exceptions in MCP tool handlers.
+
+        Returns a JSON error response instead of crashing the server thread.
+        """
+        import functools
+        import traceback as tb
+
+        @functools.wraps(fn)
+        async def wrapper(*args, **kwargs):
+            try:
+                return await fn(*args, **kwargs)
+            except Exception as exc:
+                err_msg = f"{type(exc).__name__}: {str(exc)[:200]}"
+                log.error(f"Tool {fn.__name__} failed: {err_msg}")
+                try:
+                    with open("/tmp/io-mcp-tool-error.log", "a") as f:
+                        f.write(f"\n--- {fn.__name__} ---\n{tb.format_exc()}\n")
+                except Exception:
+                    pass
+                return json.dumps({"error": err_msg, "tool": fn.__name__})
+        return wrapper
+
     @server.tool()
+    @_safe_tool
     async def present_choices(
         preamble: str,
         choices: list[dict],
@@ -230,6 +265,7 @@ def _run_mcp_server_inner(app: IoMcpApp, host: str, port: int,
         return _attach_messages(json.dumps(result), session)
 
     @server.tool()
+    @_safe_tool
     async def speak(text: str, ctx: Context) -> str:
         """Speak text aloud via TTS through the user's earphones.
 
@@ -263,6 +299,7 @@ def _run_mcp_server_inner(app: IoMcpApp, host: str, port: int,
         return _attach_messages(f"Spoke: {preview}", session)
 
     @server.tool()
+    @_safe_tool
     async def speak_async(text: str, ctx: Context) -> str:
         """Speak text aloud via TTS WITHOUT blocking. Returns immediately.
 
@@ -295,6 +332,7 @@ def _run_mcp_server_inner(app: IoMcpApp, host: str, port: int,
         return _attach_messages(f"Spoke: {preview}", session)
 
     @server.tool()
+    @_safe_tool
     async def speak_urgent(text: str, ctx: Context) -> str:
         """Speak text with high priority, interrupting any current playback.
 
@@ -322,6 +360,7 @@ def _run_mcp_server_inner(app: IoMcpApp, host: str, port: int,
         return _attach_messages(f"Urgently spoke: {preview}", session)
 
     @server.tool()
+    @_safe_tool
     async def set_speed(speed: float, ctx: Context) -> str:
         """Set the TTS playback speed.
 
@@ -343,6 +382,7 @@ def _run_mcp_server_inner(app: IoMcpApp, host: str, port: int,
         return "No config available"
 
     @server.tool()
+    @_safe_tool
     async def set_voice(voice: str, ctx: Context) -> str:
         """Set the TTS voice.
 
@@ -366,6 +406,7 @@ def _run_mcp_server_inner(app: IoMcpApp, host: str, port: int,
         return "No config available"
 
     @server.tool()
+    @_safe_tool
     async def set_tts_model(model: str, ctx: Context) -> str:
         """Set the TTS model. This also resets the voice to the new model's default.
 
@@ -387,6 +428,7 @@ def _run_mcp_server_inner(app: IoMcpApp, host: str, port: int,
         return "No config available"
 
     @server.tool()
+    @_safe_tool
     async def set_emotion(emotion: str, ctx: Context) -> str:
         """Set the TTS emotion/voice style.
 
@@ -414,6 +456,7 @@ def _run_mcp_server_inner(app: IoMcpApp, host: str, port: int,
         return "No config available"
 
     @server.tool()
+    @_safe_tool
     async def set_stt_model(model: str, ctx: Context) -> str:
         """Set the STT (speech-to-text) model.
 
@@ -434,6 +477,7 @@ def _run_mcp_server_inner(app: IoMcpApp, host: str, port: int,
         return "No config available"
 
     @server.tool()
+    @_safe_tool
     async def get_settings(ctx: Context) -> str:
         """Get the current io-mcp settings.
 
@@ -457,6 +501,7 @@ def _run_mcp_server_inner(app: IoMcpApp, host: str, port: int,
         return json.dumps({"error": "No config available"})
 
     @server.tool()
+    @_safe_tool
     async def rename_session(name: str, ctx: Context) -> str:
         """Rename the current session tab.
 
@@ -485,6 +530,7 @@ def _run_mcp_server_inner(app: IoMcpApp, host: str, port: int,
         return f"Session renamed to: {name}"
 
     @server.tool()
+    @_safe_tool
     async def reload_config(ctx: Context) -> str:
         """Reload the io-mcp configuration from disk.
 
@@ -509,6 +555,7 @@ def _run_mcp_server_inner(app: IoMcpApp, host: str, port: int,
         return json.dumps({"error": "No config available"})
 
     @server.tool()
+    @_safe_tool
     async def pull_latest(ctx: Context) -> str:
         """Pull the latest changes from the remote git repository.
 
