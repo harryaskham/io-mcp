@@ -17,6 +17,36 @@ from mcp.server.fastmcp import FastMCP, Context
 log = logging.getLogger("io-mcp.server")
 
 
+class TTSBackend(Protocol):
+    """Protocol for TTS backends (terminal paplay, Android native, etc.).
+
+    Both the terminal-based TTSEngine and Android's TextToSpeech can
+    implement this interface for platform-independent speech.
+    """
+
+    def speak(self, text: str, voice_override: Optional[str] = None,
+              emotion_override: Optional[str] = None) -> None:
+        """Speak text and BLOCK until playback finishes."""
+        ...
+
+    def speak_async(self, text: str, voice_override: Optional[str] = None,
+                    emotion_override: Optional[str] = None) -> None:
+        """Speak text without blocking."""
+        ...
+
+    def stop(self) -> None:
+        """Kill any in-progress playback."""
+        ...
+
+    def clear_cache(self) -> None:
+        """Remove cached audio files (no-op for native TTS)."""
+        ...
+
+    def pregenerate(self, texts: list[str]) -> None:
+        """Pre-generate audio for texts (no-op for native TTS)."""
+        ...
+
+
 class Frontend(Protocol):
     """Protocol that frontends (TUI, Android, etc.) must implement.
 
