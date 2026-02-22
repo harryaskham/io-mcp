@@ -223,6 +223,9 @@ class FrontendAPIHandler(http.server.BaseHTTPRequestHandler):
         elif path.startswith("/api/sessions/") and path.endswith("/message"):
             session_id = path.split("/")[-2]
             self._handle_message(session_id, body)
+        elif path.startswith("/api/sessions/") and path.endswith("/highlight"):
+            session_id = path.split("/")[-2]
+            self._handle_highlight(session_id, body)
         else:
             self._send_json({"error": "not found"}, 404)
 
@@ -325,11 +328,45 @@ class FrontendAPIHandler(http.server.BaseHTTPRequestHandler):
             msgs.append(text)
         self._send_json({"status": "queued", "pending": len(msgs) if msgs else 0})
 
+    def _handle_highlight(self, session_id: str, body: dict) -> None:
+        """Handle a highlight/scroll event from a remote frontend.
 
-def start_api_server(frontend: Any, port: int = 8445, host: str = "0.0.0.0") -> threading.Thread:
+        Sets the TUI's ListView index to trigger TTS readout of the
+        highlighted choice. The index is 1-based (matching choice numbers).
+        """
+        frontend = getattr(self.server, 'frontend', None)
+        if not frontend:
+            self._send_json({"error": "no frontend"}, 500)
+            return
+        session = frontend.manager.get(session_id)
+        if not session or not session.active:
+            self._send_json({"error": "session not found or inactive"}, 404)
+            return
+
+        index = body.get("index", -1)  # 1-based choice index
+        if index < 1:
+            self._send_json({"error": "invalid index"}, 400)
+            return
+
+        # Call the highlight callback if registered
+        highlight_fn = getattr(self.server, '_highlight_callback', None)
+        if highlight_fn:
+            try:
+                highlight_fn(session_id, index)
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+                return
+
+        self._send_json({"status": "highlighted", "index": index})
+
+
+def start_api_server(frontend: Any, port: int = 8445, host: str = "0.0.0.0",
+                     highlight_callback: Any = None) -> threading.Thread:
     """Start the frontend API HTTP server in a background thread."""
     server = http.server.HTTPServer((host, port), FrontendAPIHandler)
     server.frontend = frontend  # type: ignore
+    if highlight_callback:
+        server._highlight_callback = highlight_callback  # type: ignore
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     print(f"  Frontend API: http://{host}:{port}/api/events (SSE)", flush=True)

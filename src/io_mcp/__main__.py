@@ -364,6 +364,7 @@ def main() -> None:
         # Start frontend API server for remote clients (Android app, etc.)
         try:
             from .api import start_api_server
+            from .tui import EXTRA_OPTIONS
 
             class _ApiFrontend:
                 @property
@@ -373,8 +374,33 @@ def main() -> None:
                 def config(self):
                     return app._config
 
+            def _on_highlight(session_id: str, choice_index: int):
+                """Handle highlight from Android app — update TUI ListView."""
+                session = app.manager.get(session_id)
+                if not session or not session.active:
+                    return
+                # Convert 1-based choice index to display index
+                # Display index = extras_count + (choice_index - 1)
+                extras = getattr(session, 'extras_count', len(EXTRA_OPTIONS))
+                display_idx = extras + (choice_index - 1)
+
+                def _set_highlight():
+                    try:
+                        from .tui import ListView
+                        list_view = app.query_one("#choices", ListView)
+                        if list_view.display and 0 <= display_idx < len(list_view.children):
+                            list_view.index = display_idx
+                    except Exception:
+                        pass
+
+                try:
+                    app.call_from_thread(_set_highlight)
+                except Exception:
+                    pass
+
             api_port = args.port + 1  # 8445 by default
-            start_api_server(_ApiFrontend(), port=api_port, host=args.host)
+            start_api_server(_ApiFrontend(), port=api_port, host=args.host,
+                           highlight_callback=_on_highlight)
         except Exception as e:
             print(f"  Frontend API: failed to start — {e}", flush=True)
 

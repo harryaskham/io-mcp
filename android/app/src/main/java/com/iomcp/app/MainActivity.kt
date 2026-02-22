@@ -193,6 +193,29 @@ fun IoMcpScreen() {
             if (choices.isNotEmpty()) {
                 val listState = rememberLazyListState()
 
+                // Send highlight events when scroll position changes
+                // This triggers TUI TTS readout for the centered item
+                val centerIndex by remember {
+                    derivedStateOf {
+                        val info = listState.layoutInfo
+                        val viewportCenter = (info.viewportStartOffset + info.viewportEndOffset) / 2
+                        info.visibleItemsInfo.minByOrNull {
+                            kotlin.math.abs((it.offset + it.size / 2) - viewportCenter)
+                        }?.index ?: 0
+                    }
+                }
+
+                LaunchedEffect(centerIndex) {
+                    if (sessionId.isNotEmpty() && centerIndex != selectedIndex) {
+                        selectedIndex = centerIndex
+                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        // Send highlight to TUI (1-based index)
+                        launch(Dispatchers.IO) {
+                            sendHighlight(sessionId, centerIndex + 1)
+                        }
+                    }
+                }
+
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.weight(1f),
@@ -429,6 +452,24 @@ suspend fun sendSelection(sessionId: String, label: String, summary: String) {
         connection.responseCode
     } catch (e: Exception) {
         Log.e(TAG, "Failed to send selection: ${e.message}")
+    }
+}
+
+suspend fun sendHighlight(sessionId: String, index: Int) {
+    try {
+        val url = URL("$API_BASE/api/sessions/$sessionId/highlight")
+        val connection = url.openConnection() as HttpURLConnection
+        connection.requestMethod = "POST"
+        connection.setRequestProperty("Content-Type", "application/json")
+        connection.doOutput = true
+
+        val body = JSONObject().apply {
+            put("index", index)
+        }
+        connection.outputStream.write(body.toString().toByteArray())
+        connection.responseCode
+    } catch (e: Exception) {
+        Log.e(TAG, "Failed to send highlight: ${e.message}")
     }
 }
 
