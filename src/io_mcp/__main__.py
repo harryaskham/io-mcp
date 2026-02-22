@@ -98,6 +98,7 @@ def _get_session_id(ctx: Context) -> str:
     return str(id(session))
 
 
+
 def _run_mcp_server(app: IoMcpApp, host: str, port: int,
                     append_options: list[str] | None = None,
                     append_silent_options: list[str] | None = None) -> None:
@@ -135,6 +136,29 @@ def _run_mcp_server_inner(app: IoMcpApp, host: str, port: int,
                 "summary": opt.get("description", ""),
                 "_silent": opt.get("silent", False),
             })
+
+    def _drain_messages(session) -> list[str]:
+        """Drain and return any queued user messages for a session."""
+        msgs = getattr(session, 'pending_messages', None)
+        if msgs is None:
+            return []
+        drained = list(msgs)
+        msgs.clear()
+        return drained
+
+    def _attach_messages(response: str, session) -> str:
+        """If there are queued user messages, attach them to the JSON response."""
+        messages = _drain_messages(session)
+        if not messages:
+            return response
+        try:
+            data = json.loads(response)
+            data["user_messages"] = messages
+            return json.dumps(data)
+        except (json.JSONDecodeError, TypeError):
+            # Non-JSON response, append as text
+            msg_text = "\n\n[User messages queued while you were working:\n" + "\n".join(f"- {m}" for m in messages) + "\n]"
+            return response + msg_text
 
     @server.tool()
     async def present_choices(
@@ -203,7 +227,7 @@ def _run_mcp_server_inner(app: IoMcpApp, host: str, port: int,
             None, app.present_choices, session, preamble, all_choices
         )
 
-        return json.dumps(result)
+        return _attach_messages(json.dumps(result), session)
 
     @server.tool()
     async def speak(text: str, ctx: Context) -> str:
@@ -236,7 +260,7 @@ def _run_mcp_server_inner(app: IoMcpApp, host: str, port: int,
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, app.session_speak, session, text, True)
         preview = text[:100] + ("..." if len(text) > 100 else "")
-        return f"Spoke: {preview}"
+        return _attach_messages(f"Spoke: {preview}", session)
 
     @server.tool()
     async def speak_async(text: str, ctx: Context) -> str:
@@ -268,7 +292,7 @@ def _run_mcp_server_inner(app: IoMcpApp, host: str, port: int,
 
         app.session_speak_async(session, text)
         preview = text[:100] + ("..." if len(text) > 100 else "")
-        return f"Spoke: {preview}"
+        return _attach_messages(f"Spoke: {preview}", session)
 
     @server.tool()
     async def speak_urgent(text: str, ctx: Context) -> str:
@@ -295,7 +319,7 @@ def _run_mcp_server_inner(app: IoMcpApp, host: str, port: int,
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, app.session_speak, session, text, True, 1)
         preview = text[:100] + ("..." if len(text) > 100 else "")
-        return f"Urgently spoke: {preview}"
+        return _attach_messages(f"Urgently spoke: {preview}", session)
 
     @server.tool()
     async def set_speed(speed: float, ctx: Context) -> str:

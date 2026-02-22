@@ -37,6 +37,7 @@ if TYPE_CHECKING:
 
 # ─── Extra options (negative indices) ──────────────────────────────────────
 EXTRA_OPTIONS = [
+    {"label": "Queue message", "summary": "Type or speak a message to queue for the agent's next response"},
     {"label": "History", "summary": "Review past selections for this session"},
     {"label": "Notifications", "summary": "Check Android notifications"},
     {"label": "Previous tab", "summary": "Switch to the previous session tab"},
@@ -183,6 +184,7 @@ class IoMcpApp(App):
         Binding("k,up", "cursor_up", "Up", show=False),
         Binding("enter", "select", "Select", show=True),
         Binding("i", "freeform_input", "Type reply", show=True),
+        Binding("m", "queue_message", "Message", show=True),
         Binding("space", "voice_input", "Voice", show=True),
         Binding("s", "toggle_settings", "Settings", show=True),
         Binding("p", "replay_prompt", "Replay", show=False),
@@ -235,6 +237,9 @@ class IoMcpApp(App):
         # Voice input
         self._voice_process: Optional[subprocess.Popen] = None
         self._voice_rec_file: Optional[str] = None
+
+        # Message queue mode
+        self._message_mode = False
 
         # Settings (global, not per-session)
         self.settings = Settings(config=config)
@@ -1623,6 +1628,29 @@ class IoMcpApp(App):
         self._tts.stop()
         self._tts.speak_async("Type your reply")
 
+    def action_queue_message(self) -> None:
+        """Open text input to queue a message for the agent's next response."""
+        session = self._focused()
+        if not session:
+            return
+        # Allow queueing even when session is not active (agent is working)
+        if getattr(session, 'input_mode', False) or getattr(session, 'voice_recording', False):
+            return
+        self._message_mode = True
+        self._freeform_spoken_pos = 0
+
+        # UI
+        self.query_one("#choices").display = False
+        self.query_one("#dwell-bar").display = False
+        inp = self.query_one("#freeform-input", Input)
+        inp.placeholder = "Type a message to queue for the agent, press Enter to send"
+        inp.value = ""
+        inp.styles.display = "block"
+        inp.focus()
+
+        self._tts.stop()
+        self._tts.speak_async("Type a message for the agent")
+
     @on(Input.Changed, "#freeform-input")
     def on_freeform_changed(self, event: Input.Changed) -> None:
         session = self._focused()
@@ -1647,10 +1675,28 @@ class IoMcpApp(App):
         text = event.value.strip()
         if not text:
             return
+
+        self._vibrate(100)  # Haptic feedback on submit
+
+        # Message queue mode — queue the message, don't select
+        if self._message_mode:
+            self._message_mode = False
+            event.input.styles.display = "none"
+            event.input.placeholder = "Type your reply, press Enter to send, Escape to cancel"
+            msgs = getattr(session, 'pending_messages', None)
+            if msgs is not None:
+                msgs.append(text)
+            self._freeform_tts.stop()
+            self._tts.stop()
+            count = len(msgs) if msgs else 1
+            self._tts.speak_async(f"Message queued. {count} pending.")
+            self._restore_choices()
+            return
+
+        # Normal freeform input — select with the text
         session.input_mode = False
         event.input.styles.display = "none"
 
-        self._vibrate(100)  # Haptic feedback on freeform submit
         self._freeform_tts.stop()
         self._tts.stop()
         self._tts.speak_async(f"Selected: {text}")
@@ -1663,16 +1709,22 @@ class IoMcpApp(App):
         session = self._focused()
         if session:
             session.input_mode = False
+        self._message_mode = False
         self._freeform_tts.stop()
         inp = self.query_one("#freeform-input", Input)
         inp.styles.display = "none"
+        inp.placeholder = "Type your reply, press Enter to send, Escape to cancel"
         self._restore_choices()
-        self._tts.speak_async("Cancelled. Back to choices.")
+        self._tts.speak_async("Cancelled.")
 
     def on_key(self, event) -> None:
         """Handle Escape in freeform/voice/settings mode."""
         session = self._focused()
-        if session and session.input_mode and event.key == "escape":
+        if self._message_mode and event.key == "escape":
+            self._cancel_freeform()
+            event.prevent_default()
+            event.stop()
+        elif session and session.input_mode and event.key == "escape":
             self._cancel_freeform()
             event.prevent_default()
             event.stop()
@@ -1889,6 +1941,8 @@ class IoMcpApp(App):
             self._show_notifications()
         elif label == "History":
             self._show_history()
+        elif label == "Queue message":
+            self.action_queue_message()
 
     def _show_history(self) -> None:
         """Read out recent selection history for the focused session."""

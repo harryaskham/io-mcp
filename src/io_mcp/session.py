@@ -71,9 +71,29 @@ class Session:
     # ── Selection history ─────────────────────────────────────────
     history: list[HistoryEntry] = field(default_factory=list)
 
+    # ── User message inbox (queued for next MCP response) ─────────
+    pending_messages: list[str] = field(default_factory=list)
+
+    # ── Queued user messages (drained on next MCP response) ───────
+    pending_messages: list[str] = field(default_factory=list)
+
     def touch(self) -> None:
         """Update the last_activity timestamp."""
         self.last_activity = time.time()
+
+    def drain_messages(self) -> str:
+        """Drain and return all pending user messages as a formatted string.
+
+        Returns empty string if no messages queued. Otherwise returns
+        a block that can be appended to MCP tool responses.
+        """
+        msgs = getattr(self, 'pending_messages', [])
+        if not msgs:
+            return ""
+        drained = list(msgs)
+        msgs.clear()
+        lines = "\n".join(f"- {m}" for m in drained)
+        return f"\n\n--- Queued User Messages ---\n{lines}"
 
 
 class SessionManager:
