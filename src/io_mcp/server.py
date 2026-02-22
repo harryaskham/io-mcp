@@ -532,4 +532,70 @@ def create_mcp_server(
         except Exception as e:
             return json.dumps({"status": "error", "error": str(e)})
 
+    @server.tool()
+    @_safe_tool
+    async def run_command(command: str, ctx: Context) -> str:
+        """Run a shell command on the device running the io-mcp server.
+
+        The command is first presented to the user for confirmation via
+        the TUI/frontend. If the user approves, it runs and returns the
+        output. If denied, returns a rejection message.
+
+        Use this for operations on the server device like checking status,
+        installing packages, managing files, or running scripts.
+
+        Parameters
+        ----------
+        command:
+            The shell command to run (e.g., "git status", "ls -la", "uname -a").
+
+        Returns
+        -------
+        str
+            JSON with status, stdout, stderr, and return code.
+        """
+        import subprocess as sp
+
+        session = _safe_get_session(ctx)
+
+        # Present confirmation to user
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None,
+            frontend.present_choices,
+            session,
+            f"Agent wants to run: {command}",
+            [
+                {"label": "Approve", "summary": f"Run: {command}"},
+                {"label": "Deny", "summary": "Reject this command"},
+            ],
+        )
+
+        selected = result.get("selected", "")
+        if selected.lower() != "approve":
+            return json.dumps({"status": "denied", "command": command})
+
+        # Run the command
+        try:
+            proc = sp.run(
+                command,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            return json.dumps({
+                "status": "completed",
+                "command": command,
+                "returncode": proc.returncode,
+                "stdout": proc.stdout[:5000],  # limit output size
+                "stderr": proc.stderr[:2000],
+            })
+        except sp.TimeoutExpired:
+            return json.dumps({"status": "timeout", "command": command,
+                             "error": "Command timed out after 60s"})
+        except Exception as e:
+            return json.dumps({"status": "error", "command": command,
+                             "error": str(e)})
+
     return server
