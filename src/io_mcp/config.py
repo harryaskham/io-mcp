@@ -1,0 +1,389 @@
+"""Configuration system for io-mcp.
+
+Reads/writes config from $HOME/.config/io-mcp/config.yml (or --config-file).
+Config strings can include shell variables like ${OPENAI_API_KEY} which are
+expanded at load time.
+
+The config defines:
+  - providers: named API endpoints with baseUrl and apiKey
+  - models: stt, tts, and realtime model definitions with provider associations
+  - config: runtime settings (selected models, voice, speed, etc.)
+"""
+
+from __future__ import annotations
+
+import copy
+import os
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Optional
+
+import yaml
+
+
+DEFAULT_CONFIG_DIR = os.path.join(
+    os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")),
+    "io-mcp",
+)
+DEFAULT_CONFIG_FILE = os.path.join(DEFAULT_CONFIG_DIR, "config.yml")
+
+# Full default config — written on first run, used as fallback for missing keys
+DEFAULT_CONFIG: dict[str, Any] = {
+    "providers": {
+        "openai": {
+            "baseUrl": "${OPENAI_BASE_URL:-https://api.openai.com}",
+            "apiKey": "${OPENAI_API_KEY}",
+        },
+        "azure-foundry": {
+            "baseUrl": "${AZURE_WCUS_ENDPOINT:-https://harryaskham-sandbox-ais-wcus.services.ai.azure.com}",
+            "apiKey": "${AZURE_WCUS_API_KEY}",
+        },
+        "azure-speech": {
+            "baseUrl": "${AZURE_SPEECH_ENDPOINT:-https://eastus.tts.speech.microsoft.com}",
+            "apiKey": "${AZURE_SPEECH_API_KEY}",
+        },
+    },
+    "models": {
+        "realtime": {
+            "gpt-realtime": {
+                "provider": "openai",
+            },
+        },
+        "stt": {
+            "gpt-4o-mini-transcribe": {
+                "provider": "openai",
+                "supportsRealtime": True,
+            },
+            "whisper": {
+                "provider": "openai",
+                "supportsRealtime": True,
+            },
+            "mai-ears-1": {
+                "provider": "azure-foundry",
+                "supportsRealtime": False,
+            },
+        },
+        "tts": {
+            "gpt-4o-mini-tts": {
+                "provider": "openai",
+                "voice": {
+                    "default": "sage",
+                    "options": [
+                        "alloy", "ash", "ballad", "coral", "echo",
+                        "fable", "onyx", "nova", "sage", "shimmer", "verse",
+                    ],
+                },
+            },
+            "mai-voice-1": {
+                "provider": "azure-speech",
+                "voice": {
+                    "default": "en-US-Noa:MAI-Voice-1",
+                    "options": [
+                        "en-US-Noa:MAI-Voice-1",
+                        "en-US-Teo:MAI-Voice-1",
+                    ],
+                },
+            },
+        },
+    },
+    "config": {
+        "realtime": {
+            "model": "gpt-realtime",
+        },
+        "tts": {
+            "model": "mai-voice-1",
+            "voice": "en-US-Noa:MAI-Voice-1",
+            "speed": 1.3,
+        },
+        "stt": {
+            "model": "whisper",
+            "realtime": False,
+        },
+    },
+}
+
+
+def _expand_env(value: str) -> str:
+    """Expand shell-style ${VAR} and ${VAR:-default} in a string."""
+    def _replacer(m: re.Match) -> str:
+        var_expr = m.group(1)
+        if ":-" in var_expr:
+            var_name, default = var_expr.split(":-", 1)
+            return os.environ.get(var_name, default)
+        return os.environ.get(var_expr, "")
+    return re.sub(r"\$\{([^}]+)\}", _replacer, value)
+
+
+def _expand_config(obj: Any) -> Any:
+    """Recursively expand env vars in all string values."""
+    if isinstance(obj, str):
+        return _expand_env(obj)
+    elif isinstance(obj, dict):
+        return {k: _expand_config(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [_expand_config(v) for v in obj]
+    return obj
+
+
+def _deep_merge(base: dict, override: dict) -> dict:
+    """Deep-merge override into base. Override values win."""
+    result = dict(base)
+    for key, value in override.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            result[key] = _deep_merge(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+@dataclass
+class IoMcpConfig:
+    """Parsed and expanded io-mcp configuration."""
+
+    raw: dict[str, Any] = field(default_factory=dict)
+    """The raw config as loaded from YAML (with env vars unexpanded)."""
+
+    expanded: dict[str, Any] = field(default_factory=dict)
+    """The config with all env vars expanded."""
+
+    config_path: str = DEFAULT_CONFIG_FILE
+    """Path to the config file."""
+
+    @classmethod
+    def load(cls, config_path: Optional[str] = None) -> "IoMcpConfig":
+        """Load config from file, creating with defaults if not found."""
+        path = config_path or DEFAULT_CONFIG_FILE
+        raw = copy.deepcopy(DEFAULT_CONFIG)
+
+        if os.path.isfile(path):
+            try:
+                with open(path, "r") as f:
+                    user_config = yaml.safe_load(f)
+                if user_config and isinstance(user_config, dict):
+                    raw = _deep_merge(raw, user_config)
+            except Exception as e:
+                print(f"WARNING: Failed to load config from {path}: {e}", flush=True)
+        else:
+            # Create config file with defaults
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            try:
+                with open(path, "w") as f:
+                    yaml.dump(raw, f, default_flow_style=False, sort_keys=False)
+                print(f"  Config: created {path}", flush=True)
+            except Exception as e:
+                print(f"WARNING: Failed to write default config to {path}: {e}", flush=True)
+
+        expanded = _expand_config(raw)
+        return cls(raw=raw, expanded=expanded, config_path=path)
+
+    def save(self) -> None:
+        """Write the raw config back to disk."""
+        os.makedirs(os.path.dirname(self.config_path), exist_ok=True)
+        with open(self.config_path, "w") as f:
+            yaml.dump(self.raw, f, default_flow_style=False, sort_keys=False)
+        # Re-expand after save
+        self.expanded = _expand_config(self.raw)
+
+    def reload(self) -> None:
+        """Reload from disk."""
+        fresh = IoMcpConfig.load(self.config_path)
+        self.raw = fresh.raw
+        self.expanded = fresh.expanded
+
+    # ─── Accessors ──────────────────────────────────────────────────
+
+    @property
+    def providers(self) -> dict[str, Any]:
+        return self.expanded.get("providers", {})
+
+    @property
+    def models(self) -> dict[str, Any]:
+        return self.expanded.get("models", {})
+
+    @property
+    def runtime(self) -> dict[str, Any]:
+        return self.expanded.get("config", {})
+
+    # ─── TTS accessors ──────────────────────────────────────────────
+
+    @property
+    def tts_model_name(self) -> str:
+        return self.runtime.get("tts", {}).get("model", "gpt-4o-mini-tts")
+
+    @property
+    def tts_model_def(self) -> dict[str, Any]:
+        return self.models.get("tts", {}).get(self.tts_model_name, {})
+
+    @property
+    def tts_provider_name(self) -> str:
+        return self.tts_model_def.get("provider", "openai")
+
+    @property
+    def tts_provider(self) -> dict[str, Any]:
+        return self.providers.get(self.tts_provider_name, {})
+
+    @property
+    def tts_base_url(self) -> str:
+        return self.tts_provider.get("baseUrl", "https://api.openai.com")
+
+    @property
+    def tts_api_key(self) -> str:
+        return self.tts_provider.get("apiKey", "")
+
+    @property
+    def tts_voice(self) -> str:
+        return self.runtime.get("tts", {}).get("voice", "sage")
+
+    @property
+    def tts_speed(self) -> float:
+        return float(self.runtime.get("tts", {}).get("speed", 1.0))
+
+    @property
+    def tts_voice_options(self) -> list[str]:
+        voice_def = self.tts_model_def.get("voice", {})
+        return voice_def.get("options", [])
+
+    @property
+    def tts_model_names(self) -> list[str]:
+        return list(self.models.get("tts", {}).keys())
+
+    # ─── STT accessors ──────────────────────────────────────────────
+
+    @property
+    def stt_model_name(self) -> str:
+        return self.runtime.get("stt", {}).get("model", "whisper")
+
+    @property
+    def stt_model_def(self) -> dict[str, Any]:
+        return self.models.get("stt", {}).get(self.stt_model_name, {})
+
+    @property
+    def stt_provider_name(self) -> str:
+        return self.stt_model_def.get("provider", "openai")
+
+    @property
+    def stt_provider(self) -> dict[str, Any]:
+        return self.providers.get(self.stt_provider_name, {})
+
+    @property
+    def stt_base_url(self) -> str:
+        return self.stt_provider.get("baseUrl", "https://api.openai.com")
+
+    @property
+    def stt_api_key(self) -> str:
+        return self.stt_provider.get("apiKey", "")
+
+    @property
+    def stt_realtime(self) -> bool:
+        return bool(self.runtime.get("stt", {}).get("realtime", False))
+
+    @property
+    def stt_model_names(self) -> list[str]:
+        return list(self.models.get("stt", {}).keys())
+
+    # ─── Realtime accessors ─────────────────────────────────────────
+
+    @property
+    def realtime_model_name(self) -> str:
+        return self.runtime.get("realtime", {}).get("model", "gpt-realtime")
+
+    @property
+    def realtime_model_def(self) -> dict[str, Any]:
+        return self.models.get("realtime", {}).get(self.realtime_model_name, {})
+
+    @property
+    def realtime_provider_name(self) -> str:
+        return self.realtime_model_def.get("provider", "openai")
+
+    @property
+    def realtime_provider(self) -> dict[str, Any]:
+        return self.providers.get(self.realtime_provider_name, {})
+
+    @property
+    def realtime_base_url(self) -> str:
+        return self.realtime_provider.get("baseUrl", "https://api.openai.com")
+
+    @property
+    def realtime_api_key(self) -> str:
+        return self.realtime_provider.get("apiKey", "")
+
+    # ─── Config mutation ────────────────────────────────────────────
+
+    def set_tts_model(self, model_name: str) -> None:
+        """Set the TTS model and reset voice to the new model's default."""
+        self.raw.setdefault("config", {}).setdefault("tts", {})["model"] = model_name
+        # Reset voice to the new model's default
+        model_def = self.raw.get("models", {}).get("tts", {}).get(model_name, {})
+        voice_def = model_def.get("voice", {})
+        default_voice = voice_def.get("default", "")
+        if default_voice:
+            self.raw["config"]["tts"]["voice"] = default_voice
+        self.expanded = _expand_config(self.raw)
+
+    def set_tts_voice(self, voice: str) -> None:
+        """Set the TTS voice."""
+        self.raw.setdefault("config", {}).setdefault("tts", {})["voice"] = voice
+        self.expanded = _expand_config(self.raw)
+
+    def set_tts_speed(self, speed: float) -> None:
+        """Set the TTS speed."""
+        self.raw.setdefault("config", {}).setdefault("tts", {})["speed"] = speed
+        self.expanded = _expand_config(self.raw)
+
+    def set_stt_model(self, model_name: str) -> None:
+        """Set the STT model."""
+        self.raw.setdefault("config", {}).setdefault("stt", {})["model"] = model_name
+        self.expanded = _expand_config(self.raw)
+
+    def set_stt_realtime(self, enabled: bool) -> None:
+        """Toggle STT realtime mode."""
+        self.raw.setdefault("config", {}).setdefault("stt", {})["realtime"] = enabled
+        self.expanded = _expand_config(self.raw)
+
+    # ─── TTS CLI args ───────────────────────────────────────────────
+
+    def tts_cli_args(self, text: str) -> list[str]:
+        """Build CLI args for the tts tool based on current config.
+
+        Returns the full argument list (excluding the 'tts' binary itself).
+        """
+        provider = self.tts_provider_name
+        args = [text]
+
+        if provider == "azure-speech":
+            args.extend(["--provider", "azure-speech"])
+            args.extend(["--base-url", self.tts_base_url])
+            args.extend(["--api-key", self.tts_api_key])
+            args.extend(["--voice", self.tts_voice])
+        else:
+            # openai provider
+            args.extend(["--base-url", self.tts_base_url])
+            args.extend(["--api-key", self.tts_api_key])
+            args.extend(["--model", self.tts_model_name])
+            args.extend(["--voice", self.tts_voice])
+
+        args.extend(["--speed", str(self.tts_speed)])
+        args.extend(["--stdout", "--response-format", "wav"])
+        return args
+
+    # ─── STT CLI args ───────────────────────────────────────────────
+
+    def stt_cli_args(self) -> list[str]:
+        """Build CLI args for the stt tool based on current config.
+
+        Returns the full argument list (excluding the 'stt' binary itself).
+        Always includes --stdin.
+        """
+        args = ["--stdin"]
+        args.extend(["--base-url", self.stt_base_url])
+        args.extend(["--api-key", self.stt_api_key])
+        args.extend(["--transcription-model", self.stt_model_name])
+
+        if self.stt_realtime:
+            supports = self.stt_model_def.get("supportsRealtime", False)
+            if supports:
+                args.append("--realtime")
+                args.extend(["--realtime-model", self.realtime_model_name])
+
+        return args

@@ -3,8 +3,8 @@
 Supports pregeneration: generate audio files for a batch of texts in
 parallel, then play them instantly on demand from cache.
 
-The tts tool is configured entirely via environment variables
-(TTS_PROVIDER, TTS_SPEED, OPENAI_TTS_VOICE, AZURE_SPEECH_*, etc.).
+The tts tool is configured via IoMcpConfig (config.yml) which passes
+explicit CLI flags for provider, model, voice, speed, base-url, api-key.
 """
 
 from __future__ import annotations
@@ -17,7 +17,10 @@ import subprocess
 import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from .config import IoMcpConfig
 
 
 # espeak-ng words per minute
@@ -51,18 +54,20 @@ class TTSEngine:
     """Text-to-speech with two backends and pregeneration support.
 
     - local: espeak-ng (fast, robotic)
-    - api:   tts CLI tool → gpt-4o-mini-tts (nice voice, slower)
+    - api:   tts CLI tool (nice voice, slower) — configured via IoMcpConfig
 
     Audio is generated to WAV files, then played via paplay.
     pregenerate() creates clips in parallel so scrolling is instant.
     """
 
-    def __init__(self, local: bool = False, speed: float = 1.0):
+    def __init__(self, local: bool = False, speed: float = 1.0,
+                 config: Optional["IoMcpConfig"] = None):
         self._process: Optional[subprocess.Popen] = None
         self._lock = threading.Lock()
         self._local = local
         self._speed = speed
         self._muted = False  # when True, play_cached is a no-op
+        self._config = config
 
         self._env = os.environ.copy()
         self._env["PULSE_SERVER"] = os.environ.get("PULSE_SERVER", "127.0.0.1")
@@ -88,14 +93,23 @@ class TTSEngine:
         self._cache: dict[str, str] = {}
         os.makedirs(CACHE_DIR, exist_ok=True)
 
-        mode = "espeak-ng (local)" if self._local else "gpt-4o-mini-tts (API)"
-        print(f"  TTS: {mode}", flush=True)
+        mode = "espeak-ng (local)" if self._local else "tts CLI (API)"
+        if not self._local and self._config:
+            mode = f"{self._config.tts_model_name} ({self._config.tts_voice})"
+        print(f"  TTS engine: {mode}", flush=True)
 
     def _cache_key(self, text: str) -> str:
-        # Include backend+speed in key; for API mode the tts tool's own
-        # config (provider, voice, etc.) comes from env vars — cache is
-        # invalidated naturally when the process restarts with new env.
-        params = f"{text}|local={self._local}|speed={self._speed}"
+        # Include backend, speed, and config-based settings in cache key
+        # so cache is invalidated when voice/model/speed changes
+        if self._config and not self._local:
+            params = (
+                f"{text}|local={self._local}"
+                f"|model={self._config.tts_model_name}"
+                f"|voice={self._config.tts_voice}"
+                f"|speed={self._config.tts_speed}"
+            )
+        else:
+            params = f"{text}|local={self._local}|speed={self._speed}"
         return hashlib.md5(params.encode()).hexdigest()
 
     def _generate_to_file(self, text: str) -> Optional[str]:
@@ -107,7 +121,6 @@ class TTSEngine:
         if cached and os.path.isfile(cached):
             return cached
 
-        clean = text.replace("'", "'\\''")
         out_path = os.path.join(CACHE_DIR, f"{key}.wav")
 
         try:
@@ -127,10 +140,13 @@ class TTSEngine:
             else:
                 if not self._tts_bin:
                     return None
-                # tts tool: request WAV (self-describing, paplay auto-detects)
-                # All config (provider, speed, voice) flows via env vars
-                out_path = os.path.join(CACHE_DIR, f"{key}.wav")
-                cmd = [self._tts_bin, text, "--stdout", "--response-format", "wav"]
+                # Build tts command from config (explicit flags)
+                if self._config:
+                    cmd = [self._tts_bin] + self._config.tts_cli_args(text)
+                else:
+                    # Legacy fallback: no config, use env vars
+                    cmd = [self._tts_bin, text, "--stdout", "--response-format", "wav"]
+
                 with open(out_path, "wb") as f:
                     proc = subprocess.run(
                         cmd, stdout=f, stderr=subprocess.DEVNULL,

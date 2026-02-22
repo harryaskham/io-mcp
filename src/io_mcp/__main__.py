@@ -40,6 +40,7 @@ import sys
 
 from mcp.server.fastmcp import FastMCP, Context
 
+from .config import IoMcpConfig
 from .tui import IoMcpApp
 from .tts import TTSEngine
 
@@ -306,17 +307,27 @@ def main() -> None:
         "--invert", action="store_true",
         help="Invert scroll direction (scroll-down → cursor-up, scroll-up → cursor-down)"
     )
+    parser.add_argument(
+        "--config-file", default=None, metavar="PATH",
+        help="Path to config YAML file (default: ~/.config/io-mcp/config.yml)"
+    )
     args = parser.parse_args()
 
     # Default append option: always offer to generate more options
     if not args.append_option:
         args.append_option = ["More options"]
 
-    tts = TTSEngine(local=args.local)
+    # Load config
+    config = IoMcpConfig.load(args.config_file)
+    print(f"  Config: {config.config_path}", flush=True)
+    print(f"  TTS: model={config.tts_model_name}, voice={config.tts_voice}, speed={config.tts_speed}", flush=True)
+    print(f"  STT: model={config.stt_model_name}, realtime={config.stt_realtime}", flush=True)
+
+    tts = TTSEngine(local=args.local, config=config)
 
     # Separate TTS engine for freeform typing readback (can be different backend/speed)
     freeform_local = args.freeform_tts == "local"
-    freeform_tts = TTSEngine(local=freeform_local, speed=args.freeform_tts_speed)
+    freeform_tts = TTSEngine(local=freeform_local, speed=args.freeform_tts_speed, config=config)
 
     # Create the textual app
     app = IoMcpApp(
@@ -327,6 +338,7 @@ def main() -> None:
         scroll_debounce=args.scroll_debounce,
         invert_scroll=args.invert,
         demo=args.demo,
+        config=config,
     )
 
     if args.demo:

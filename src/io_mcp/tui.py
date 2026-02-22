@@ -29,6 +29,10 @@ from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, St
 from .session import Session, SessionManager, SpeechEntry
 from .tts import PORTAUDIO_LIB, TTSEngine, _find_binary
 
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from .config import IoMcpConfig
+
 
 # ─── Extra options (negative indices) ──────────────────────────────────────
 EXTRA_OPTIONS = [
@@ -86,32 +90,81 @@ class DwellBar(Static):
 # ─── Settings state ─────────────────────────────────────────────────────────
 
 class Settings:
-    """Runtime settings managed via the in-TUI settings menu."""
+    """Runtime settings managed via the in-TUI settings menu.
 
-    def __init__(self):
-        self.speed = float(os.environ.get("TTS_SPEED", "1.0"))
-        self.provider = os.environ.get("TTS_PROVIDER", "openai")
-        if self.provider == "azure-speech":
-            self.voice = os.environ.get("AZURE_SPEECH_VOICE", "en-US-Noa:MAI-Voice-1")
-        else:
-            self.voice = os.environ.get("OPENAI_TTS_VOICE", "sage")
+    Backed by IoMcpConfig — reads/writes config.yml on changes.
+    """
+
+    def __init__(self, config: Optional["IoMcpConfig"] = None):
+        self._config = config
         self._pre_fast_speed: float | None = None  # for fast toggle
 
-    def apply_to_env(self):
-        """Push current settings to env vars so TTS picks them up."""
-        os.environ["TTS_SPEED"] = str(self.speed)
-        os.environ["TTS_PROVIDER"] = self.provider
-        if self.provider == "openai":
-            os.environ["OPENAI_TTS_VOICE"] = self.voice
-        else:
-            os.environ["AZURE_SPEECH_VOICE"] = self.voice
+    @property
+    def speed(self) -> float:
+        if self._config:
+            return self._config.tts_speed
+        return float(os.environ.get("TTS_SPEED", "1.0"))
+
+    @speed.setter
+    def speed(self, value: float) -> None:
+        if self._config:
+            self._config.set_tts_speed(value)
+            self._config.save()
+
+    @property
+    def voice(self) -> str:
+        if self._config:
+            return self._config.tts_voice
+        return os.environ.get("OPENAI_TTS_VOICE", "sage")
+
+    @voice.setter
+    def voice(self, value: str) -> None:
+        if self._config:
+            self._config.set_tts_voice(value)
+            self._config.save()
+
+    @property
+    def tts_model(self) -> str:
+        if self._config:
+            return self._config.tts_model_name
+        return "gpt-4o-mini-tts"
+
+    @tts_model.setter
+    def tts_model(self, value: str) -> None:
+        if self._config:
+            self._config.set_tts_model(value)
+            self._config.save()
+
+    @property
+    def stt_model(self) -> str:
+        if self._config:
+            return self._config.stt_model_name
+        return "whisper"
+
+    @stt_model.setter
+    def stt_model(self, value: str) -> None:
+        if self._config:
+            self._config.set_stt_model(value)
+            self._config.save()
 
     def get_voices(self) -> list[str]:
-        if self.provider == "openai":
-            return ["alloy", "ash", "ballad", "coral", "echo", "fable", "nova",
-                    "onyx", "sage", "shimmer"]
-        else:
-            return ["en-US-Noa:MAI-Voice-1", "en-US-Teo:MAI-Voice-1"]
+        if self._config:
+            return self._config.tts_voice_options
+        return ["sage", "ballad", "alloy"]
+
+    def get_tts_models(self) -> list[str]:
+        if self._config:
+            return self._config.tts_model_names
+        return ["gpt-4o-mini-tts"]
+
+    def get_stt_models(self) -> list[str]:
+        if self._config:
+            return self._config.stt_model_names
+        return ["whisper"]
+
+    def apply_to_env(self):
+        """Push current settings to env vars (legacy compat)."""
+        os.environ["TTS_SPEED"] = str(self.speed)
 
     def toggle_fast(self) -> str:
         if self._pre_fast_speed is not None:
@@ -122,22 +175,18 @@ class Settings:
             self._pre_fast_speed = self.speed
             self.speed = 1.8
             msg = "Speed set to 1.8"
-        self.apply_to_env()
         return msg
 
     def toggle_voice(self) -> str:
         voices = self.get_voices()
-        if self.provider == "openai":
-            # Toggle between sage, ballad, and original
-            cycle = ["sage", "ballad"]
-            if self.voice not in cycle:
-                cycle.append(self.voice)
-            idx = cycle.index(self.voice) if self.voice in cycle else -1
-            self.voice = cycle[(idx + 1) % len(cycle)]
-        else:
-            idx = voices.index(self.voice) if self.voice in voices else 0
+        if not voices:
+            return "No voices available"
+        current = self.voice
+        if current in voices:
+            idx = voices.index(current)
             self.voice = voices[(idx + 1) % len(voices)]
-        self.apply_to_env()
+        else:
+            self.voice = voices[0]
         return f"Voice: {self.voice}"
 
 
@@ -263,6 +312,7 @@ class IoMcpApp(App):
         scroll_debounce: float = 0.15,
         invert_scroll: bool = False,
         demo: bool = False,
+        config: Optional["IoMcpConfig"] = None,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
@@ -272,6 +322,7 @@ class IoMcpApp(App):
         self._scroll_debounce = scroll_debounce
         self._invert_scroll = invert_scroll
         self._demo = demo
+        self._config = config
         self._last_scroll_time: float = 0.0
         self._dwell_time = dwell_time
 
@@ -286,7 +337,7 @@ class IoMcpApp(App):
         self._voice_rec_file: Optional[str] = None
 
         # Settings (global, not per-session)
-        self.settings = Settings()
+        self.settings = Settings(config=config)
         self._settings_items: list[dict] = []
         self._setting_edit_mode = False
         self._setting_edit_values: list[str] = []
@@ -978,8 +1029,15 @@ class IoMcpApp(App):
                     stdout=subprocess.PIPE,
                     stderr=subprocess.DEVNULL,
                 )
+
+                # Build stt command from config (explicit flags)
+                if self._config:
+                    stt_args = [stt_bin] + self._config.stt_cli_args()
+                else:
+                    stt_args = [stt_bin, "--stdin"]
+
                 stt_proc = subprocess.Popen(
-                    [stt_bin, "--stdin"],
+                    stt_args,
                     stdin=ffmpeg_proc.stdout,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
@@ -1056,8 +1114,10 @@ class IoMcpApp(App):
              "summary": f"Current: {self.settings.speed:.1f}"},
             {"label": "Voice", "key": "voice",
              "summary": f"Current: {self.settings.voice}"},
-            {"label": "Provider", "key": "provider",
-             "summary": f"Current: {self.settings.provider}"},
+            {"label": "TTS model", "key": "tts_model",
+             "summary": f"Current: {self.settings.tts_model}"},
+            {"label": "STT model", "key": "stt_model",
+             "summary": f"Current: {self.settings.stt_model}"},
             {"label": "Close settings", "key": "close", "summary": ""},
         ]
 
@@ -1116,9 +1176,17 @@ class IoMcpApp(App):
                 if current in self._setting_edit_values else 0
             )
 
-        elif key == "provider":
-            self._setting_edit_values = ["openai", "azure-speech"]
-            current = self.settings.provider
+        elif key == "tts_model":
+            self._setting_edit_values = self.settings.get_tts_models()
+            current = self.settings.tts_model
+            self._setting_edit_index = (
+                self._setting_edit_values.index(current)
+                if current in self._setting_edit_values else 0
+            )
+
+        elif key == "stt_model":
+            self._setting_edit_values = self.settings.get_stt_models()
+            current = self.settings.stt_model
             self._setting_edit_index = (
                 self._setting_edit_values.index(current)
                 if current in self._setting_edit_values else 0
@@ -1157,13 +1225,12 @@ class IoMcpApp(App):
             self.settings.speed = float(value)
         elif key == "voice":
             self.settings.voice = value
-        elif key == "provider":
-            self.settings.provider = value
-            voices = self.settings.get_voices()
-            if self.settings.voice not in voices:
-                self.settings.voice = voices[0]
+        elif key == "tts_model":
+            self.settings.tts_model = value
+            # Voice list may have changed — voice is reset to new model default
+        elif key == "stt_model":
+            self.settings.stt_model = value
 
-        self.settings.apply_to_env()
         self._tts.clear_cache()
 
         self._setting_edit_mode = False
