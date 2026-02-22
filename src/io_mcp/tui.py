@@ -316,7 +316,7 @@ class IoMcpApp(App):
         yield ListView(id="choices")
         yield Input(placeholder="Type your reply, press Enter to send, Escape to cancel", id="freeform-input")
         yield DwellBar(id="dwell-bar")
-        yield Static("↕ Scroll  ⏎ Select  i Type  ␣ Voice  s Settings  h/l Tabs  n Next  q Quit", id="footer-help")
+        yield Static("↕ Scroll  ⏎ Select  i Type  m Msg  ␣ Voice  s Settings  h/l Tabs  n Next  q Quit", id="footer-help")
 
     def on_mount(self) -> None:
         self.title = "io-mcp"
