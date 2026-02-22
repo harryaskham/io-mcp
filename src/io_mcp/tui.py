@@ -871,7 +871,6 @@ class IoMcpApp(App):
         # Find binaries
         termux_exec_bin = _find_binary("termux-exec")
         stt_bin = _find_binary("stt")
-        ffmpeg_bin = _find_binary("ffmpeg")
 
         if not termux_exec_bin:
             session.voice_recording = False
@@ -882,12 +881,6 @@ class IoMcpApp(App):
         if not stt_bin:
             session.voice_recording = False
             self._tts.speak_async("stt tool not found")
-            self._restore_choices()
-            return
-
-        if not ffmpeg_bin:
-            session.voice_recording = False
-            self._tts.speak_async("ffmpeg not found")
             self._restore_choices()
             return
 
@@ -932,7 +925,6 @@ class IoMcpApp(App):
         def _process():
             termux_exec_bin = _find_binary("termux-exec")
             stt_bin = _find_binary("stt")
-            ffmpeg_bin = _find_binary("ffmpeg")
             rec_file = getattr(self, '_voice_rec_file', None)
 
             # Stop the recording
@@ -973,22 +965,14 @@ class IoMcpApp(App):
             env["LD_LIBRARY_PATH"] = PORTAUDIO_LIB
 
             try:
-                # ffmpeg converts opus to raw PCM16 24kHz mono
-                ffmpeg_proc = subprocess.Popen(
-                    [ffmpeg_bin, "-y", "-i", rec_file,
-                     "-f", "s16le", "-ar", "24000", "-ac", "1", "-"],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.DEVNULL,
-                )
-                # stt reads PCM16 from stdin
+                # Use stt --file to transcribe the recording directly
+                # (avoids ffmpeg→stdin pipe issues with VAD timing)
                 stt_proc = subprocess.Popen(
-                    [stt_bin, "--stdin"],
-                    stdin=ffmpeg_proc.stdout,
+                    [stt_bin, "--file", rec_file],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     env=env,
                 )
-                ffmpeg_proc.stdout.close()
 
                 stdout, stderr = stt_proc.communicate(timeout=120)
                 transcript = stdout.decode("utf-8", errors="replace").strip()
