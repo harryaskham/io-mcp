@@ -988,7 +988,7 @@ class IoMcpApp(App):
                 )
                 ffmpeg_proc.stdout.close()
 
-                stdout, stderr = stt_proc.communicate(timeout=30)
+                stdout, stderr = stt_proc.communicate(timeout=120)
                 transcript = stdout.decode("utf-8", errors="replace").strip()
                 stderr_text = stderr.decode("utf-8", errors="replace").strip() if stderr else ""
             except Exception as e:
