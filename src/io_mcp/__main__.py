@@ -376,6 +376,70 @@ def _run_mcp_server_inner(app: IoMcpApp, host: str, port: int,
             })
         return json.dumps({"error": "No config available"})
 
+    @server.tool()
+    async def reload_config(ctx: Context) -> str:
+        """Reload the io-mcp configuration from disk.
+
+        Re-reads ~/.config/io-mcp/config.yml and any local .io-mcp.yml,
+        then clears the TTS cache so new settings take effect immediately.
+
+        Returns
+        -------
+        str
+            Confirmation with the reloaded settings.
+        """
+        if app._config:
+            app._config.reload()
+            app._tts.clear_cache()
+            return json.dumps({
+                "status": "reloaded",
+                "tts_model": app._config.tts_model_name,
+                "tts_voice": app._config.tts_voice,
+                "tts_speed": app._config.tts_speed,
+                "stt_model": app._config.stt_model_name,
+            })
+        return json.dumps({"error": "No config available"})
+
+    @server.tool()
+    async def pull_latest(ctx: Context) -> str:
+        """Pull the latest changes from the remote git repository.
+
+        Runs `git pull --rebase origin main` in the io-mcp project directory,
+        then triggers a hot reload if successful.
+
+        Returns
+        -------
+        str
+            The git output or error message.
+        """
+        import subprocess as sp
+        # Find the project root (where .git is)
+        project_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        try:
+            result = sp.run(
+                ["git", "pull", "--rebase", "origin", "main"],
+                cwd=project_dir,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            output = result.stdout.strip()
+            if result.returncode != 0:
+                err = result.stderr.strip()
+                return json.dumps({"status": "error", "output": output, "error": err})
+
+            # Trigger hot reload if available
+            try:
+                app.call_from_thread(app.action_hot_reload)
+                return json.dumps({"status": "pulled_and_reloaded", "output": output})
+            except Exception:
+                return json.dumps({"status": "pulled", "output": output, "note": "Hot reload failed — restart io-mcp for changes to take effect"})
+
+        except sp.TimeoutExpired:
+            return json.dumps({"status": "error", "error": "Git pull timed out after 30s"})
+        except Exception as e:
+            return json.dumps({"status": "error", "error": str(e)})
+
     # Run streamable-http server (blocks this thread)
     # Log to file since Textual captures stdout/stderr
     _log = logging.getLogger("uvicorn")
