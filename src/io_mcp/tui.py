@@ -667,13 +667,15 @@ class IoMcpApp(App):
 
         if self._is_focused(session.session_id):
             # Foreground: play immediately
+            voice_ov = getattr(session, 'voice_override', None)
+            emotion_ov = getattr(session, 'emotion_override', None)
             self._fg_speaking = True
             if block:
-                self._tts.speak(text, voice_override=session.voice_override,
-                               emotion_override=session.emotion_override)
+                self._tts.speak(text, voice_override=voice_ov,
+                               emotion_override=emotion_ov)
             else:
-                self._tts.speak_async(text, voice_override=session.voice_override,
-                                     emotion_override=session.emotion_override)
+                self._tts.speak_async(text, voice_override=voice_ov,
+                                     emotion_override=emotion_ov)
             self._fg_speaking = False
         else:
             # Background: queue
