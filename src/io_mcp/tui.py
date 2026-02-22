@@ -1487,13 +1487,11 @@ class IoMcpApp(App):
         if not session or not session.active:
             return
 
-        # If intro or options are being read and user scrolled, interrupt
-        if session.intro_speaking:
-            session.intro_speaking = False
-            self._tts.stop()
-        if session.reading_options:
-            session.reading_options = False
-            self._tts.stop()
+        # During intro/options readout, suppress highlight-triggered speech.
+        # User scrolling is handled by on_mouse_scroll which sets
+        # intro_speaking/reading_options = False before the highlight changes.
+        if getattr(session, 'intro_speaking', False) or getattr(session, 'reading_options', False):
+            return
 
         if isinstance(event.item, ChoiceItem):
             logical = event.item.choice_index
@@ -1536,10 +1534,22 @@ class IoMcpApp(App):
             return
         self._do_select()
 
+    def _interrupt_readout(self) -> None:
+        """Interrupt intro/options readout when user scrolls."""
+        session = self._focused()
+        if session:
+            if getattr(session, 'intro_speaking', False):
+                session.intro_speaking = False
+                self._tts.stop()
+            if getattr(session, 'reading_options', False):
+                session.reading_options = False
+                self._tts.stop()
+
     def action_cursor_down(self) -> None:
         session = self._focused()
         if session and (session.input_mode or session.voice_recording):
             return
+        self._interrupt_readout()
         list_view = self.query_one("#choices", ListView)
         if list_view.display:
             list_view.action_cursor_down()
@@ -1548,6 +1558,7 @@ class IoMcpApp(App):
         session = self._focused()
         if session and (session.input_mode or session.voice_recording):
             return
+        self._interrupt_readout()
         list_view = self.query_one("#choices", ListView)
         if list_view.display:
             list_view.action_cursor_up()
@@ -1563,6 +1574,7 @@ class IoMcpApp(App):
     def on_mouse_scroll_down(self, event: MouseScrollDown) -> None:
         session = self._focused()
         if (self._in_settings or self._setting_edit_mode or (session and session.active)) and self._scroll_allowed():
+            self._interrupt_readout()
             list_view = self.query_one("#choices", ListView)
             if list_view.display:
                 if self._invert_scroll:
@@ -1575,6 +1587,7 @@ class IoMcpApp(App):
     def on_mouse_scroll_up(self, event: MouseScrollUp) -> None:
         session = self._focused()
         if (self._in_settings or self._setting_edit_mode or (session and session.active)) and self._scroll_allowed():
+            self._interrupt_readout()
             list_view = self.query_one("#choices", ListView)
             if list_view.display:
                 if self._invert_scroll:
