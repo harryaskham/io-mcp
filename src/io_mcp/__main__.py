@@ -406,6 +406,34 @@ def _run_mcp_server_inner(app: IoMcpApp, host: str, port: int,
         return json.dumps({"error": "No config available"})
 
     @server.tool()
+    async def rename_session(name: str, ctx: Context) -> str:
+        """Rename the current session tab.
+
+        Sets a descriptive name for this agent's tab in the TUI,
+        replacing the default "Agent N" label.
+
+        Parameters
+        ----------
+        name:
+            The new tab name (e.g., "Code Review", "Tests", "Refactor").
+
+        Returns
+        -------
+        str
+            Confirmation of the new name.
+        """
+        session_id = _get_session_id(ctx)
+        session, created = app.manager.get_or_create(session_id)
+        if created:
+            app.on_session_created(session)
+        session.name = name
+        try:
+            app.call_from_thread(app._update_tab_bar)
+        except Exception:
+            pass
+        return f"Session renamed to: {name}"
+
+    @server.tool()
     async def reload_config(ctx: Context) -> str:
         """Reload the io-mcp configuration from disk.
 
