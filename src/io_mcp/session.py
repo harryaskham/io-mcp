@@ -55,6 +55,13 @@ class Session:
     voice_override: Optional[str] = None
     emotion_override: Optional[str] = None
 
+    # ── Activity tracking (for auto-cleanup) ──────────────────────
+    last_activity: float = field(default_factory=time.time)
+
+    def touch(self) -> None:
+        """Update the last_activity timestamp."""
+        self.last_activity = time.time()
+
 
 class SessionManager:
     """Manages multiple sessions with tab navigation.
@@ -198,3 +205,37 @@ class SessionManager:
                 else:
                     parts.append(f"{name}{indicator}")
             return " │ ".join(parts)
+
+    def cleanup_stale(self, timeout_seconds: float = 300.0) -> list[str]:
+        """Remove sessions that have been inactive for longer than timeout.
+
+        A session is considered stale if:
+        - It is NOT the currently focused session
+        - It does NOT have active choices (pending present_choices)
+        - Its last_activity is older than timeout_seconds ago
+
+        Returns a list of removed session IDs.
+        """
+        now = time.time()
+        to_remove: list[str] = []
+
+        with self._lock:
+            for sid in list(self.session_order):
+                session = self.sessions.get(sid)
+                if session is None:
+                    continue
+                # Never remove the focused session
+                if sid == self.active_session_id:
+                    continue
+                # Never remove sessions with active choices
+                if session.active:
+                    continue
+                # Check if stale
+                if now - session.last_activity > timeout_seconds:
+                    to_remove.append(sid)
+
+        # Remove outside the lock (remove() acquires its own lock)
+        for sid in to_remove:
+            self.remove(sid)
+
+        return to_remove

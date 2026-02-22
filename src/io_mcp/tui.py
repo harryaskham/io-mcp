@@ -320,6 +320,19 @@ class IoMcpApp(App):
         self.query_one("#dwell-bar").display = False
         self.query_one("#speech-log").display = False
 
+        # Start periodic session cleanup (every 60 seconds, 5 min timeout)
+        self._cleanup_timer = self.set_interval(60, self._cleanup_stale_sessions)
+
+    def _cleanup_stale_sessions(self) -> None:
+        """Remove sessions that have been inactive for 5+ minutes.
+
+        Only removes non-focused sessions without active choices.
+        Updates the tab bar if any sessions were removed.
+        """
+        removed = self.manager.cleanup_stale(timeout_seconds=300.0)
+        if removed:
+            self._update_tab_bar()
+
     # ─── Tab bar rendering ─────────────────────────────────────────
 
     def _update_tab_bar(self) -> None:
@@ -363,6 +376,7 @@ class IoMcpApp(App):
         Each session has its own selection_event so multiple sessions
         can block independently.
         """
+        session.touch()
         session.preamble = preamble
         session.choices = list(choices)
         session.selection = None
@@ -571,6 +585,7 @@ class IoMcpApp(App):
         Background: queued, played when foreground is idle.
         Always logs to session's speech_log.
         """
+        session.touch()
         # Log the speech
         entry = SpeechEntry(text=text)
         session.speech_log.append(entry)

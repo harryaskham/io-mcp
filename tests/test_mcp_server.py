@@ -284,6 +284,90 @@ class TestSessionManager:
         assert mgr.count() == 1
 
 
+class TestSessionCleanup:
+    """Test automatic cleanup of stale sessions."""
+
+    def test_cleanup_removes_stale_sessions(self):
+        from io_mcp.session import SessionManager
+
+        mgr = SessionManager()
+        s1, _ = mgr.get_or_create("session-1")
+        s2, _ = mgr.get_or_create("session-2")
+        s3, _ = mgr.get_or_create("session-3")
+
+        # Make s2 and s3 stale (pretend they were active 10 minutes ago)
+        s2.last_activity = time.time() - 600
+        s3.last_activity = time.time() - 600
+
+        # s1 is focused (active_session_id), so it should NOT be removed
+        # s2 and s3 are stale and not focused, so they should be removed
+        removed = mgr.cleanup_stale(timeout_seconds=300.0)
+        assert "session-2" in removed
+        assert "session-3" in removed
+        assert "session-1" not in removed
+        assert mgr.count() == 1
+
+    def test_cleanup_preserves_active_choices(self):
+        from io_mcp.session import SessionManager
+
+        mgr = SessionManager()
+        s1, _ = mgr.get_or_create("a")
+        s2, _ = mgr.get_or_create("b")
+
+        # Make s2 stale but with active choices
+        s2.last_activity = time.time() - 600
+        s2.active = True
+
+        removed = mgr.cleanup_stale(timeout_seconds=300.0)
+        assert removed == []
+        assert mgr.count() == 2
+
+    def test_cleanup_preserves_focused_session(self):
+        from io_mcp.session import SessionManager
+
+        mgr = SessionManager()
+        s1, _ = mgr.get_or_create("focused")
+        s1.last_activity = time.time() - 600  # stale but focused
+
+        removed = mgr.cleanup_stale(timeout_seconds=300.0)
+        assert removed == []
+        assert mgr.count() == 1
+
+    def test_cleanup_no_stale_sessions(self):
+        from io_mcp.session import SessionManager
+
+        mgr = SessionManager()
+        mgr.get_or_create("fresh-1")
+        mgr.get_or_create("fresh-2")
+
+        removed = mgr.cleanup_stale(timeout_seconds=300.0)
+        assert removed == []
+        assert mgr.count() == 2
+
+    def test_touch_updates_activity(self):
+        from io_mcp.session import SessionManager
+
+        mgr = SessionManager()
+        s1, _ = mgr.get_or_create("s1")
+        s2, _ = mgr.get_or_create("s2")
+
+        # Make both stale
+        old_time = time.time() - 600
+        s1.last_activity = old_time
+        s2.last_activity = old_time
+
+        # Touch s2 to refresh it
+        s2.touch()
+
+        # Only s1 is not focused, so cleanup should only get non-focused stale ones
+        # s1 is focused so it won't be removed. Focus s2 instead.
+        mgr.focus("s2")
+
+        removed = mgr.cleanup_stale(timeout_seconds=300.0)
+        assert "s1" in removed
+        assert "s2" not in removed
+
+
 class TestGetSessionId:
     """Test _get_session_id extracts mcp_session_id or falls back."""
 
