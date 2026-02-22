@@ -73,6 +73,10 @@ class Frontend(Protocol):
         """Show choices and block until user selects. Returns selection dict."""
         ...
 
+    def present_multi_select(self, session: Any, preamble: str, choices: list[dict]) -> list[dict]:
+        """Show choices with checkboxes. Returns list of selected items."""
+        ...
+
     def session_speak(self, session: Any, text: str, block: bool = True,
                       priority: int = 0, emotion: str = "") -> None:
         """Speak text for a session."""
@@ -247,6 +251,40 @@ def create_mcp_server(
             None, frontend.present_choices, session, preamble, all_choices
         )
         return _attach_messages(json.dumps(result), session)
+
+    @server.tool()
+    @_safe_tool
+    async def present_multi_select(preamble: str, choices: list[dict], ctx: Context) -> str:
+        """Present choices where the user can select multiple items.
+
+        The user scrolls through options and toggles each with Enter.
+        A "Done" option at the bottom submits all checked items.
+        Use this for file picking, feature selection, or batch operations.
+
+        Parameters
+        ----------
+        preamble:
+            Brief summary spoken aloud before choices appear.
+        choices:
+            List of choice objects, each with:
+            - "label": Short label for the option
+            - "summary": Description (shown on screen)
+
+        Returns
+        -------
+        str
+            JSON string: {"selected": [{"label": "...", "summary": "..."}]}
+        """
+        if not choices:
+            return json.dumps({"selected": []})
+
+        session = _safe_get_session(ctx)
+
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None, frontend.present_multi_select, session, preamble, list(choices)
+        )
+        return _attach_messages(json.dumps({"selected": result}), session)
 
     @server.tool()
     @_safe_tool

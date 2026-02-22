@@ -549,6 +549,54 @@ class IoMcpApp(App):
 
         return session.selection or {"selected": "timeout", "summary": ""}
 
+    def present_multi_select(self, session: Session, preamble: str, choices: list[dict]) -> list[dict]:
+        """Show choices with toggleable checkboxes. Returns list of selected items.
+
+        Uses the same UI as present_choices but:
+        - Labels are prefixed with [ ] or [✓] to show checked state
+        - Enter toggles the current item instead of selecting
+        - A "Done" item at the end submits all checked items
+        """
+        self._touch_session(session)
+        checked = [False] * len(choices)
+
+        # Add "Done" as the last choice
+        done_label = "✅ Done — submit selections"
+        augmented = list(choices) + [{"label": done_label, "summary": "Submit all checked items"}]
+
+        def _make_labels():
+            """Build choice labels with checkbox state."""
+            result = []
+            for i, c in enumerate(choices):
+                prefix = "✓" if checked[i] else "○"
+                result.append({
+                    "label": f"[{prefix}] {c.get('label', '')}",
+                    "summary": c.get("summary", ""),
+                })
+            result.append({"label": done_label, "summary": f"{sum(checked)} item(s) selected"})
+            return result
+
+        while True:
+            labeled = _make_labels()
+            result = self.present_choices(session, preamble, labeled)
+            selected = result.get("selected", "")
+
+            if selected == done_label or selected == "quit":
+                break
+
+            # Find which item was toggled
+            for i, c in enumerate(choices):
+                check_label = f"[✓] {c.get('label', '')}"
+                uncheck_label = f"[○] {c.get('label', '')}"
+                if selected in (check_label, uncheck_label):
+                    checked[i] = not checked[i]
+                    state = "checked" if checked[i] else "unchecked"
+                    self._tts.speak_async(f"{c.get('label', '')} {state}")
+                    break
+
+        # Return all checked items
+        return [choices[i] for i in range(len(choices)) if checked[i]]
+
     def _speak_current_highlight(self, session: Session) -> None:
         """Read out the currently highlighted item."""
         if not self._is_focused(session.session_id):
