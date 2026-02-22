@@ -1,6 +1,9 @@
 package com.iomcp.app
 
 import android.os.Bundle
+import android.media.RingtoneManager
+import android.os.Vibrator
+import android.os.VibrationEffect
 import android.util.Log
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
@@ -16,6 +19,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -96,6 +100,15 @@ fun IoMcpScreen(
 ) {
     val scope = rememberCoroutineScope()
     val haptic = LocalHapticFeedback.current
+    val context = LocalContext.current
+
+    // Notification sound for new choices
+    val notificationSound = remember {
+        try {
+            val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+            RingtoneManager.getRingtone(context, uri)
+        } catch (_: Exception) { null }
+    }
 
     // State
     var connected by remember { mutableStateOf(false) }
@@ -124,6 +137,8 @@ fun IoMcpScreen(
                     choices = c
                     selectedIndex = 0
                     statusText = ""
+                    // Play notification sound
+                    try { notificationSound?.play() } catch (_: Exception) {}
                 },
                 onSpeechRequested = { _, text, _, _ ->
                     // Add to speech log (visual only — TUI handles audio)
