@@ -193,14 +193,14 @@ class TestConfigAccessors:
 
     def test_emotion_defaults(self, config_with_defaults):
         c = config_with_defaults
-        assert c.tts_emotion == "happy"
-        assert "happy" in c.emotion_preset_names
+        assert c.tts_emotion == "shy"
+        assert "shy" in c.emotion_preset_names
         assert "calm" in c.emotion_preset_names
 
     def test_tts_instructions_from_preset(self, config_with_defaults):
         c = config_with_defaults
         instructions = c.tts_instructions
-        assert "warm" in instructions.lower() or "cheerful" in instructions.lower()
+        assert "whisper" in instructions.lower() or "quiet" in instructions.lower()
 
     def test_voice_rotation_default_empty(self, config_with_defaults):
         assert config_with_defaults.tts_voice_rotation == []

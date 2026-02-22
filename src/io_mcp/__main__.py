@@ -119,11 +119,11 @@ def _run_mcp_server(app: IoMcpApp, host: str, port: int,
             def present_choices(self, session, preamble, choices):
                 return app.present_choices(session, preamble, choices)
 
-            def session_speak(self, session, text, block=True, priority=0):
-                return app.session_speak(session, text, block, priority)
+            def session_speak(self, session, text, block=True, priority=0, emotion=""):
+                return app.session_speak(session, text, block, priority, emotion)
 
             def session_speak_async(self, session, text):
-                return app.session_speak_async(session, text)
+                return app.session_speak(session, text, block=False)
 
             def on_session_created(self, session):
                 return app.on_session_created(session)

@@ -604,8 +604,13 @@ class IoMcpApp(App):
     # ─── Speech with priority ─────────────────────────────────────
 
     def session_speak(self, session: Session, text: str, block: bool = True,
-                      priority: int = 0) -> None:
-        """Speak text for a session, respecting priority rules."""
+                      priority: int = 0, emotion: str = "") -> None:
+        """Speak text for a session, respecting priority rules.
+
+        Args:
+            emotion: Optional per-call emotion override. Merged with config
+                     emotion if both provided. Takes precedence over session override.
+        """
         self._touch_session(session)
 
         # Emit event for remote frontends
@@ -629,7 +634,8 @@ class IoMcpApp(App):
         if self._is_focused(session.session_id):
             # Foreground: play immediately
             voice_ov = getattr(session, 'voice_override', None)
-            emotion_ov = getattr(session, 'emotion_override', None)
+            # Per-call emotion > session override > config default
+            emotion_ov = emotion if emotion else getattr(session, 'emotion_override', None)
 
             # Urgent messages always interrupt
             if priority >= 1:

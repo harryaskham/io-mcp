@@ -99,7 +99,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "model": "mai-voice-1",
             "voice": "en-US-Noa:MAI-Voice-1",
             "speed": 1.3,
-            "emotion": "happy",
+            "emotion": "shy",
             "voiceRotation": [],
             "emotionRotation": [],
         },
@@ -120,6 +120,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "neutral": "Speak in a natural, even tone without strong emotion.",
         "storyteller": "Speak like a captivating narrator. Vary pace and emphasis for dramatic effect.",
         "gentle": "Speak softly and kindly, as if comforting someone. Warm and tender.",
+        "shy": "Speak in a soft, quiet whisper. Be hesitant and gentle, as if sharing a secret. Keep volume low and intimate.",
     },
 }
 

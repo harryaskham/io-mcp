@@ -73,7 +73,8 @@ class Frontend(Protocol):
         """Show choices and block until user selects. Returns selection dict."""
         ...
 
-    def session_speak(self, session: Any, text: str, block: bool = True, priority: int = 0) -> None:
+    def session_speak(self, session: Any, text: str, block: bool = True,
+                      priority: int = 0, emotion: str = "") -> None:
         """Speak text for a session."""
         ...
 
@@ -263,7 +264,7 @@ def create_mcp_server(
         """
         session = _safe_get_session(ctx)
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, frontend.session_speak, session, text, True)
+        await loop.run_in_executor(None, frontend.session_speak, session, text, True, 0, "")
         preview = text[:100] + ("..." if len(text) > 100 else "")
         return _attach_messages(f"Spoke: {preview}", session)
 
@@ -286,7 +287,7 @@ def create_mcp_server(
             Confirmation message.
         """
         session = _safe_get_session(ctx)
-        frontend.session_speak_async(session, text)
+        frontend.session_speak(session, text, False, 0, "")
         preview = text[:100] + ("..." if len(text) > 100 else "")
         return _attach_messages(f"Spoke: {preview}", session)
 
@@ -310,7 +311,7 @@ def create_mcp_server(
         """
         session = _safe_get_session(ctx)
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, frontend.session_speak, session, text, True, 1)
+        await loop.run_in_executor(None, frontend.session_speak, session, text, True, 1, "")
         preview = text[:100] + ("..." if len(text) > 100 else "")
         return _attach_messages(f"Urgently spoke: {preview}", session)
 
