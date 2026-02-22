@@ -1,0 +1,505 @@
+"""MCP server module for io-mcp.
+
+Defines the MCP tools and server setup, decoupled from the frontend.
+The server communicates with any frontend that implements the Frontend protocol.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import os
+from typing import Any, Optional, Protocol
+
+from mcp.server.fastmcp import FastMCP, Context
+
+log = logging.getLogger("io-mcp.server")
+
+
+class Frontend(Protocol):
+    """Protocol that frontends (TUI, Android, etc.) must implement.
+
+    The MCP server calls these methods to interact with the user.
+    All methods must be thread-safe.
+    """
+
+    @property
+    def manager(self) -> Any:
+        """SessionManager instance."""
+        ...
+
+    @property
+    def config(self) -> Any:
+        """IoMcpConfig instance (or None)."""
+        ...
+
+    @property
+    def tts(self) -> Any:
+        """TTSEngine instance."""
+        ...
+
+    def present_choices(self, session: Any, preamble: str, choices: list[dict]) -> dict:
+        """Show choices and block until user selects. Returns selection dict."""
+        ...
+
+    def session_speak(self, session: Any, text: str, block: bool = True, priority: int = 0) -> None:
+        """Speak text for a session."""
+        ...
+
+    def session_speak_async(self, session: Any, text: str) -> None:
+        """Non-blocking speak for a session."""
+        ...
+
+    def on_session_created(self, session: Any) -> None:
+        """Called when a new session is created."""
+        ...
+
+    def update_tab_bar(self) -> None:
+        """Update the tab/session display."""
+        ...
+
+    def hot_reload(self) -> None:
+        """Trigger a hot reload of code and config."""
+        ...
+
+
+def _get_session_id(ctx: Context) -> str:
+    """Extract a stable session ID from the MCP context."""
+    session = ctx.session
+    sid = getattr(session, "mcp_session_id", None)
+    if sid:
+        return str(sid)
+    return str(id(session))
+
+
+def create_mcp_server(
+    frontend: Frontend,
+    host: str = "0.0.0.0",
+    port: int = 8444,
+    append_options: list[str] | None = None,
+    append_silent_options: list[str] | None = None,
+) -> FastMCP:
+    """Create and configure the MCP server with all tools.
+
+    Args:
+        frontend: Frontend implementation (TUI, Android, etc.)
+        host: Server bind address
+        port: Server port
+        append_options: Extra choice options to always append
+        append_silent_options: Extra silent options to always append
+
+    Returns:
+        Configured FastMCP server ready to run.
+    """
+    server = FastMCP("io-mcp", host=host, port=port)
+    _append = append_options or []
+    _append_silent = append_silent_options or []
+
+    # Build config-based extra options
+    _config_extras: list[dict] = []
+    if frontend.config:
+        for opt in frontend.config.extra_options:
+            _config_extras.append({
+                "label": opt.get("title", ""),
+                "summary": opt.get("description", ""),
+                "_silent": opt.get("silent", False),
+            })
+
+    def _drain_messages(session) -> list[str]:
+        msgs = getattr(session, 'pending_messages', None)
+        if msgs is None:
+            return []
+        drained = list(msgs)
+        msgs.clear()
+        return drained
+
+    def _attach_messages(response: str, session) -> str:
+        messages = _drain_messages(session)
+        if not messages:
+            return response
+        try:
+            data = json.loads(response)
+            data["user_messages"] = messages
+            return json.dumps(data)
+        except (json.JSONDecodeError, TypeError):
+            msg_text = "\n\n[User messages queued while you were working:\n" + "\n".join(f"- {m}" for m in messages) + "\n]"
+            return response + msg_text
+
+    def _safe_get_session(ctx: Context):
+        session_id = _get_session_id(ctx)
+        session, created = frontend.manager.get_or_create(session_id)
+        if created:
+            try:
+                frontend.on_session_created(session)
+            except Exception:
+                pass
+        return session
+
+    def _safe_tool(fn):
+        import functools
+        import traceback as tb
+
+        @functools.wraps(fn)
+        async def wrapper(*args, **kwargs):
+            try:
+                return await fn(*args, **kwargs)
+            except Exception as exc:
+                err_msg = f"{type(exc).__name__}: {str(exc)[:200]}"
+                log.error(f"Tool {fn.__name__} failed: {err_msg}")
+                try:
+                    with open("/tmp/io-mcp-tool-error.log", "a") as f:
+                        f.write(f"\n--- {fn.__name__} ---\n{tb.format_exc()}\n")
+                except Exception:
+                    pass
+                return json.dumps({"error": err_msg, "tool": fn.__name__})
+        return wrapper
+
+    # ─── Tools ────────────────────────────────────────────────────────
+
+    @server.tool()
+    @_safe_tool
+    async def present_choices(preamble: str, choices: list[dict], ctx: Context) -> str:
+        """Present multi-choice options to the user via scroll-wheel TUI.
+
+        The user navigates choices with a scroll wheel (or j/k keys) and
+        hears each option read aloud via TTS. After dwelling for 5 seconds
+        or pressing Enter, the selected choice is returned.
+
+        Parameters
+        ----------
+        preamble:
+            A brief 1-sentence summary spoken aloud before choices appear.
+            Keep it concise — it is read via TTS through earphones.
+        choices:
+            List of choice objects, each with:
+            - "label": Short 2-5 word label (read aloud on every scroll)
+            - "summary": 1-2 sentence explanation (shown on screen)
+
+        Returns
+        -------
+        str
+            JSON string: {"selected": "chosen label", "summary": "chosen summary"}
+        """
+        if not choices:
+            return json.dumps({"selected": "error", "summary": "No choices provided"})
+
+        session = _safe_get_session(ctx)
+
+        all_choices = list(choices)
+        for opt in _append:
+            if "::" in opt:
+                title, desc = opt.split("::", 1)
+            else:
+                title, desc = opt, ""
+            if not any(c.get("label", "").lower() == title.lower() for c in all_choices):
+                all_choices.append({"label": title, "summary": desc})
+
+        for opt in _append_silent:
+            if "::" in opt:
+                title, desc = opt.split("::", 1)
+            else:
+                title, desc = opt, ""
+            if not any(c.get("label", "").lower() == title.lower() for c in all_choices):
+                all_choices.append({"label": title, "summary": desc, "_silent": True})
+
+        for opt in _config_extras:
+            if not any(c.get("label", "").lower() == opt["label"].lower() for c in all_choices):
+                all_choices.append(dict(opt))
+
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None, frontend.present_choices, session, preamble, all_choices
+        )
+        return _attach_messages(json.dumps(result), session)
+
+    @server.tool()
+    @_safe_tool
+    async def speak(text: str, ctx: Context) -> str:
+        """Speak text aloud via TTS through the user's earphones.
+
+        Use this to narrate what you're doing — give short verbal status
+        updates so the user can follow along without looking at the screen.
+
+        Parameters
+        ----------
+        text:
+            The text to speak. Keep it concise (1-2 sentences max).
+
+        Returns
+        -------
+        str
+            Confirmation message.
+        """
+        session = _safe_get_session(ctx)
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, frontend.session_speak, session, text, True)
+        preview = text[:100] + ("..." if len(text) > 100 else "")
+        return _attach_messages(f"Spoke: {preview}", session)
+
+    @server.tool()
+    @_safe_tool
+    async def speak_async(text: str, ctx: Context) -> str:
+        """Speak text aloud via TTS WITHOUT blocking. Returns immediately.
+
+        Use this for quick status updates where you don't need to wait
+        for speech to finish before continuing work.
+
+        Parameters
+        ----------
+        text:
+            The text to speak. Keep it concise (1-2 sentences max).
+
+        Returns
+        -------
+        str
+            Confirmation message.
+        """
+        session = _safe_get_session(ctx)
+        frontend.session_speak_async(session, text)
+        preview = text[:100] + ("..." if len(text) > 100 else "")
+        return _attach_messages(f"Spoke: {preview}", session)
+
+    @server.tool()
+    @_safe_tool
+    async def speak_urgent(text: str, ctx: Context) -> str:
+        """Speak text with high priority, interrupting any current playback.
+
+        Use this for important alerts or time-sensitive information that
+        the user needs to hear immediately, even if other speech is playing.
+
+        Parameters
+        ----------
+        text:
+            The urgent text to speak. Keep it concise.
+
+        Returns
+        -------
+        str
+            Confirmation message.
+        """
+        session = _safe_get_session(ctx)
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, frontend.session_speak, session, text, True, 1)
+        preview = text[:100] + ("..." if len(text) > 100 else "")
+        return _attach_messages(f"Urgently spoke: {preview}", session)
+
+    @server.tool()
+    @_safe_tool
+    async def set_speed(speed: float, ctx: Context) -> str:
+        """Set the TTS playback speed.
+
+        Parameters
+        ----------
+        speed:
+            Speed multiplier (0.5 to 2.5). Higher = faster speech.
+
+        Returns
+        -------
+        str
+            Confirmation of the new speed setting.
+        """
+        if frontend.config:
+            frontend.config.set_tts_speed(speed)
+            frontend.config.save()
+            frontend.tts.clear_cache()
+        return f"Speed set to {speed}"
+
+    @server.tool()
+    @_safe_tool
+    async def set_voice(voice: str, ctx: Context) -> str:
+        """Set the TTS voice.
+
+        Parameters
+        ----------
+        voice:
+            Voice name. Available voices depend on the current TTS model.
+
+        Returns
+        -------
+        str
+            Confirmation of the new voice setting.
+        """
+        if frontend.config:
+            frontend.config.set_tts_voice(voice)
+            frontend.config.save()
+            frontend.tts.clear_cache()
+        return f"Voice set to {voice}"
+
+    @server.tool()
+    @_safe_tool
+    async def set_tts_model(model: str, ctx: Context) -> str:
+        """Set the TTS model. This also resets the voice to the new model's default.
+
+        Parameters
+        ----------
+        model:
+            Model name. Available: gpt-4o-mini-tts, mai-voice-1.
+
+        Returns
+        -------
+        str
+            Confirmation of the new model and voice.
+        """
+        if frontend.config:
+            frontend.config.set_tts_model(model)
+            frontend.config.save()
+            frontend.tts.clear_cache()
+            return f"TTS model set to {model}, voice reset to {frontend.config.tts_voice}"
+        return f"TTS model set to {model}"
+
+    @server.tool()
+    @_safe_tool
+    async def set_stt_model(model: str, ctx: Context) -> str:
+        """Set the STT (speech-to-text) model.
+
+        Parameters
+        ----------
+        model:
+            Model name. Available: whisper, gpt-4o-mini-transcribe, mai-ears-1.
+
+        Returns
+        -------
+        str
+            Confirmation of the new STT model.
+        """
+        if frontend.config:
+            frontend.config.set_stt_model(model)
+            frontend.config.save()
+        return f"STT model set to {model}"
+
+    @server.tool()
+    @_safe_tool
+    async def set_emotion(emotion: str, ctx: Context) -> str:
+        """Set the TTS emotion/voice style.
+
+        Parameters
+        ----------
+        emotion:
+            Preset name or custom instruction text.
+            Presets: happy, calm, excited, serious, friendly, neutral, storyteller, gentle.
+
+        Returns
+        -------
+        str
+            Confirmation of the new emotion setting.
+        """
+        if frontend.config:
+            frontend.config.set_tts_emotion(emotion)
+            frontend.config.save()
+            frontend.tts.clear_cache()
+        return f"Emotion set to: {emotion}"
+
+    @server.tool()
+    @_safe_tool
+    async def get_settings(ctx: Context) -> str:
+        """Get the current io-mcp settings.
+
+        Returns
+        -------
+        str
+            JSON string with current TTS model, voice, speed, and STT model.
+        """
+        if frontend.config:
+            return json.dumps({
+                "tts_model": frontend.config.tts_model_name,
+                "tts_voice": frontend.config.tts_voice,
+                "tts_speed": frontend.config.tts_speed,
+                "tts_emotion": frontend.config.tts_emotion,
+                "tts_voice_options": frontend.config.tts_voice_options,
+                "tts_models": frontend.config.tts_model_names,
+                "emotion_presets": frontend.config.emotion_preset_names,
+                "stt_model": frontend.config.stt_model_name,
+                "stt_models": frontend.config.stt_model_names,
+            })
+        return json.dumps({"error": "No config available"})
+
+    @server.tool()
+    @_safe_tool
+    async def rename_session(name: str, ctx: Context) -> str:
+        """Rename the current session tab.
+
+        Parameters
+        ----------
+        name:
+            The new tab name (e.g., "Code Review", "Tests", "Refactor").
+
+        Returns
+        -------
+        str
+            Confirmation of the new name.
+        """
+        session = _safe_get_session(ctx)
+        session.name = name
+        try:
+            frontend.update_tab_bar()
+        except Exception:
+            pass
+        return f"Session renamed to: {name}"
+
+    @server.tool()
+    @_safe_tool
+    async def reload_config(ctx: Context) -> str:
+        """Reload the io-mcp configuration from disk.
+
+        Re-reads ~/.config/io-mcp/config.yml and any local .io-mcp.yml,
+        then clears the TTS cache so new settings take effect immediately.
+
+        Returns
+        -------
+        str
+            Confirmation with the reloaded settings.
+        """
+        if frontend.config:
+            frontend.config.reload()
+            frontend.tts.clear_cache()
+            return json.dumps({
+                "status": "reloaded",
+                "tts_model": frontend.config.tts_model_name,
+                "tts_voice": frontend.config.tts_voice,
+                "tts_speed": frontend.config.tts_speed,
+                "tts_emotion": frontend.config.tts_emotion,
+                "stt_model": frontend.config.stt_model_name,
+            })
+        return json.dumps({"status": "no config to reload"})
+
+    @server.tool()
+    @_safe_tool
+    async def pull_latest(ctx: Context) -> str:
+        """Pull the latest changes from the remote git repository.
+
+        Runs `git pull --rebase origin main` in the io-mcp project directory,
+        then triggers a hot reload if successful.
+
+        Returns
+        -------
+        str
+            The git output or error message.
+        """
+        import subprocess as sp
+        project_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        try:
+            result = sp.run(
+                ["git", "pull", "--rebase", "origin", "main"],
+                cwd=project_dir,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            output = result.stdout.strip()
+            if result.returncode != 0:
+                err = result.stderr.strip()
+                return json.dumps({"status": "error", "output": output, "error": err})
+
+            try:
+                frontend.hot_reload()
+                return json.dumps({"status": "pulled_and_reloaded", "output": output})
+            except Exception:
+                return json.dumps({"status": "pulled", "output": output, "note": "Hot reload failed"})
+
+        except sp.TimeoutExpired:
+            return json.dumps({"status": "error", "error": "Git pull timed out after 30s"})
+        except Exception as e:
+            return json.dumps({"status": "error", "error": str(e)})
+
+    return server
