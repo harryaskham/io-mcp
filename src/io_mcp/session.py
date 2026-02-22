@@ -22,6 +22,15 @@ class SpeechEntry:
 
 
 @dataclass
+class HistoryEntry:
+    """A recorded selection from present_choices."""
+    label: str
+    summary: str
+    preamble: str
+    timestamp: float = field(default_factory=time.time)
+
+
+@dataclass
 class Session:
     """State for one MCP client session (one tab)."""
 
@@ -57,6 +66,9 @@ class Session:
 
     # ── Activity tracking (for auto-cleanup) ──────────────────────
     last_activity: float = field(default_factory=time.time)
+
+    # ── Selection history ─────────────────────────────────────────
+    history: list[HistoryEntry] = field(default_factory=list)
 
     def touch(self) -> None:
         """Update the last_activity timestamp."""

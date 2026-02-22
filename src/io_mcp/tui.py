@@ -26,7 +26,7 @@ from textual.timer import Timer
 from textual.widget import Widget
 from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, Static
 
-from .session import Session, SessionManager, SpeechEntry
+from .session import Session, SessionManager, SpeechEntry, HistoryEntry
 from .settings import Settings
 from .tts import PORTAUDIO_LIB, TTSEngine, _find_binary
 
@@ -37,6 +37,7 @@ if TYPE_CHECKING:
 
 # ─── Extra options (negative indices) ──────────────────────────────────────
 EXTRA_OPTIONS = [
+    {"label": "History", "summary": "Review past selections for this session"},
     {"label": "Notifications", "summary": "Check Android notifications"},
     {"label": "Previous tab", "summary": "Switch to the previous session tab"},
     {"label": "Next tab", "summary": "Switch to the next session tab"},
@@ -1828,6 +1829,15 @@ class IoMcpApp(App):
         self._tts.stop()
         self._tts.speak_async(f"Selected: {label}")
 
+        # Record in history
+        try:
+            history = getattr(session, 'history', None)
+            if history is not None:
+                history.append(HistoryEntry(
+                    label=label, summary=summary, preamble=session.preamble))
+        except Exception:
+            pass
+
         session.selection = {"selected": label, "summary": summary}
         session.selection_event.set()
         self._show_waiting(label)
@@ -1864,6 +1874,27 @@ class IoMcpApp(App):
             self._enter_settings()
         elif label == "Notifications":
             self._show_notifications()
+        elif label == "History":
+            self._show_history()
+
+    def _show_history(self) -> None:
+        """Read out recent selection history for the focused session."""
+        session = self._focused()
+        if not session:
+            self._tts.speak_async("No session active")
+            return
+
+        history = getattr(session, 'history', [])
+        if not history:
+            self._tts.speak_async("No history yet for this session")
+            return
+
+        # Read the last 5 selections
+        recent = history[-5:]
+        count = len(history)
+        self._tts.speak_async(f"{count} total selections. Last {len(recent)}:")
+        for i, entry in enumerate(reversed(recent), 1):
+            self._tts.speak(f"{i}. {entry.label}")
 
 
 # ─── TUI Controller (public API for MCP server) ─────────────────────────────
