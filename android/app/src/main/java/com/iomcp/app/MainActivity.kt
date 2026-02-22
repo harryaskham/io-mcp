@@ -5,7 +5,6 @@ import android.util.Log
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -16,10 +15,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.input.key.*
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -45,22 +41,50 @@ private const val API_BASE = "http://localhost:8445"
  * - Visual display of choices and session state
  * - Touch-based selection with haptic feedback
  * - Freeform text input for messages/replies
+ * - Keyboard shortcuts (j/k/enter/space) forwarded to TUI
+ * - Mic button for voice recording via TUI
  * - No TTS (avoids duplicate audio with TUI)
  */
 class MainActivity : ComponentActivity() {
+    // Shared session ID for key events
+    var currentSessionId: String = ""
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
-                IoMcpScreen()
+                IoMcpScreen(
+                    onSessionIdChanged = { currentSessionId = it },
+                )
             }
         }
+    }
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        val sid = currentSessionId
+        if (sid.isEmpty()) return super.onKeyDown(keyCode, event)
+
+        val key = when (keyCode) {
+            KeyEvent.KEYCODE_J, KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_VOLUME_DOWN -> "j"
+            KeyEvent.KEYCODE_K, KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_VOLUME_UP -> "k"
+            KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_DPAD_CENTER -> "enter"
+            KeyEvent.KEYCODE_SPACE -> "space"
+            else -> return super.onKeyDown(keyCode, event)
+        }
+
+        // Fire and forget — send key to TUI
+        kotlinx.coroutines.GlobalScope.launch(Dispatchers.IO) {
+            sendKey(sid, key)
+        }
+        return true
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun IoMcpScreen() {
+fun IoMcpScreen(
+    onSessionIdChanged: (String) -> Unit = {},
+) {
     val scope = rememberCoroutineScope()
     val haptic = LocalHapticFeedback.current
 
@@ -112,24 +136,29 @@ fun IoMcpScreen() {
         }
     }
 
-    // Periodically fetch sessions
+    // Periodically fetch sessions and set sessionId if empty
     LaunchedEffect(connected) {
         if (connected) {
             while (true) {
-                delay(5000)
                 try {
                     sessions = fetchSessions()
+                    // Auto-set sessionId to first active session if not set
+                    if (sessionId.isEmpty() && sessions.isNotEmpty()) {
+                        val active = sessions.firstOrNull { it.active } ?: sessions.first()
+                        sessionId = active.id
+                        onSessionIdChanged(active.id)
+                    }
                 } catch (_: Exception) {}
+                delay(3000)
             }
         }
     }
 
-    // Focus requester for key events
-    val focusRequester = remember { FocusRequester() }
-
-    // Request focus on mount so key events work
-    LaunchedEffect(Unit) {
-        focusRequester.requestFocus()
+    // Notify activity when sessionId changes
+    LaunchedEffect(sessionId) {
+        if (sessionId.isNotEmpty()) {
+            onSessionIdChanged(sessionId)
+        }
     }
 
     Scaffold(
@@ -141,36 +170,6 @@ fun IoMcpScreen() {
                 ),
             )
         },
-        modifier = Modifier
-            .focusRequester(focusRequester)
-            .focusable()
-            .onKeyEvent { event ->
-                if (event.type == KeyEventType.KeyDown) {
-                    when (event.key) {
-                        Key.J, Key.DirectionDown -> {
-                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                            scope.launch(Dispatchers.IO) { sendKey(sessionId, "j") }
-                            true
-                        }
-                        Key.K, Key.DirectionUp -> {
-                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                            scope.launch(Dispatchers.IO) { sendKey(sessionId, "k") }
-                            true
-                        }
-                        Key.Enter -> {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            scope.launch(Dispatchers.IO) { sendKey(sessionId, "enter") }
-                            true
-                        }
-                        Key.Spacebar -> {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            scope.launch(Dispatchers.IO) { sendKey(sessionId, "space") }
-                            true
-                        }
-                        else -> false
-                    }
-                } else false
-            },
     ) { padding ->
         Column(
             modifier = Modifier

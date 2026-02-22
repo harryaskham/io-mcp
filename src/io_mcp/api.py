@@ -376,6 +376,7 @@ class FrontendAPIHandler(http.server.BaseHTTPRequestHandler):
 
         Forwards key presses to the TUI: j/k for navigation,
         enter for select, space for voice input toggle.
+        Works even without active choices (e.g., space for voice recording).
         """
         key_fn = getattr(self.server, '_key_callback', None)
         if not key_fn:
