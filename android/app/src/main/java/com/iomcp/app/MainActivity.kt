@@ -2,8 +2,10 @@ package com.iomcp.app
 
 import android.os.Bundle
 import android.util.Log
+import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -14,7 +16,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.key.*
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -115,6 +120,14 @@ fun IoMcpScreen() {
         }
     }
 
+    // Focus requester for key events
+    val focusRequester = remember { FocusRequester() }
+
+    // Request focus on mount so key events work
+    LaunchedEffect(Unit) {
+        focusRequester.requestFocus()
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -124,6 +137,36 @@ fun IoMcpScreen() {
                 ),
             )
         },
+        modifier = Modifier
+            .focusRequester(focusRequester)
+            .focusable()
+            .onKeyEvent { event ->
+                if (event.type == KeyEventType.KeyDown) {
+                    when (event.key) {
+                        Key.J, Key.DirectionDown -> {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            scope.launch(Dispatchers.IO) { sendKey(sessionId, "j") }
+                            true
+                        }
+                        Key.K, Key.DirectionUp -> {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            scope.launch(Dispatchers.IO) { sendKey(sessionId, "k") }
+                            true
+                        }
+                        Key.Enter -> {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            scope.launch(Dispatchers.IO) { sendKey(sessionId, "enter") }
+                            true
+                        }
+                        Key.Spacebar -> {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            scope.launch(Dispatchers.IO) { sendKey(sessionId, "space") }
+                            true
+                        }
+                        else -> false
+                    }
+                } else false
+            },
     ) { padding ->
         Column(
             modifier = Modifier
@@ -470,6 +513,25 @@ suspend fun sendHighlight(sessionId: String, index: Int) {
         connection.responseCode
     } catch (e: Exception) {
         Log.e(TAG, "Failed to send highlight: ${e.message}")
+    }
+}
+
+suspend fun sendKey(sessionId: String, key: String) {
+    if (sessionId.isEmpty()) return
+    try {
+        val url = URL("$API_BASE/api/sessions/$sessionId/key")
+        val connection = url.openConnection() as HttpURLConnection
+        connection.requestMethod = "POST"
+        connection.setRequestProperty("Content-Type", "application/json")
+        connection.doOutput = true
+
+        val body = JSONObject().apply {
+            put("key", key)
+        }
+        connection.outputStream.write(body.toString().toByteArray())
+        connection.responseCode
+    } catch (e: Exception) {
+        Log.e(TAG, "Failed to send key: ${e.message}")
     }
 }
 

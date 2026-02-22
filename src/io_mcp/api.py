@@ -226,6 +226,9 @@ class FrontendAPIHandler(http.server.BaseHTTPRequestHandler):
         elif path.startswith("/api/sessions/") and path.endswith("/highlight"):
             session_id = path.split("/")[-2]
             self._handle_highlight(session_id, body)
+        elif path.startswith("/api/sessions/") and path.endswith("/key"):
+            session_id = path.split("/")[-2]
+            self._handle_key(session_id, body)
         else:
             self._send_json({"error": "not found"}, 404)
 
@@ -359,14 +362,39 @@ class FrontendAPIHandler(http.server.BaseHTTPRequestHandler):
 
         self._send_json({"status": "highlighted", "index": index})
 
+    def _handle_key(self, session_id: str, body: dict) -> None:
+        """Handle a key event from a remote frontend.
+
+        Forwards key presses to the TUI: j/k for navigation,
+        enter for select, space for voice input toggle.
+        """
+        key_fn = getattr(self.server, '_key_callback', None)
+        if not key_fn:
+            self._send_json({"error": "no key handler"}, 500)
+            return
+
+        key = body.get("key", "")
+        if key not in ("j", "k", "enter", "space"):
+            self._send_json({"error": f"unsupported key: {key}"}, 400)
+            return
+
+        try:
+            key_fn(session_id, key)
+            self._send_json({"status": "ok", "key": key})
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
 
 def start_api_server(frontend: Any, port: int = 8445, host: str = "0.0.0.0",
-                     highlight_callback: Any = None) -> threading.Thread:
+                     highlight_callback: Any = None,
+                     key_callback: Any = None) -> threading.Thread:
     """Start the frontend API HTTP server in a background thread."""
     server = http.server.HTTPServer((host, port), FrontendAPIHandler)
     server.frontend = frontend  # type: ignore
     if highlight_callback:
         server._highlight_callback = highlight_callback  # type: ignore
+    if key_callback:
+        server._key_callback = key_callback  # type: ignore
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     print(f"  Frontend API: http://{host}:{port}/api/events (SSE)", flush=True)

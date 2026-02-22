@@ -398,9 +398,29 @@ def main() -> None:
                 except Exception:
                     pass
 
+            def _on_key(session_id: str, key: str):
+                """Handle key event from Android app — forward to TUI."""
+                def _do_key():
+                    try:
+                        if key == "j":
+                            app.action_cursor_down()
+                        elif key == "k":
+                            app.action_cursor_up()
+                        elif key == "enter":
+                            app.action_select()
+                        elif key == "space":
+                            app.action_voice_input()
+                    except Exception:
+                        pass
+                try:
+                    app.call_from_thread(_do_key)
+                except Exception:
+                    pass
+
             api_port = args.port + 1  # 8445 by default
             start_api_server(_ApiFrontend(), port=api_port, host=args.host,
-                           highlight_callback=_on_highlight)
+                           highlight_callback=_on_highlight,
+                           key_callback=_on_key)
         except Exception as e:
             print(f"  Frontend API: failed to start — {e}", flush=True)
 
