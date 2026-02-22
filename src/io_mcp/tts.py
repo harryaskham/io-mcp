@@ -98,24 +98,28 @@ class TTSEngine:
             mode = f"{self._config.tts_model_name} ({self._config.tts_voice})"
         print(f"  TTS engine: {mode}", flush=True)
 
-    def _cache_key(self, text: str) -> str:
+    def _cache_key(self, text: str, voice_override: Optional[str] = None,
+                   emotion_override: Optional[str] = None) -> str:
         # Include backend, speed, and config-based settings in cache key
         # so cache is invalidated when voice/model/speed changes
         if self._config and not self._local:
+            voice = voice_override or self._config.tts_voice
+            emotion = emotion_override or self._config.tts_emotion
             params = (
                 f"{text}|local={self._local}"
                 f"|model={self._config.tts_model_name}"
-                f"|voice={self._config.tts_voice}"
+                f"|voice={voice}"
                 f"|speed={self._config.tts_speed}"
-                f"|emotion={self._config.tts_emotion}"
+                f"|emotion={emotion}"
             )
         else:
             params = f"{text}|local={self._local}|speed={self._speed}"
         return hashlib.md5(params.encode()).hexdigest()
 
-    def _generate_to_file(self, text: str) -> Optional[str]:
+    def _generate_to_file(self, text: str, voice_override: Optional[str] = None,
+                          emotion_override: Optional[str] = None) -> Optional[str]:
         """Generate audio for text and save to a WAV file. Returns file path."""
-        key = self._cache_key(text)
+        key = self._cache_key(text, voice_override, emotion_override)
 
         # Check cache
         cached = self._cache.get(key)
@@ -143,7 +147,9 @@ class TTSEngine:
                     return None
                 # Build tts command from config (explicit flags)
                 if self._config:
-                    cmd = [self._tts_bin] + self._config.tts_cli_args(text)
+                    cmd = [self._tts_bin] + self._config.tts_cli_args(
+                        text, voice_override=voice_override,
+                        emotion_override=emotion_override)
                 else:
                     # Legacy fallback: no config, use env vars
                     cmd = [self._tts_bin, text, "--stdout", "--response-format", "wav"]
@@ -181,7 +187,9 @@ class TTSEngine:
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             pool.map(self._generate_to_file, to_generate)
 
-    def play_cached(self, text: str, block: bool = False) -> None:
+    def play_cached(self, text: str, block: bool = False,
+                    voice_override: Optional[str] = None,
+                    emotion_override: Optional[str] = None) -> None:
         """Play a pregenerated audio clip. Falls back to live generation.
 
         If block=True, waits for playback to finish before returning.
@@ -190,7 +198,7 @@ class TTSEngine:
         if not self._paplay or self._muted:
             return
 
-        key = self._cache_key(text)
+        key = self._cache_key(text, voice_override, emotion_override)
         path = self._cache.get(key)
 
         if path and os.path.isfile(path):
@@ -201,7 +209,7 @@ class TTSEngine:
                 self._wait_for_playback()
         else:
             # Slow path: generate on demand
-            p = self._generate_to_file(text)
+            p = self._generate_to_file(text, voice_override, emotion_override)
             if p:
                 self.stop()
                 self._start_playback(p)
@@ -231,22 +239,18 @@ class TTSEngine:
             except Exception:
                 pass
 
-    def speak(self, text: str) -> None:
-        """Speak text and BLOCK until playback finishes.
+    def speak(self, text: str, voice_override: Optional[str] = None,
+              emotion_override: Optional[str] = None) -> None:
+        """Speak text and BLOCK until playback finishes."""
+        self.play_cached(text, block=True, voice_override=voice_override,
+                        emotion_override=emotion_override)
 
-        This is used by the MCP speak() tool — blocking ensures Claude
-        waits for narration to complete before sending the next tool call.
-        """
-        self.play_cached(text, block=True)
-
-    def speak_async(self, text: str) -> None:
-        """Speak text without blocking. Used for scroll TTS.
-
-        Runs generation + playback in a background thread so the calling
-        thread (e.g. Textual main thread) is never blocked.
-        """
+    def speak_async(self, text: str, voice_override: Optional[str] = None,
+                    emotion_override: Optional[str] = None) -> None:
+        """Speak text without blocking. Used for scroll TTS."""
         def _do():
-            self.play_cached(text, block=False)
+            self.play_cached(text, block=False, voice_override=voice_override,
+                           emotion_override=emotion_override)
         threading.Thread(target=_do, daemon=True).start()
 
     def stop(self) -> None:

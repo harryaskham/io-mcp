@@ -100,6 +100,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "voice": "en-US-Noa:MAI-Voice-1",
             "speed": 1.3,
             "emotion": "happy",
+            "voiceRotation": [],
+            "emotionRotation": [],
         },
         "stt": {
             "model": "whisper",
@@ -290,6 +292,16 @@ class IoMcpConfig:
         return list(self.expanded.get("emotionPresets", {}).keys())
 
     @property
+    def tts_voice_rotation(self) -> list[str]:
+        """List of voices to cycle through for multi-session tab assignment."""
+        return self.runtime.get("tts", {}).get("voiceRotation", [])
+
+    @property
+    def tts_emotion_rotation(self) -> list[str]:
+        """List of emotions to cycle through for multi-session tab assignment."""
+        return self.runtime.get("tts", {}).get("emotionRotation", [])
+
+    @property
     def tts_voice_options(self) -> list[str]:
         voice_def = self.tts_model_def.get("voice", {})
         return voice_def.get("options", [])
@@ -410,30 +422,35 @@ class IoMcpConfig:
 
     # ─── TTS CLI args ───────────────────────────────────────────────
 
-    def tts_cli_args(self, text: str) -> list[str]:
+    def tts_cli_args(self, text: str, voice_override: Optional[str] = None,
+                     emotion_override: Optional[str] = None) -> list[str]:
         """Build CLI args for the tts tool based on current config.
 
         Returns the full argument list (excluding the 'tts' binary itself).
+        Optional overrides for voice/emotion (used for per-session rotation).
         """
         provider = self.tts_provider_name
+        voice = voice_override or self.tts_voice
         args = [text]
 
         if provider == "azure-speech":
             args.extend(["--provider", "azure-speech"])
             args.extend(["--base-url", self.tts_base_url])
             args.extend(["--api-key", self.tts_api_key])
-            args.extend(["--voice", self.tts_voice])
+            args.extend(["--voice", voice])
         else:
             # openai provider
             args.extend(["--base-url", self.tts_base_url])
             args.extend(["--api-key", self.tts_api_key])
             args.extend(["--model", self.tts_model_name])
-            args.extend(["--voice", self.tts_voice])
+            args.extend(["--voice", voice])
 
         args.extend(["--speed", str(self.tts_speed)])
 
-        # Add emotion/instructions
-        instructions = self.tts_instructions
+        # Add emotion/instructions (override or default)
+        emotion = emotion_override or self.tts_emotion
+        presets = self.expanded.get("emotionPresets", {})
+        instructions = presets.get(emotion, emotion) if emotion else self.tts_instructions
         if instructions:
             args.extend(["--instructions", instructions])
 

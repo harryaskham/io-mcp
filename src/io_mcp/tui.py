@@ -669,9 +669,11 @@ class IoMcpApp(App):
             # Foreground: play immediately
             self._fg_speaking = True
             if block:
-                self._tts.speak(text)
+                self._tts.speak(text, voice_override=session.voice_override,
+                               emotion_override=session.emotion_override)
             else:
-                self._tts.speak_async(text)
+                self._tts.speak_async(text, voice_override=session.voice_override,
+                                     emotion_override=session.emotion_override)
             self._fg_speaking = False
         else:
             # Background: queue
@@ -842,7 +844,21 @@ class IoMcpApp(App):
     # ─── Session lifecycle ─────────────────────────────────────────
 
     def on_session_created(self, session: Session) -> None:
-        """Called when a new session is created (from MCP thread)."""
+        """Called when a new session is created (from MCP thread).
+
+        Assigns voice/emotion from rotation lists if configured.
+        """
+        # Assign voice/emotion rotation
+        if self._config:
+            voice_rot = self._config.tts_voice_rotation
+            emotion_rot = self._config.tts_emotion_rotation
+            session_idx = self.manager.count() - 1  # 0-based
+
+            if voice_rot:
+                session.voice_override = voice_rot[session_idx % len(voice_rot)]
+            if emotion_rot:
+                session.emotion_override = emotion_rot[session_idx % len(emotion_rot)]
+
         try:
             self.call_from_thread(self._update_tab_bar)
         except Exception:
@@ -1741,6 +1757,10 @@ class IoMcpApp(App):
 
             # Ensure TTS is unmuted after reload
             self._tts._muted = False
+
+            # Reload config from disk
+            if self._config:
+                self._config.reload()
 
             self._tts.speak_async("Reloaded")
         except Exception as e:

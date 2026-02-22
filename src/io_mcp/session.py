@@ -51,6 +51,10 @@ class Session:
     voice_recording: bool = False
     in_settings: bool = False
 
+    # ── Per-session TTS overrides (for voice/emotion rotation) ────
+    voice_override: Optional[str] = None
+    emotion_override: Optional[str] = None
+
 
 class SessionManager:
     """Manages multiple sessions with tab navigation.
