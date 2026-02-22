@@ -36,6 +36,7 @@ if TYPE_CHECKING:
 
 # ─── Extra options (negative indices) ──────────────────────────────────────
 EXTRA_OPTIONS = [
+    {"label": "Notifications", "summary": "Check Android notifications"},
     {"label": "Previous tab", "summary": "Switch to the previous session tab"},
     {"label": "Next tab", "summary": "Switch to the next session tab"},
     {"label": "Fast toggle", "summary": "Toggle speed between current and 1.8x"},
@@ -1159,6 +1160,85 @@ class IoMcpApp(App):
             self.query_one("#dwell-bar").display = True
             self._start_dwell()
 
+    def _show_notifications(self) -> None:
+        """Fetch and display Android notifications via termux-notification-list.
+
+        Shows notifications in the UI and reads a summary via TTS.
+        """
+        import json as json_mod
+
+        termux_exec_bin = _find_binary("termux-exec")
+        if not termux_exec_bin:
+            self._tts.speak_async("termux-exec not found. Can't check notifications.")
+            return
+
+        self._tts.speak_async("Checking notifications")
+
+        # Show loading state
+        status = self.query_one("#status", Label)
+        status.update("Checking notifications...")
+        status.display = True
+        self.query_one("#choices").display = False
+
+        def _fetch():
+            try:
+                result = subprocess.run(
+                    [termux_exec_bin, "termux-notification-list"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                if result.returncode != 0:
+                    self._tts.speak_async("Failed to get notifications")
+                    self.call_from_thread(self._restore_choices)
+                    return
+
+                notifications = json_mod.loads(result.stdout)
+                if not notifications:
+                    self._tts.speak_async("No notifications")
+                    self.call_from_thread(self._restore_choices)
+                    return
+
+                # Filter to interesting notifications (skip system/ongoing)
+                interesting = []
+                for n in notifications:
+                    title = n.get("title", "")
+                    content = n.get("content", "")
+                    pkg = n.get("packageName", "")
+                    # Skip io-mcp's own and common system notifications
+                    if any(skip in pkg for skip in ["termux", "android.system", "inputmethod"]):
+                        continue
+                    if title or content:
+                        # Shorten package name for readability
+                        app_name = pkg.split(".")[-1] if pkg else "unknown"
+                        interesting.append({
+                            "app": app_name,
+                            "title": title,
+                            "content": content,
+                        })
+
+                if not interesting:
+                    self._tts.speak_async("No new notifications")
+                    self.call_from_thread(self._restore_choices)
+                    return
+
+                # Read out notifications
+                count = len(interesting)
+                self._tts.speak(f"{count} notification{'s' if count != 1 else ''}")
+
+                for n in interesting[:10]:  # limit to 10
+                    text = f"{n['app']}: {n['title']}"
+                    if n['content'] and n['content'] != n['title']:
+                        text += f". {n['content']}"
+                    self._tts.speak(text)
+
+                self._tts.speak_async("End of notifications")
+                self.call_from_thread(self._restore_choices)
+
+            except Exception as e:
+                self._tts.speak_async(f"Notification check failed: {str(e)[:60]}")
+                self.call_from_thread(self._restore_choices)
+
+        threading.Thread(target=_fetch, daemon=True).start()
+
     def _transcribe_via_api(self, wav_path: str) -> str:
         """Send a WAV file directly to the transcription API.
 
@@ -1833,6 +1913,8 @@ class IoMcpApp(App):
             self._tts.speak_async(msg)
         elif label == "Settings":
             self._enter_settings()
+        elif label == "Notifications":
+            self._show_notifications()
 
 
 # ─── TUI Controller (public API for MCP server) ─────────────────────────────
