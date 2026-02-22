@@ -922,8 +922,12 @@ class IoMcpApp(App):
         session.voice_recording = True
         session.reading_options = False
 
-        # Mute TTS — stops current audio and prevents any new playback
-        # until unmute() is called in _stop_voice_recording
+        # Emit recording state for remote frontends
+        try:
+            frontend_api.emit_recording_state(session.session_id, True)
+        except Exception:
+            pass
+
         # Mute TTS — stops current audio and prevents any new playback
         # until unmute() is called in _stop_voice_recording.
         # Graceful fallback if TTSEngine predates mute() (pre-reload).
@@ -990,6 +994,12 @@ class IoMcpApp(App):
         session.voice_recording = False
         proc = self._voice_process
         self._voice_process = None
+
+        # Emit recording state for remote frontends
+        try:
+            frontend_api.emit_recording_state(session.session_id, False)
+        except Exception:
+            pass
 
         status = self.query_one("#status", Label)
         status.update("⏳ Transcribing...")

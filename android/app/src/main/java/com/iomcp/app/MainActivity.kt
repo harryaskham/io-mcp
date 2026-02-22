@@ -74,6 +74,7 @@ fun IoMcpScreen() {
     var sessions by remember { mutableStateOf<List<SessionInfo>>(emptyList()) }
     var messageText by remember { mutableStateOf("") }
     var speechLog by remember { mutableStateOf<List<String>>(emptyList()) }
+    var isRecording by remember { mutableStateOf(false) }
 
     // SSE connection
     LaunchedEffect(Unit) {
@@ -99,6 +100,9 @@ fun IoMcpScreen() {
                     choices = emptyList()
                     preamble = ""
                     statusText = "Selected: $label — waiting..."
+                },
+                onRecordingState = { _, recording ->
+                    isRecording = recording
                 },
                 onDisconnected = {
                     connected = false
@@ -302,8 +306,6 @@ fun IoMcpScreen() {
             }
 
             // Bottom bar: message input + mic + send
-            var isRecording by remember { mutableStateOf(false) }
-
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -314,7 +316,6 @@ fun IoMcpScreen() {
                 IconButton(
                     onClick = {
                         if (sessionId.isNotEmpty()) {
-                            isRecording = !isRecording
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             scope.launch(Dispatchers.IO) { sendKey(sessionId, "space") }
                         }
@@ -419,6 +420,7 @@ suspend fun connectToSSE(
     onChoicesPresented: (sessionId: String, preamble: String, choices: List<Choice>) -> Unit,
     onSpeechRequested: (sessionId: String, text: String, blocking: Boolean, priority: Int) -> Unit,
     onSelectionMade: (sessionId: String, label: String, summary: String) -> Unit,
+    onRecordingState: (sessionId: String, recording: Boolean) -> Unit,
     onDisconnected: () -> Unit,
 ) {
     while (true) {
@@ -480,6 +482,12 @@ suspend fun connectToSSE(
                                     val summary = payload.optString("summary", "")
                                     withContext(Dispatchers.Main) {
                                         onSelectionMade(sid, label, summary)
+                                    }
+                                }
+                                "recording_state" -> {
+                                    val recording = payload.optBoolean("recording", false)
+                                    withContext(Dispatchers.Main) {
+                                        onRecordingState(sid, recording)
                                     }
                                 }
                             }

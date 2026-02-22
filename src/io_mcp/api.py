@@ -161,6 +161,15 @@ def emit_selection_made(session_id: str, label: str, summary: str) -> None:
     ))
 
 
+def emit_recording_state(session_id: str, recording: bool) -> None:
+    """Emit event when voice recording state changes."""
+    event_bus.publish(FrontendEvent(
+        event_type="recording_state",
+        session_id=session_id,
+        data={"recording": recording},
+    ))
+
+
 # ─── HTTP Server for Frontend API ────────────────────────────────────────
 
 import http.server
