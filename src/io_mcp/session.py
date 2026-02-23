@@ -69,6 +69,8 @@ class Session:
     # ── Activity tracking (for auto-cleanup) ──────────────────────
     last_activity: float = field(default_factory=time.time)
     last_tool_call: float = field(default_factory=time.time)
+    last_tool_name: str = ""                 # name of the last MCP tool called
+    tool_call_count: int = 0                 # total number of tool calls made
     heartbeat_spoken: bool = False
     ambient_count: int = 0                  # how many ambient updates spoken this silence period
 
@@ -112,6 +114,125 @@ class Session:
         msgs.clear()
         lines = "\n".join(f"- {m}" for m in drained)
         return f"\n\n--- Queued User Messages ---\n{lines}"
+
+    def summary(self) -> str:
+        """Build a concise activity summary for this session.
+
+        Returns a short string describing what the agent has been doing,
+        suitable for display in the dashboard or narration via TTS.
+
+        Example outputs:
+            "12 tool calls, 3 selections. Last: speak_async. Working for 5m."
+            "Waiting for user selection. 8 tool calls."
+            "Just connected, no activity yet."
+        """
+        now = time.time()
+
+        # Tool call stats
+        count = self.tool_call_count
+        if count == 0:
+            return "Just connected, no activity yet."
+
+        # Selections made
+        n_selections = len(self.history)
+
+        # Health/status info
+        if self.active:
+            status = "Waiting for user selection"
+        elif self.health_status == "unresponsive":
+            status = "Unresponsive"
+        elif self.health_status == "warning":
+            status = "May be stuck"
+        else:
+            status = "Working"
+
+        # Elapsed time since connection
+        elapsed = now - (self.last_activity - (now - self.last_tool_call) if self.last_tool_call else now)
+        # More useful: time since first tool call
+        # Use creation time (approximated by last_activity minus elapsed)
+        session_age = now - (self.last_tool_call - (self.tool_call_count * 2))  # rough estimate
+        if self.history:
+            first_action = min(h.timestamp for h in self.history)
+            session_age = now - first_action
+
+        # Format duration
+        mins = int(session_age) // 60
+        if mins > 60:
+            age_str = f"{mins // 60}h{mins % 60:02d}m"
+        elif mins > 0:
+            age_str = f"{mins}m"
+        else:
+            age_str = f"{int(session_age)}s"
+
+        # Build parts
+        parts = [status]
+        parts.append(f"{count} tool call{'s' if count != 1 else ''}")
+        if n_selections > 0:
+            parts.append(f"{n_selections} selection{'s' if n_selections != 1 else ''}")
+        if self.last_tool_name:
+            parts.append(f"last: {self.last_tool_name}")
+        parts.append(f"up {age_str}")
+
+        return ". ".join(parts) + "."
+
+    def timeline(self, max_entries: int = 20) -> list[dict]:
+        """Build a chronological timeline of session activity.
+
+        Merges speech entries and history (selections) into a unified
+        timeline sorted by timestamp. Each entry has:
+            type:      "speech" | "selection"
+            text:      The speech text or selection label
+            detail:    Summary for selections, empty for speech
+            timestamp: Unix timestamp
+            age:       Human-readable age string ("2m ago", "1h30m ago")
+
+        Args:
+            max_entries: Maximum number of entries to return (most recent).
+
+        Returns:
+            List of timeline entry dicts, most recent first.
+        """
+        now = time.time()
+        entries: list[dict] = []
+
+        # Add speech entries
+        for s in self.speech_log:
+            entries.append({
+                "type": "speech",
+                "text": s.text,
+                "detail": "",
+                "timestamp": s.timestamp,
+            })
+
+        # Add history (selection) entries
+        for h in self.history:
+            entries.append({
+                "type": "selection",
+                "text": h.label,
+                "detail": h.summary,
+                "timestamp": h.timestamp,
+            })
+
+        # Sort by timestamp descending (most recent first)
+        entries.sort(key=lambda e: e["timestamp"], reverse=True)
+
+        # Trim to max
+        entries = entries[:max_entries]
+
+        # Add age strings
+        for e in entries:
+            age_secs = now - e["timestamp"]
+            if age_secs < 60:
+                e["age"] = f"{int(age_secs)}s ago"
+            elif age_secs < 3600:
+                mins = int(age_secs) // 60
+                e["age"] = f"{mins}m ago"
+            else:
+                hours = int(age_secs) // 3600
+                mins = (int(age_secs) % 3600) // 60
+                e["age"] = f"{hours}h{mins:02d}m ago"
+
+        return entries
 
 
 class SessionManager:

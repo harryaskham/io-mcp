@@ -3959,12 +3959,15 @@ class IoMcpApp(App):
             else:
                 time_str = f"{int(elapsed)//60}m{int(elapsed)%60:02d}s"
 
-            # Last speech
-            last_speech = ""
-            if sess.speech_log:
-                last_speech = sess.speech_log[-1].text
-                if len(last_speech) > 50:
-                    last_speech = last_speech[:50] + "..."
+            # Tool call stats
+            tool_count = getattr(sess, 'tool_call_count', 0)
+            n_selections = len(sess.history)
+            stats_parts = []
+            if tool_count > 0:
+                stats_parts.append(f"{tool_count} calls")
+            if n_selections > 0:
+                stats_parts.append(f"{n_selections} sel")
+            stats_str = f" [{s['fg_dim']}]({', '.join(stats_parts)})[/{s['fg_dim']}]" if stats_parts else ""
 
             # Pending messages
             msgs = getattr(sess, 'pending_messages', [])
@@ -3974,10 +3977,24 @@ class IoMcpApp(App):
             tmux_pane = getattr(sess, 'tmux_pane', '')
             pane_info = f" [{s['fg_dim']}]{tmux_pane}[/{s['fg_dim']}]" if tmux_pane else ""
 
-            label = f"{sess.name}  {status_text}  [{s['fg_dim']}]{time_str}[/{s['fg_dim']}]{msg_info}{pane_info}"
-            summary = last_speech if last_speech else "[dim]no recent speech[/dim]"
+            label = f"{sess.name}  {status_text}  [{s['fg_dim']}]{time_str}[/{s['fg_dim']}]{stats_str}{msg_info}{pane_info}"
 
-            list_view.append(ChoiceItem(label, summary, index=i + 1, display_index=i))
+            # Smart summary: show activity context from summary() or latest speech
+            try:
+                summary_text = sess.summary()
+                if len(summary_text) > 80:
+                    summary_text = summary_text[:80] + "..."
+            except Exception:
+                summary_text = ""
+            if not summary_text:
+                if sess.speech_log:
+                    summary_text = sess.speech_log[-1].text
+                    if len(summary_text) > 50:
+                        summary_text = summary_text[:50] + "..."
+                else:
+                    summary_text = "[dim]no activity[/dim]"
+
+            list_view.append(ChoiceItem(label, summary_text, index=i + 1, display_index=i))
             narration_parts.append(f"{sess.name}: {status_narr}, {time_str}.")
 
         list_view.display = True
@@ -3989,10 +4006,11 @@ class IoMcpApp(App):
 
     @_safe_action
     def action_agent_log(self) -> None:
-        """Show the full speech log for the focused agent.
+        """Show a unified timeline of agent activity.
 
-        Displays all speech entries in a scrollable list. Each entry
-        is read aloud when highlighted. Press g or Escape to return.
+        Merges speech entries and selection history into a chronological
+        timeline. Each entry shows type (speech/selection), age, and text.
+        Narrates entries when highlighted. Press g or Escape to return.
         """
         # Toggle off if already in log viewer
         if getattr(self, '_log_viewer_mode', False):
@@ -4010,9 +4028,10 @@ class IoMcpApp(App):
             self._tts.speak_async("No active session")
             return
 
-        speech_log = getattr(session, 'speech_log', [])
-        if not speech_log:
-            self._tts.speak_async("No speech log for this session")
+        # Build timeline from speech log + history
+        timeline = session.timeline(max_entries=50)
+        if not timeline:
+            self._tts.speak_async("No activity log for this session")
             return
 
         self._tts.stop()
@@ -4027,47 +4046,55 @@ class IoMcpApp(App):
 
         s = self._cs
 
+        # Show summary at top
+        summary_text = ""
+        try:
+            summary_text = session.summary()
+        except Exception:
+            pass
+
         preamble_widget = self.query_one("#preamble", Label)
-        count = len(speech_log)
-        preamble_widget.update(
-            f"[bold {s['accent']}]Agent Log[/bold {s['accent']}] — "
-            f"[{s['fg_dim']}]{session.name}[/{s['fg_dim']}] — "
-            f"{count} entr{'y' if count == 1 else 'ies'} "
-            f"[dim](g/esc to close)[/dim]"
-        )
+        count = len(timeline)
+        preamble_parts = [
+            f"[bold {s['accent']}]Timeline[/bold {s['accent']}]",
+            f"[{s['fg_dim']}]{session.name}[/{s['fg_dim']}]",
+            f"{count} entr{'y' if count == 1 else 'ies'}",
+        ]
+        if summary_text:
+            preamble_parts.append(f"[dim]{summary_text}[/dim]")
+        preamble_parts.append("[dim](g/esc to close)[/dim]")
+        preamble_widget.update(" — ".join(preamble_parts))
         preamble_widget.display = True
 
         list_view = self.query_one("#choices", ListView)
         list_view.clear()
 
-        import time as _time
-
-        for i, entry in enumerate(speech_log):
-            # Format timestamp as relative time
-            age = _time.time() - entry.timestamp
-            if age < 60:
-                time_str = f"{int(age)}s ago"
-            elif age < 3600:
-                time_str = f"{int(age)//60}m ago"
-            else:
-                time_str = f"{int(age)//3600}h{int(age)%3600//60:02d}m ago"
+        for i, entry in enumerate(timeline):
+            age = entry.get("age", "")
+            entry_type = entry.get("type", "speech")
+            text = entry.get("text", "")
+            detail = entry.get("detail", "")
 
             # Truncate text for display
-            text = entry.text
             display_text = text[:120] + ("..." if len(text) > 120 else "")
 
-            # Priority indicator
-            priority_mark = f"[{s['error']}]![/{s['error']}] " if entry.priority >= 1 else ""
+            # Type indicator
+            if entry_type == "selection":
+                type_mark = f"[{s['success']}]✓[/{s['success']}]"
+            else:
+                type_mark = f"[{s['blue']}]▸[/{s['blue']}]"
 
-            label = f"{priority_mark}[{s['fg_dim']}]{time_str}[/{s['fg_dim']}]  {display_text}"
-            list_view.append(ChoiceItem(label, "", index=i + 1, display_index=i))
+            label = f"{type_mark} [{s['fg_dim']}]{age}[/{s['fg_dim']}]  {display_text}"
+            summary = detail if detail else ""
+
+            list_view.append(ChoiceItem(label, summary, index=i + 1, display_index=i))
 
         list_view.display = True
-        # Start at the bottom (most recent)
-        list_view.index = max(0, len(speech_log) - 1)
+        # Start at the top (most recent, since timeline is sorted desc)
+        list_view.index = 0
         list_view.focus()
 
-        self._tts.speak_async(f"Agent log. {count} entries. Most recent shown.")
+        self._tts.speak_async(f"Timeline. {count} entries. Most recent shown.")
 
     # ─── Pane viewer ──────────────────────────────────────────────
 

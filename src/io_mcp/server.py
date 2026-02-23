@@ -174,6 +174,8 @@ def create_mcp_server(
         session.last_tool_call = _time.time()
         session.heartbeat_spoken = False
         session.ambient_count = 0
+        # Increment tool call counter
+        session.tool_call_count = getattr(session, 'tool_call_count', 0) + 1
         # Reset health status — agent is active again
         if getattr(session, 'health_status', 'healthy') != 'healthy':
             session.health_status = 'healthy'

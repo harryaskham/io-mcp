@@ -341,7 +341,140 @@ class TestSessionHealthMonitoring:
         assert "✗" in text   # unresponsive indicator
 
 
+class TestSessionSummaryAndTimeline:
+    """Tests for Session.summary() and Session.timeline() methods."""
 
+    def test_summary_no_activity(self):
+        """Summary for a freshly created session."""
+        s = Session(session_id="test-1", name="Agent 1")
+        summary = s.summary()
+        assert "no activity" in summary.lower() or "just connected" in summary.lower()
+
+    def test_summary_with_tool_calls(self):
+        """Summary reflects tool call count."""
+        s = Session(session_id="test-1", name="Agent 1")
+        s.tool_call_count = 12
+        s.last_tool_name = "speak_async"
+        summary = s.summary()
+        assert "12" in summary
+        assert "speak_async" in summary
+
+    def test_summary_with_selections(self):
+        """Summary includes selection count."""
+        s = Session(session_id="test-1", name="Agent 1")
+        s.tool_call_count = 5
+        s.history = [
+            HistoryEntry(label="Option A", summary="Did A", preamble="Choose"),
+            HistoryEntry(label="Option B", summary="Did B", preamble="Choose"),
+        ]
+        summary = s.summary()
+        assert "2" in summary  # 2 selections
+
+    def test_summary_active_session(self):
+        """Summary shows waiting status for active session."""
+        s = Session(session_id="test-1", name="Agent 1")
+        s.tool_call_count = 3
+        s.active = True
+        summary = s.summary()
+        assert "waiting" in summary.lower() or "selection" in summary.lower()
+
+    def test_summary_warning_status(self):
+        """Summary reflects warning health status."""
+        s = Session(session_id="test-1", name="Agent 1")
+        s.tool_call_count = 3
+        s.health_status = "warning"
+        summary = s.summary()
+        assert "stuck" in summary.lower()
+
+    def test_summary_unresponsive_status(self):
+        """Summary reflects unresponsive health status."""
+        s = Session(session_id="test-1", name="Agent 1")
+        s.tool_call_count = 3
+        s.health_status = "unresponsive"
+        summary = s.summary()
+        assert "unresponsive" in summary.lower()
+
+    def test_timeline_empty(self):
+        """Timeline is empty for new session."""
+        s = Session(session_id="test-1", name="Agent 1")
+        tl = s.timeline()
+        assert tl == []
+
+    def test_timeline_with_speech(self):
+        """Timeline includes speech entries."""
+        s = Session(session_id="test-1", name="Agent 1")
+        s.speech_log = [
+            SpeechEntry(text="Hello world"),
+            SpeechEntry(text="Running tests"),
+        ]
+        tl = s.timeline()
+        assert len(tl) == 2
+        assert all(e["type"] == "speech" for e in tl)
+
+    def test_timeline_with_history(self):
+        """Timeline includes selection history."""
+        s = Session(session_id="test-1", name="Agent 1")
+        s.history = [
+            HistoryEntry(label="Fix bug", summary="Fixed null check", preamble="Choose"),
+        ]
+        tl = s.timeline()
+        assert len(tl) == 1
+        assert tl[0]["type"] == "selection"
+        assert tl[0]["text"] == "Fix bug"
+        assert tl[0]["detail"] == "Fixed null check"
+
+    def test_timeline_merged_and_sorted(self):
+        """Timeline merges speech and history, sorted by time descending."""
+        s = Session(session_id="test-1", name="Agent 1")
+        now = time.time()
+        s.speech_log = [
+            SpeechEntry(text="First speech", timestamp=now - 30),
+            SpeechEntry(text="Last speech", timestamp=now - 5),
+        ]
+        s.history = [
+            HistoryEntry(label="Middle selection", summary="Selected",
+                         preamble="Choose", timestamp=now - 15),
+        ]
+        tl = s.timeline()
+        assert len(tl) == 3
+        # Most recent first
+        assert tl[0]["text"] == "Last speech"
+        assert tl[1]["text"] == "Middle selection"
+        assert tl[2]["text"] == "First speech"
+
+    def test_timeline_max_entries(self):
+        """Timeline respects max_entries limit."""
+        s = Session(session_id="test-1", name="Agent 1")
+        now = time.time()
+        s.speech_log = [
+            SpeechEntry(text=f"Speech {i}", timestamp=now - i)
+            for i in range(50)
+        ]
+        tl = s.timeline(max_entries=10)
+        assert len(tl) == 10
+
+    def test_timeline_has_age_strings(self):
+        """Timeline entries have human-readable age strings."""
+        s = Session(session_id="test-1", name="Agent 1")
+        s.speech_log = [
+            SpeechEntry(text="Recent", timestamp=time.time() - 30),
+        ]
+        tl = s.timeline()
+        assert len(tl) == 1
+        assert "ago" in tl[0]["age"]
+
+    def test_tool_call_count_default(self):
+        """Tool call count starts at 0."""
+        s = Session(session_id="test-1", name="Agent 1")
+        assert s.tool_call_count == 0
+
+    def test_last_tool_name_default(self):
+        """Last tool name starts empty."""
+        s = Session(session_id="test-1", name="Agent 1")
+        assert s.last_tool_name == ""
+
+
+class TestFrontendEvents:
     """Tests for Frontend API event system."""
 
     def test_frontend_event_to_sse(self):
