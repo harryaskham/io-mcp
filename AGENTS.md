@@ -138,6 +138,16 @@ extraOptions:               # project-local in .io-mcp.yml
   - title: Commit and push
     description: Stage, commit, and push changes
     silent: true
+
+quickActions:               # macros accessible via 'x' key
+  - key: "!"
+    label: Commit and push
+    action: message         # queue message to agent
+    value: "commit all changes and push"
+  - key: "@"
+    label: Run tests
+    action: command         # run shell command
+    value: "pytest tests/ -q"
 ```
 
 ## Keyboard Shortcuts (all configurable)
@@ -152,6 +162,7 @@ extraOptions:               # project-local in .io-mcp.yml
 | `u` | Undo last selection (re-present choices) |
 | `/` | Filter choices by typing |
 | `t` | Spawn new Claude Code agent (local or remote) |
+| `x` | Quick actions (configurable macros) |
 | `i` | Freeform text input |
 | `m` | Queue message for agent |
 | `space` | Voice input (toggle recording) |

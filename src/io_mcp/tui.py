@@ -238,6 +238,7 @@ class IoMcpApp(App):
         Binding("u", "undo_selection", "Undo", show=False),
         Binding("slash", "filter_choices", "Filter", show=False),
         Binding("t", "spawn_agent", "New agent", show=False),
+        Binding("x", "quick_actions", "Quick", show=False),
         Binding("r", "hot_reload", "Reload", show=False),
         Binding("1", "pick_1", "", show=False),
         Binding("2", "pick_2", "", show=False),
@@ -280,6 +281,7 @@ class IoMcpApp(App):
         undo_key = kb.get("undoSelection", "u")
         filter_key = kb.get("filterChoices", "slash")
         spawn_key = kb.get("spawnAgent", "t")
+        quick_key = kb.get("quickActions", "x")
         reload_key = kb.get("hotReload", "r")
         quit_key = kb.get("quit", "q")
 
@@ -299,6 +301,7 @@ class IoMcpApp(App):
             Binding(undo_key, "undo_selection", "Undo", show=False),
             Binding(filter_key, "filter_choices", "Filter", show=False),
             Binding(spawn_key, "spawn_agent", "New agent", show=False),
+            Binding(quick_key, "quick_actions", "Quick", show=False),
             Binding(reload_key, "hot_reload", "Reload", show=False),
         ] + [Binding(str(i), f"pick_{i}", "", show=False) for i in range(1, 10)]
         if quit_key:
@@ -1637,6 +1640,7 @@ class IoMcpApp(App):
         self._in_settings = False
         self._setting_edit_mode = False
         self._spawn_options = None
+        self._quick_action_options = None
 
         # UI first, then TTS
         if session and session.active:
@@ -1845,6 +1849,17 @@ class IoMcpApp(App):
                     self._do_spawn(spawn_opts[idx])
                     self._spawn_options = None
                     return
+                # Check if we're in quick action menu
+                qa_opts = getattr(self, '_quick_action_options', None)
+                if qa_opts and idx < len(qa_opts):
+                    self._in_settings = False
+                    action = qa_opts[idx].get("_action")
+                    self._quick_action_options = None
+                    if action is None:
+                        self._exit_settings()
+                    else:
+                        self._execute_quick_action(action)
+                    return
                 if idx < len(self._settings_items):
                     key = self._settings_items[idx]["key"]
                     if key == "close":
@@ -1937,6 +1952,17 @@ class IoMcpApp(App):
                 self._in_settings = False
                 self._do_spawn(spawn_opts[idx])
                 self._spawn_options = None
+                return
+            # Check if we're in quick action menu
+            qa_opts = getattr(self, '_quick_action_options', None)
+            if qa_opts and idx < len(qa_opts):
+                self._in_settings = False
+                action = qa_opts[idx].get("_action")
+                self._quick_action_options = None
+                if action is None:
+                    self._exit_settings()
+                else:
+                    self._execute_quick_action(action)
                 return
             if idx < len(self._settings_items):
                 key = self._settings_items[idx]["key"]
@@ -2584,6 +2610,122 @@ class IoMcpApp(App):
             self.call_from_thread(self._exit_settings)
 
         threading.Thread(target=_spawn, daemon=True).start()
+
+    def action_quick_actions(self) -> None:
+        """Show quick action picker.
+
+        Quick actions are configurable macros defined in .io-mcp.yml:
+        - message: Queue a predefined message to the focused agent
+        - command: Run a shell command and speak the result
+        """
+        session = self._focused()
+        if session and (session.input_mode or session.voice_recording):
+            return
+        if self._in_settings or self._filter_mode:
+            return
+
+        if not self._config:
+            self._tts.speak_async("No config loaded")
+            return
+
+        actions = self._config.quick_actions
+        if not actions:
+            self._tts.speak_async("No quick actions configured. Add quickActions to .io-mcp.yml")
+            return
+
+        self._tts.stop()
+
+        # Build options from quick actions
+        options = []
+        for qa in actions:
+            key = qa.get("key", "")
+            label = qa.get("label", qa.get("value", "")[:30])
+            action_type = qa.get("action", "message")
+            value = qa.get("value", "")
+            key_hint = f" [{key}]" if key else ""
+            type_icon = "💬" if action_type == "message" else "⚡"
+            options.append({
+                "label": f"{type_icon} {label}{key_hint}",
+                "summary": value[:60] if value else "",
+                "_action": qa,
+            })
+
+        options.append({"label": "Cancel", "summary": "Go back", "_action": None})
+
+        # Show as settings-style menu
+        self._in_settings = True
+        self._setting_edit_mode = False
+        self._spawn_options = None
+        self._quick_action_options = None  # clear any spawn state
+        self._quick_action_options = options
+
+        preamble_widget = self.query_one("#preamble", Label)
+        preamble_widget.update("[bold #bb9af7]Quick Actions[/bold #bb9af7]")
+        preamble_widget.display = True
+
+        list_view = self.query_one("#choices", ListView)
+        list_view.clear()
+        for i, opt in enumerate(options):
+            list_view.append(ChoiceItem(
+                opt["label"], opt.get("summary", ""),
+                index=i + 1, display_index=i,
+            ))
+        list_view.display = True
+        list_view.index = 0
+        list_view.focus()
+
+        self._tts.speak_async("Quick actions. Pick one to run.")
+
+    def _execute_quick_action(self, action: dict) -> None:
+        """Execute a quick action in a background thread."""
+        if not action:
+            self._exit_settings()
+            return
+
+        action_type = action.get("action", "message")
+        value = action.get("value", "")
+        label = action.get("label", "")
+
+        if action_type == "message":
+            # Queue message to focused agent
+            session = self._focused()
+            if session:
+                msgs = getattr(session, 'pending_messages', None)
+                if msgs is not None:
+                    msgs.append(value)
+                count = len(msgs) if msgs else 1
+                self._tts.speak_async(f"Queued: {label}. {count} pending.")
+            else:
+                self._tts.speak_async("No active session to send message to")
+            self._exit_settings()
+
+        elif action_type == "command":
+            self._tts.speak_async(f"Running: {label}")
+
+            def _run():
+                try:
+                    result = subprocess.run(
+                        value, shell=True, capture_output=True, text=True, timeout=60
+                    )
+                    output = result.stdout.strip() or result.stderr.strip()
+                    if result.returncode == 0:
+                        summary = output[:200] if output else "Done"
+                        self._tts.speak_async(f"Done. {summary}")
+                    else:
+                        err = output[:100] if output else f"exit code {result.returncode}"
+                        self._tts.speak_async(f"Failed: {err}")
+                except subprocess.TimeoutExpired:
+                    self._tts.speak_async("Command timed out after 60 seconds")
+                except Exception as e:
+                    self._tts.speak_async(f"Error: {str(e)[:80]}")
+
+                self.call_from_thread(self._exit_settings)
+
+            threading.Thread(target=_run, daemon=True).start()
+
+        else:
+            self._tts.speak_async(f"Unknown action type: {action_type}")
+            self._exit_settings()
 
 
 # ─── TUI Controller (public API for MCP server) ─────────────────────────────

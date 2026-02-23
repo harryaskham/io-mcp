@@ -135,6 +135,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "undoSelection": "u",
             "filterChoices": "slash",
             "spawnAgent": "t",
+            "quickActions": "x",
             "hotReload": "r",
             "quit": "q",
         },
@@ -467,6 +468,14 @@ class IoMcpConfig:
         Silent options are only read when scrolled to.
         """
         return self.expanded.get("extraOptions", [])
+
+    @property
+    def quick_actions(self) -> list[dict[str, Any]]:
+        """Get quick actions from config.
+
+        Each action has: key (single character), label, action (message|command), value.
+        """
+        return self.expanded.get("quickActions", [])
 
     # ─── Session settings ──────────────────────────────────────────
 
