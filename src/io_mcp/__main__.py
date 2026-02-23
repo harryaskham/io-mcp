@@ -317,10 +317,11 @@ def _ensure_proxy_running(proxy_address: str, backend_port: int, dev: bool = Fal
         print(f"  Proxy: failed to start — {e}", flush=True)
 
 def _detect_hostname() -> str:
-    """Detect the local hostname, preferring Tailscale hostname over .local names.
+    """Detect the local hostname, preferring Tailscale DNS name.
 
-    Checks tailscale status --json for the self node's hostname first,
-    falls back to socket.gethostname() with .local suffix stripped.
+    Checks tailscale status --json for the self node's DNS name first
+    (e.g. 'harrys-macbook-pro' from 'harrys-macbook-pro.domain.ts.net.'),
+    then falls back to HostName, then socket.gethostname().
     Result is cached after first call.
     """
     cached = getattr(_detect_hostname, '_cached', None)
@@ -341,9 +342,16 @@ def _detect_hostname() -> str:
             import json as _json
             ts = _json.loads(result.stdout)
             self_node = ts.get("Self", {})
-            ts_hostname = self_node.get("HostName", "")
-            if ts_hostname:
-                hostname = ts_hostname
+            # Prefer DNSName (clean, SSH-able) over HostName (may have spaces)
+            dns_name = self_node.get("DNSName", "")
+            if dns_name:
+                # Strip trailing dot and ts.net domain
+                # e.g. "harrys-macbook-pro.miku-owl.ts.net." → "harrys-macbook-pro"
+                hostname = dns_name.rstrip(".").split(".")[0]
+            if not hostname:
+                ts_hostname = self_node.get("HostName", "")
+                if ts_hostname:
+                    hostname = ts_hostname
     except Exception:
         pass
 
@@ -582,9 +590,14 @@ def _create_tool_dispatcher(app: IoMcpApp, append_options: list[str],
             if val:
                 setattr(session, field, val)
 
-        # Auto-detect hostname if not provided or if agent sent a .local name
+        # Auto-detect hostname if agent didn't provide a useful one
         agent_hostname = args.get("hostname", "")
-        if not agent_hostname or agent_hostname.endswith(".local"):
+        needs_detect = (
+            not agent_hostname
+            or agent_hostname == "localhost"
+            or agent_hostname.endswith(".local")
+        )
+        if needs_detect:
             detected = _detect_hostname()
             if detected:
                 session.hostname = detected
