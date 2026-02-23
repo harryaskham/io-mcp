@@ -73,8 +73,22 @@ def _kill_existing_backend() -> None:
         pass
 
     # Also kill anything holding the backend port
+    _kill_port_holder(DEFAULT_BACKEND_PORT)
+
+
+def _kill_port_holder(port: int) -> None:
+    """Kill whatever process is holding a TCP port.
+
+    Tries multiple methods since not all are available on every platform:
+    1. fuser (Linux)
+    2. lsof (macOS/Linux)
+    3. /proc/net/tcp scan (Linux/Android, no root needed)
+    """
+    import time
+
+    # Method 1: fuser
     try:
-        result = subprocess.run(["fuser", f"{DEFAULT_BACKEND_PORT}/tcp"],
+        result = subprocess.run(["fuser", f"{port}/tcp"],
                                 timeout=3, capture_output=True, text=True)
         for pid_str in result.stdout.strip().split():
             try:
@@ -83,9 +97,58 @@ def _kill_existing_backend() -> None:
                     os.kill(pid, signal.SIGKILL)
             except (ValueError, ProcessLookupError, PermissionError):
                 pass
-        import time
         time.sleep(0.3)
-    except Exception:
+        return
+    except (FileNotFoundError, Exception):
+        pass
+
+    # Method 2: lsof
+    try:
+        result = subprocess.run(["lsof", "-ti", f":{port}"],
+                                timeout=3, capture_output=True, text=True)
+        for pid_str in result.stdout.strip().split("\n"):
+            try:
+                pid = int(pid_str.strip())
+                if pid != os.getpid():
+                    os.kill(pid, signal.SIGKILL)
+            except (ValueError, ProcessLookupError, PermissionError):
+                pass
+        time.sleep(0.3)
+        return
+    except (FileNotFoundError, Exception):
+        pass
+
+    # Method 3: scan /proc/net/tcp (works on Android/Linux without root)
+    try:
+        hex_port = f"{port:04X}"
+        with open("/proc/net/tcp", "r") as f:
+            for line in f:
+                parts = line.strip().split()
+                if len(parts) < 10:
+                    continue
+                local = parts[1]
+                if local.endswith(f":{hex_port}"):
+                    try:
+                        inode = int(parts[9])
+                    except (ValueError, IndexError):
+                        continue
+                    # Find PID owning this inode via /proc/*/fd
+                    for pid_dir in os.listdir("/proc"):
+                        if not pid_dir.isdigit():
+                            continue
+                        try:
+                            fd_dir = f"/proc/{pid_dir}/fd"
+                            for fd in os.listdir(fd_dir):
+                                link = os.readlink(f"{fd_dir}/{fd}")
+                                if f"socket:[{inode}]" in link:
+                                    pid = int(pid_dir)
+                                    if pid != os.getpid():
+                                        os.kill(pid, signal.SIGKILL)
+                                        time.sleep(0.3)
+                                    return
+                        except (PermissionError, FileNotFoundError, OSError):
+                            continue
+    except (FileNotFoundError, PermissionError):
         pass
 
 
@@ -121,17 +184,7 @@ def _force_kill_all() -> None:
 
     # Kill anything on our ports
     for port in [DEFAULT_PROXY_PORT, DEFAULT_BACKEND_PORT]:
-        try:
-            result = subprocess.run(["fuser", f"{port}/tcp"], timeout=3,
-                                    capture_output=True, text=True)
-            pids = result.stdout.strip().split()
-            for pid_str in pids:
-                try:
-                    os.kill(int(pid_str.strip()), signal.SIGKILL)
-                except (ValueError, ProcessLookupError, PermissionError):
-                    pass
-        except Exception:
-            pass
+        _kill_port_holder(port)
 
     # Clean up PID files
     for pidfile in [PID_FILE, PROXY_PID_FILE]:
