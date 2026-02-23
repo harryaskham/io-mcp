@@ -114,7 +114,7 @@ def _is_proxy_alive() -> bool:
         return False
 
 
-def _ensure_proxy_running(proxy_address: str, backend_port: int) -> None:
+def _ensure_proxy_running(proxy_address: str, backend_port: int, dev: bool = False) -> None:
     """Start the MCP proxy daemon if not already running."""
     if _is_proxy_alive():
         print(f"  Proxy: already running (PID in {PROXY_PID_FILE})", flush=True)
@@ -147,9 +147,9 @@ def _ensure_proxy_running(proxy_address: str, backend_port: int) -> None:
             pass
 
         # Start proxy as a detached subprocess
-        # Try 'io-mcp' script first, fall back to 'python -m io_mcp'
+        # --dev forces uv run; otherwise try installed 'io-mcp' script
         import shutil
-        io_mcp_bin = shutil.which("io-mcp")
+        io_mcp_bin = None if dev else shutil.which("io-mcp")
         if io_mcp_bin:
             cmd = [io_mcp_bin, "server",
                    "--host", proxy_host,
@@ -619,6 +619,8 @@ def main() -> None:
     parser.add_argument("--append-option", action="append", default=[], metavar="LABEL")
     parser.add_argument("--append-silent-option", action="append", default=[], metavar="LABEL")
     parser.add_argument("--demo", action="store_true", help="Demo mode")
+    parser.add_argument("--dev", action="store_true",
+                        help="Dev mode: use 'uv run python -m io_mcp' for proxy subprocess")
     parser.add_argument("--freeform-tts", choices=["api", "local"], default="local")
     parser.add_argument("--freeform-tts-speed", type=float, default=1.6, metavar="SPEED")
     parser.add_argument("--freeform-tts-delimiters", default=" .,;:!?")
@@ -688,7 +690,7 @@ def main() -> None:
         atexit.register(_release_wake_lock)
 
         # Ensure proxy daemon is running
-        _ensure_proxy_running(args.proxy_address, args.port)
+        _ensure_proxy_running(args.proxy_address, args.port, dev=args.dev)
 
         # Create tool dispatcher and start backend HTTP server
         dispatch = _create_tool_dispatcher(app, args.append_option, args.append_silent_option or [])
