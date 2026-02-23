@@ -2287,8 +2287,16 @@ class IoMcpApp(App):
         self._tts.speak_async("Cancelled.")
 
     def on_key(self, event) -> None:
-        """Handle Escape in freeform/voice/settings/filter mode."""
+        """Handle Escape in freeform/voice/settings/filter mode.
+        Also intercepts space in message mode to trigger voice recording.
+        """
         session = self._focused()
+        # In message mode, space triggers voice recording instead of typing
+        if self._message_mode and event.key == "space" and not (session and session.voice_recording):
+            event.prevent_default()
+            event.stop()
+            self.action_voice_input()
+            return
         if self._filter_mode and event.key == "escape":
             self._exit_filter()
             self._tts.speak_async("Filter cleared")
