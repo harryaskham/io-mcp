@@ -368,38 +368,47 @@ def _detect_hostname() -> str:
 
 # ─── Backend tool dispatcher ──────────────────────────────────────────
 
-def _create_tool_dispatcher(app: IoMcpApp, append_options: list[str],
+def _create_tool_dispatcher(app_ref: list, append_options: list[str],
                             append_silent_options: list[str]):
     """Create a function that dispatches tool calls to the app.
 
+    Args:
+        app_ref: Mutable list containing [app] so the dispatch function
+                 always uses the current app (survives TUI restarts).
+        append_options: Extra options to append to present_choices.
+        append_silent_options: Silent extra options.
+
     Returns a callable(tool_name, args, session_id) -> str
     """
-    # Adapt IoMcpApp to the Frontend protocol
+    # Adapt IoMcpApp to the Frontend protocol via mutable reference
     class _AppFrontend:
         @property
+        def _app(self):
+            return app_ref[0]
+        @property
         def manager(self):
-            return app.manager
+            return self._app.manager
         @property
         def config(self):
-            return app._config
+            return self._app._config
         @property
         def tts(self):
-            return app._tts
+            return self._app._tts
 
         def present_choices(self, session, preamble, choices):
-            return app.present_choices(session, preamble, choices)
+            return self._app.present_choices(session, preamble, choices)
         def present_multi_select(self, session, preamble, choices):
-            return app.present_multi_select(session, preamble, choices)
+            return self._app.present_multi_select(session, preamble, choices)
         def session_speak(self, session, text, block=True, priority=0, emotion=""):
-            return app.session_speak(session, text, block, priority, emotion)
+            return self._app.session_speak(session, text, block, priority, emotion)
         def session_speak_async(self, session, text):
-            return app.session_speak(session, text, block=False)
+            return self._app.session_speak(session, text, block=False)
         def on_session_created(self, session):
-            return app.on_session_created(session)
+            return self._app.on_session_created(session)
         def update_tab_bar(self):
-            app.call_from_thread(app._update_tab_bar)
+            self._app.call_from_thread(self._app._update_tab_bar)
         def hot_reload(self):
-            app.call_from_thread(app.action_hot_reload)
+            self._app.call_from_thread(self._app.action_hot_reload)
 
     frontend = _AppFrontend()
 
@@ -489,6 +498,13 @@ def _create_tool_dispatcher(app: IoMcpApp, append_options: list[str],
             result = frontend.present_choices(session, preamble, all_choices)
             if result.get("selected") == "_undo":
                 continue
+            if result.get("selected") == "_restart":
+                # TUI is restarting — wait for the new app to be ready,
+                # then re-create session and re-present choices
+                _time.sleep(3.0)
+                session = _get_session(session_id)
+                session.last_tool_name = "present_choices"
+                continue
             break
 
         return _attach_messages(json.dumps(result), session) + _registration_reminder(session)
@@ -500,7 +516,15 @@ def _create_tool_dispatcher(app: IoMcpApp, append_options: list[str],
         choices = args.get("choices", [])
         if not choices:
             return json.dumps({"selected": []})
-        result = frontend.present_multi_select(session, preamble, list(choices))
+        while True:
+            result = frontend.present_multi_select(session, preamble, list(choices))
+            # Check for restart signal
+            if isinstance(result, dict) and result.get("selected") == "_restart":
+                _time.sleep(3.0)
+                session = _get_session(session_id)
+                session.last_tool_name = "present_multi_select"
+                continue
+            break
         return _attach_messages(json.dumps({"selected": result}), session)
 
     def _tool_speak(args, session_id):
@@ -1046,8 +1070,11 @@ def main() -> None:
         # Ensure proxy daemon is running
         _ensure_proxy_running(args.proxy_address, args.port, dev=args.dev)
 
-        # Create tool dispatcher and start backend HTTP server
-        dispatch = _create_tool_dispatcher(app, args.append_option, args.append_silent_option or [])
+        # Create tool dispatcher and start backend HTTP server.
+        # app_ref is a mutable list so the dispatcher always uses the current app
+        # (survives TUI restarts without restarting the backend server).
+        app_ref = [app]
+        dispatch = _create_tool_dispatcher(app_ref, args.append_option, args.append_silent_option or [])
 
         from .backend import start_backend_server
         start_backend_server(dispatch, host="0.0.0.0", port=args.port)
@@ -1061,13 +1088,14 @@ def main() -> None:
             class _ApiFrontend:
                 @property
                 def manager(self):
-                    return app.manager
+                    return app_ref[0].manager
                 @property
                 def config(self):
-                    return app._config
+                    return app_ref[0]._config
 
             def _on_highlight(session_id: str, choice_index: int):
-                session = app.manager.get(session_id)
+                _app = app_ref[0]
+                session = _app.manager.get(session_id)
                 if not session or not session.active:
                     return
                 extras = getattr(session, 'extras_count', len(EXTRA_OPTIONS))
@@ -1075,26 +1103,27 @@ def main() -> None:
                 def _set():
                     try:
                         from textual.widgets import ListView
-                        lv = app.query_one("#choices", ListView)
+                        lv = _app.query_one("#choices", ListView)
                         if lv.display and 0 <= display_idx < len(lv.children):
                             lv.index = display_idx
                     except Exception:
                         pass
                 try:
-                    app.call_from_thread(_set)
+                    _app.call_from_thread(_set)
                 except Exception:
                     pass
 
             def _on_key(session_id: str, key: str):
+                _app = app_ref[0]
                 def _do():
                     try:
-                        {"j": app.action_cursor_down, "k": app.action_cursor_up,
-                         "enter": app.action_select, "space": app.action_voice_input,
-                         "u": app.action_undo_selection}.get(key, lambda: None)()
+                        {"j": _app.action_cursor_down, "k": _app.action_cursor_up,
+                         "enter": _app.action_select, "space": _app.action_voice_input,
+                         "u": _app.action_undo_selection}.get(key, lambda: None)()
                     except Exception:
                         pass
                 try:
-                    app.call_from_thread(_do)
+                    _app.call_from_thread(_do)
                 except Exception:
                     pass
 
@@ -1122,6 +1151,9 @@ def main() -> None:
                 demo=args.demo,
                 config=config,
             )
+            # Update the mutable reference so the backend server
+            # dispatches to the new app instance
+            app_ref[0] = app
             continue
         break
 

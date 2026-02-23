@@ -1773,6 +1773,12 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                         self.manager.save_registered()
                     except Exception:
                         pass
+                    # Unblock all pending selection waits so backend threads
+                    # don't hang forever after the app is replaced
+                    for sess in self.manager.all_sessions():
+                        if sess.active:
+                            sess.selection = {"selected": "_restart", "summary": "TUI restarting"}
+                            sess.selection_event.set()
                     self._restart_requested = True
                     self.exit(return_code=42)
 
