@@ -54,7 +54,6 @@ An MCP server that lets you control Claude Code using only a smart ring (scroll 
 - **Frontend API** — REST + SSE on port 8445 for remote clients
 - **Android app** — Jetpack Compose companion app (touch, keyboard, mic, notifications)
 - **Configurable** — YAML config with env var expansion, per-project overrides
-- **Djent integration** — optional swarm management via `--djent` flag
 - **Watchdog** — auto-restart on crash with exponential backoff
 
 ## Quick Start
@@ -148,7 +147,7 @@ src/io_mcp/
 ├── __main__.py   # CLI entry, server startup, watchdog
 ├── api.py        # Frontend API: SSE events, REST endpoints
 ├── cli.py        # io-mcp-msg CLI tool
-├── config.py     # YAML config with env expansion, djent integration
+├── config.py     # YAML config with env expansion
 ├── server.py     # MCP tools, Frontend protocol
 ├── session.py    # Per-agent session state
 ├── settings.py   # Runtime settings wrapper
