@@ -3033,7 +3033,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         self._freeform_tts.stop()
         self._tts.stop()
-        self._speak_ui(f"Selected: {text}")
+        self._tts.speak_async(f"Selected: {text}")
 
         session.selection = {"selected": text, "summary": "(freeform input)"}
         session.selection_event.set()
@@ -3362,7 +3362,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         self._tts.play_chime("select")
 
         self._tts.stop()
-        self._speak_ui(f"Selected: {label}")
+        self._tts.speak_async(f"Selected: {label}")
 
         # Record in history
         try:
