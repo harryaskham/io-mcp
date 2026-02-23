@@ -1266,8 +1266,9 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
     def _show_activity_feed(self, session) -> None:
         """Populate the choices ListView with an activity feed for the session.
 
-        Shows recent speech log entries and session summary to fill empty space
-        when the agent is working without presenting choices.
+        Shows actionable options at the top, then session info and recent
+        speech log entries to fill empty space when the agent is working.
+        Items with index -1000..-1010 are actionable (queue message, settings, etc.)
         """
         try:
             s = self._cs
@@ -1278,13 +1279,41 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 list_view.display = False
                 return
 
-            # Session summary header
-            summary = session.summary()
+            di = 0  # display_index counter
+
+            # Actionable options at the top
             list_view.append(ChoiceItem(
-                f"[{s['accent']}]{session.name}[/{s['accent']}]",
-                summary,
-                index=-999, display_index=0,
+                f"[{s['accent']}]Queue message[/{s['accent']}]",
+                "Type or speak a message for the agent",
+                index=-1000, display_index=di,
             ))
+            di += 1
+            list_view.append(ChoiceItem(
+                f"[{s['accent']}]Settings[/{s['accent']}]",
+                "Open settings menu",
+                index=-1001, display_index=di,
+            ))
+            di += 1
+            if session.tmux_pane:
+                list_view.append(ChoiceItem(
+                    f"[{s['accent']}]Pane view[/{s['accent']}]",
+                    "Show live tmux output for this agent",
+                    index=-1002, display_index=di,
+                ))
+                di += 1
+            list_view.append(ChoiceItem(
+                f"[{s['accent']}]Dashboard[/{s['accent']}]",
+                "Overview of all agent sessions",
+                index=-1003, display_index=di,
+            ))
+            di += 1
+
+            # Separator
+            list_view.append(ChoiceItem(
+                f"[dim]--- {session.name} ---[/dim]", session.summary(),
+                index=-996, display_index=di,
+            ))
+            di += 1
 
             # Agent info (if registered)
             if session.registered:
@@ -1299,8 +1328,9 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                     list_view.append(ChoiceItem(
                         f"[dim]Agent info[/dim]",
                         "  ".join(info_parts),
-                        index=-998, display_index=1,
+                        index=-998, display_index=di,
                     ))
+                    di += 1
 
             # Tool stats
             if session.tool_call_count > 0:
@@ -1315,14 +1345,16 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 list_view.append(ChoiceItem(
                     f"[dim]{session.tool_call_count} tool calls[/dim]",
                     f"Last: {session.last_tool_name} ({ago})" if session.last_tool_name else "",
-                    index=-997, display_index=2,
+                    index=-997, display_index=di,
                 ))
+                di += 1
 
             # Separator
             list_view.append(ChoiceItem(
                 f"[dim]--- Recent activity ---[/dim]", "",
-                index=-996, display_index=3,
+                index=-995, display_index=di,
             ))
+            di += 1
 
             # Recent speech log entries (up to 20, most recent first)
             recent = list(reversed(session.speech_log[-20:]))
@@ -1340,12 +1372,13 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                     text = entry.text[:120] + ("..." if len(entry.text) > 120 else "")
                     list_view.append(ChoiceItem(
                         f"[dim]{age_str}[/dim]  {text}", "",
-                        index=-900 + i, display_index=4 + i,
+                        index=-900 + i, display_index=di,
                     ))
+                    di += 1
             else:
                 list_view.append(ChoiceItem(
                     f"[dim]No activity yet[/dim]", "",
-                    index=-900, display_index=4,
+                    index=-900, display_index=di,
                 ))
 
             list_view.display = True
@@ -3160,6 +3193,28 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         if getattr(self, '_settings_just_closed', False):
             return
         session = self._focused()
+
+        # Handle activity feed actions (when agent is working, no choices)
+        if session and not session.active:
+            list_view = self.query_one("#choices", ListView)
+            idx = list_view.index or 0
+            item = self._get_item_at_display_index(idx)
+            if item is not None:
+                ci = item.choice_index
+                if ci == -1000:
+                    self.action_queue_message()
+                    return
+                elif ci == -1001:
+                    self._enter_settings()
+                    return
+                elif ci == -1002:
+                    self.action_pane_view()
+                    return
+                elif ci == -1003:
+                    self.action_dashboard()
+                    return
+            return
+
         if not session or not session.active or not session.choices:
             return
         self._cancel_dwell()
