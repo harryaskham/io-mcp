@@ -132,16 +132,34 @@ def _ensure_proxy_running(proxy_address: str, backend_port: int) -> None:
     print(f"  Proxy: starting daemon on {proxy_host}:{proxy_port}...", flush=True)
 
     try:
-        # Start proxy as a detached subprocess
-        log_file = open("/tmp/io-mcp-server.log", "a")
+        # Kill any stale process holding the port
+        try:
+            with open(PROXY_PID_FILE, "r") as f:
+                old_pid = int(f.read().strip())
+            os.kill(old_pid, signal.SIGTERM)
+            import time
+            time.sleep(0.5)
+            try:
+                os.kill(old_pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+        except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError):
+            pass
+
+        # Find the project directory (for uv run)
+        project_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+        # Start proxy as a detached subprocess using uv run
+        log_file = open("/tmp/io-mcp-server.log", "w")
         proc = subprocess.Popen(
-            [sys.executable, "-m", "io_mcp", "server",
+            ["uv", "run", "python3", "-m", "io_mcp", "server",
              "--host", proxy_host,
              "--port", str(proxy_port),
              "--io-mcp-address", f"localhost:{backend_port}",
              "--foreground"],
             stdout=log_file,
             stderr=log_file,
+            cwd=project_dir,
             start_new_session=True,  # Detach from parent process group
         )
         # Write PID file ourselves since the child runs in foreground mode
@@ -149,7 +167,7 @@ def _ensure_proxy_running(proxy_address: str, backend_port: int) -> None:
             f.write(str(proc.pid))
 
         import time
-        time.sleep(0.5)
+        time.sleep(2.0)  # Give uvicorn time to bind
 
         if proc.poll() is None:
             print(f"  Proxy: started (PID {proc.pid})", flush=True)
