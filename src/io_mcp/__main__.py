@@ -154,7 +154,50 @@ def _run_mcp_server(app: IoMcpApp, host: str, port: int,
         with open("/tmp/io-mcp-server.log", "w") as f:
             f.write(f"Starting MCP server on {host}:{port}\n")
 
-        server.run(transport="streamable-http")
+        # Patch session manager to handle stale session IDs gracefully.
+        # After an io-mcp restart, Claude Code still sends the old
+        # mcp-session-id header. The SDK returns 404 "Session not found"
+        # for unknown IDs. We patch _handle_stateful_request to strip
+        # unknown session IDs so they're treated as new sessions.
+        import anyio
+        import uvicorn
+        from mcp.server.streamable_http_manager import MCP_SESSION_ID_HEADER
+
+        starlette_app = server.streamable_http_app()
+        sm = server.session_manager
+        _original_handle = sm._handle_stateful_request
+
+        async def _handle_stateful_with_recovery(scope, receive, send):
+            """Wrap stateful handler to recover from stale session IDs.
+
+            If the request has a session ID that doesn't exist in
+            _server_instances, strip it from headers so the SDK
+            creates a new session instead of returning 404.
+            """
+            from starlette.requests import Request as _Req
+            req = _Req(scope, receive)
+            sid = req.headers.get(MCP_SESSION_ID_HEADER)
+            if sid is not None and sid not in sm._server_instances:
+                # Strip the stale session ID from ASGI headers
+                raw_headers = list(scope.get("headers", []))
+                scope["headers"] = [
+                    (k, v) for k, v in raw_headers
+                    if k.lower() != MCP_SESSION_ID_HEADER.encode()
+                ]
+                with open("/tmp/io-mcp-server.log", "a") as f:
+                    f.write(f"Recovered stale session {sid[:12]}…, creating new\n")
+            return await _original_handle(scope, receive, send)
+
+        sm._handle_stateful_request = _handle_stateful_with_recovery
+
+        config = uvicorn.Config(
+            starlette_app,
+            host=host,
+            port=port,
+            log_level="warning",
+        )
+        uvi_server = uvicorn.Server(config)
+        anyio.run(uvi_server.serve)
 
     except Exception:
         import traceback
