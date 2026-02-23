@@ -1281,8 +1281,9 @@ class IoMcpApp(App):
             return
 
         num_choices = len(session.choices)
+        num_checked = len(self._multi_select_checked)
 
-        if idx < num_choices:
+        if idx < num_choices and idx < num_checked:
             # Toggle the choice
             self._multi_select_checked[idx] = not self._multi_select_checked[idx]
             state = "selected" if self._multi_select_checked[idx] else "unselected"

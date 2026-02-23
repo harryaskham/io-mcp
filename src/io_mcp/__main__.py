@@ -56,7 +56,8 @@ def _remove_pid_file() -> None:
 
 
 def _kill_existing_backend() -> None:
-    """Kill any previous io-mcp backend so we can rebind ports."""
+    """Kill any previous io-mcp backend so we can rebind port 8446."""
+    # Kill by PID file
     try:
         with open(PID_FILE, "r") as f:
             old_pid = int(f.read().strip())
@@ -69,6 +70,22 @@ def _kill_existing_backend() -> None:
             except (ProcessLookupError, PermissionError):
                 pass
     except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError):
+        pass
+
+    # Also kill anything holding the backend port
+    try:
+        result = subprocess.run(["fuser", f"{DEFAULT_BACKEND_PORT}/tcp"],
+                                timeout=3, capture_output=True, text=True)
+        for pid_str in result.stdout.strip().split():
+            try:
+                pid = int(pid_str.strip())
+                if pid != os.getpid():
+                    os.kill(pid, signal.SIGKILL)
+            except (ValueError, ProcessLookupError, PermissionError):
+                pass
+        import time
+        time.sleep(0.3)
+    except Exception:
         pass
 
 
