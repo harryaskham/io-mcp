@@ -128,6 +128,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "nextTab": "l",
             "prevTab": "h",
             "nextChoicesTab": "n",
+            "undoSelection": "u",
+            "filterChoices": "slash",
             "hotReload": "r",
             "quit": "q",
         },

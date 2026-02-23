@@ -416,6 +416,8 @@ def main() -> None:
                             app.action_select()
                         elif key == "space":
                             app.action_voice_input()
+                        elif key == "u":
+                            app.action_undo_selection()
                     except Exception:
                         pass
                 try:

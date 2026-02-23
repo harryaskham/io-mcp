@@ -247,10 +247,22 @@ def create_mcp_server(
             if not any(c.get("label", "").lower() == opt["label"].lower() for c in all_choices):
                 all_choices.append(dict(opt))
 
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None, frontend.present_choices, session, preamble, all_choices
-        )
+        # Undo loop: re-present if user selects undo
+        while True:
+            # Save current choices for undo support
+            session.last_preamble = preamble
+            session.last_choices = list(all_choices)
+
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None, frontend.present_choices, session, preamble, all_choices
+            )
+
+            # Check for undo sentinel
+            if result.get("selected") == "_undo":
+                continue  # Re-present the same choices
+            break
+
         return _attach_messages(json.dumps(result), session)
 
     @server.tool()

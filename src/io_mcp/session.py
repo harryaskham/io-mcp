@@ -74,6 +74,10 @@ class Session:
     # ── Selection history ─────────────────────────────────────────
     history: list[HistoryEntry] = field(default_factory=list)
 
+    # ── Undo support ──────────────────────────────────────────────
+    last_preamble: str = ""                  # previous present_choices preamble
+    last_choices: list[dict] = field(default_factory=list)  # previous choices
+
     # ── User message inbox (queued for next MCP response) ─────────
     pending_messages: list[str] = field(default_factory=list)
 

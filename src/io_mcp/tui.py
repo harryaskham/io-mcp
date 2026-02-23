@@ -186,6 +186,11 @@ class IoMcpApp(App):
         margin: 1 2;
         display: none;
     }
+
+    #filter-input {
+        margin: 0 2;
+        display: none;
+    }
     """
 
     BINDINGS = [
@@ -201,6 +206,8 @@ class IoMcpApp(App):
         Binding("l", "next_tab", "Next tab", show=False),
         Binding("h", "prev_tab", "Prev tab", show=False),
         Binding("n", "next_choices_tab", "Next choices", show=False),
+        Binding("u", "undo_selection", "Undo", show=False),
+        Binding("slash", "filter_choices", "Filter", show=False),
         Binding("r", "hot_reload", "Reload", show=False),
         Binding("1", "pick_1", "", show=False),
         Binding("2", "pick_2", "", show=False),
@@ -240,6 +247,8 @@ class IoMcpApp(App):
         next_tab_key = kb.get("nextTab", "l")
         prev_tab_key = kb.get("prevTab", "h")
         next_choices_key = kb.get("nextChoicesTab", "n")
+        undo_key = kb.get("undoSelection", "u")
+        filter_key = kb.get("filterChoices", "slash")
         reload_key = kb.get("hotReload", "r")
         quit_key = kb.get("quit", "q")
 
@@ -256,6 +265,8 @@ class IoMcpApp(App):
             Binding(next_tab_key, "next_tab", "Next tab", show=False),
             Binding(prev_tab_key, "prev_tab", "Prev tab", show=False),
             Binding(next_choices_key, "next_choices_tab", "Next choices", show=False),
+            Binding(undo_key, "undo_selection", "Undo", show=False),
+            Binding(filter_key, "filter_choices", "Filter", show=False),
             Binding(reload_key, "hot_reload", "Reload", show=False),
         ] + [Binding(str(i), f"pick_{i}", "", show=False) for i in range(1, 10)]
         if quit_key:
@@ -310,6 +321,9 @@ class IoMcpApp(App):
         # TTS deduplication — track last spoken text to avoid repeats
         self._last_spoken_text: str = ""
 
+        # Filter mode
+        self._filter_mode = False
+
     # ─── Helpers to get focused session ────────────────────────────
 
     def _focused(self) -> Optional[Session]:
@@ -363,8 +377,9 @@ class IoMcpApp(App):
         yield Vertical(id="speech-log")
         yield ListView(id="choices")
         yield Input(placeholder="Type your reply, press Enter to send, Escape to cancel", id="freeform-input")
+        yield Input(placeholder="Filter choices...", id="filter-input")
         yield DwellBar(id="dwell-bar")
-        yield Static("↕ Scroll  ⏎ Select  i Type  m Msg  ␣ Voice  s Settings  h/l Tabs  n Next  q Quit", id="footer-help")
+        yield Static("↕ Scroll  ⏎ Select  u Undo  i Type  m Msg  ␣ Voice  s Settings  h/l Tabs  q Quit", id="footer-help")
 
     def on_mount(self) -> None:
         self.title = "io-mcp"
@@ -787,7 +802,7 @@ class IoMcpApp(App):
         status = self.query_one("#status", Label)
         session = self._focused()
         session_name = session.name if session else ""
-        after_text = f"Selected: {label}" if self._demo else f"[{session_name}] Selected: {label} — waiting for agent..."
+        after_text = f"Selected: {label}" if self._demo else f"[{session_name}] Selected: {label} — waiting... (u=undo)"
         status.update(after_text)
         status.display = True
 
@@ -982,7 +997,10 @@ class IoMcpApp(App):
         self.query_one("#dwell-bar").display = False
         self._update_speech_log()
         status = self.query_one("#status", Label)
-        status.update(f"[{session.name}] Waiting for agent...")
+        # Show pending message count if any
+        msgs = getattr(session, 'pending_messages', [])
+        msg_info = f" · {len(msgs)} msg{'s' if len(msgs) != 1 else ''} queued" if msgs else ""
+        status.update(f"[{session.name}] Waiting for agent...{msg_info} (u=undo)")
         status.display = True
 
     def action_next_tab(self) -> None:
@@ -1930,6 +1948,104 @@ class IoMcpApp(App):
         self._tts.stop()
         self._tts.speak_async("Type or speak a message for the agent")
 
+    def action_filter_choices(self) -> None:
+        """Open filter input to narrow the choice list by typing."""
+        session = self._focused()
+        if not session or not session.active:
+            return
+        if session.input_mode or session.voice_recording or self._in_settings:
+            return
+        if self._filter_mode:
+            return
+
+        self._filter_mode = True
+        session.reading_options = False
+        self._tts.stop()
+
+        filter_inp = self.query_one("#filter-input", Input)
+        filter_inp.value = ""
+        filter_inp.styles.display = "block"
+        filter_inp.focus()
+
+        self._tts.speak_async("Type to filter choices")
+
+    def _apply_filter(self, query: str) -> None:
+        """Filter the choices ListView to show only matching items."""
+        session = self._focused()
+        if not session or not session.active:
+            return
+
+        list_view = self.query_one("#choices", ListView)
+        list_view.clear()
+        q = query.lower()
+
+        # Always show extras (but filtered too if query is set)
+        for i, e in enumerate(EXTRA_OPTIONS):
+            logical_idx = -(len(EXTRA_OPTIONS) - 1 - i)
+            if q and q not in e["label"].lower() and q not in e.get("summary", "").lower():
+                continue
+            list_view.append(ChoiceItem(
+                e["label"], e.get("summary", ""),
+                index=logical_idx, display_index=i,
+            ))
+
+        # Filter real choices
+        match_count = 0
+        for i, c in enumerate(session.choices):
+            label = c.get("label", "")
+            summary = c.get("summary", "")
+            if q and q not in label.lower() and q not in summary.lower():
+                continue
+            list_view.append(ChoiceItem(
+                label, summary,
+                index=i + 1, display_index=len(EXTRA_OPTIONS) + i,
+            ))
+            match_count += 1
+
+        # Focus the first real match if any
+        if match_count > 0 and len(list_view.children) > 0:
+            # Find first real choice in filtered list
+            for j, child in enumerate(list_view.children):
+                if isinstance(child, ChoiceItem) and child.choice_index > 0:
+                    list_view.index = j
+                    break
+
+    def _exit_filter(self) -> None:
+        """Exit filter mode and restore the full choice list."""
+        self._filter_mode = False
+        filter_inp = self.query_one("#filter-input", Input)
+        filter_inp.styles.display = "none"
+
+        # Restore full choices list
+        session = self._focused()
+        if session and session.active:
+            self._show_choices()
+            list_view = self.query_one("#choices", ListView)
+            list_view.focus()
+
+    @on(Input.Changed, "#filter-input")
+    def on_filter_changed(self, event: Input.Changed) -> None:
+        """Filter choices as user types."""
+        if not self._filter_mode:
+            return
+        self._apply_filter(event.value)
+
+    @on(Input.Submitted, "#filter-input")
+    def on_filter_submitted(self, event: Input.Submitted) -> None:
+        """Submit filter — exit filter mode, keep filtered view and focus list."""
+        if not self._filter_mode:
+            return
+        self._filter_mode = False
+        filter_inp = self.query_one("#filter-input", Input)
+        filter_inp.styles.display = "none"
+
+        # Keep the filtered list, just move focus to it
+        list_view = self.query_one("#choices", ListView)
+        list_view.focus()
+
+        count = sum(1 for c in list_view.children if isinstance(c, ChoiceItem) and c.choice_index > 0)
+        self._tts.speak_async(f"{count} matches")
+
     @on(Input.Changed, "#freeform-input")
     def on_freeform_changed(self, event: Input.Changed) -> None:
         session = self._focused()
@@ -1997,9 +2113,14 @@ class IoMcpApp(App):
         self._tts.speak_async("Cancelled.")
 
     def on_key(self, event) -> None:
-        """Handle Escape in freeform/voice/settings mode."""
+        """Handle Escape in freeform/voice/settings/filter mode."""
         session = self._focused()
-        if self._message_mode and event.key == "escape":
+        if self._filter_mode and event.key == "escape":
+            self._exit_filter()
+            self._tts.speak_async("Filter cleared")
+            event.prevent_default()
+            event.stop()
+        elif self._message_mode and event.key == "escape":
             self._cancel_freeform()
             event.prevent_default()
             event.stop()
@@ -2248,6 +2369,44 @@ class IoMcpApp(App):
         self._tts.speak_async(f"{count} total selections. Last {len(recent)}:")
         for i, entry in enumerate(reversed(recent), 1):
             self._tts.speak(f"{i}. {entry.label}")
+
+    def action_undo_selection(self) -> None:
+        """Undo the last selection — signal the server to re-present choices.
+
+        Only works when the session is in 'waiting for agent' state
+        (selection was made, agent hasn't responded yet). Sets a special
+        sentinel that the server's present_choices loop recognizes.
+        """
+        session = self._focused()
+        if not session:
+            return
+        if session.input_mode or session.voice_recording or self._in_settings:
+            return
+
+        # Undo only works right after a selection, before agent responds
+        # Check if we're in waiting state (selection was set, but event was already signaled)
+        # We can also undo during active choices (wrong scroll position)
+        if session.active:
+            # During active choices: just speak current position reminder
+            self._tts.stop()
+            self._tts.speak_async("Already in choices. Scroll to pick.")
+            return
+
+        # After selection: check if we have choices to go back to
+        last_choices = getattr(session, 'last_choices', [])
+        last_preamble = getattr(session, 'last_preamble', '')
+        if not last_choices:
+            self._tts.speak_async("Nothing to undo")
+            return
+
+        # Set the undo sentinel — the server loop will re-present
+        self._vibrate(100)
+        self._tts.stop()
+        self._tts.speak_async("Undoing selection")
+
+        # Re-activate the session with the saved choices
+        session.selection = {"selected": "_undo", "summary": ""}
+        session.selection_event.set()
 
 
 # ─── TUI Controller (public API for MCP server) ─────────────────────────────

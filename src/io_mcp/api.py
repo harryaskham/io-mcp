@@ -437,7 +437,7 @@ class FrontendAPIHandler(http.server.BaseHTTPRequestHandler):
             return
 
         key = body.get("key", "")
-        if key not in ("j", "k", "enter", "space"):
+        if key not in ("j", "k", "enter", "space", "u"):
             self._send_json({"error": f"unsupported key: {key}"}, 400)
             return
 

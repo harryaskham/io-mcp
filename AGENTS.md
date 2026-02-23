@@ -143,6 +143,8 @@ extraOptions:               # project-local in .io-mcp.yml
 | `1`-`9` | Instant select by number |
 | `h`/`l` | Previous/Next tab |
 | `n` | Next tab with open choices |
+| `u` | Undo last selection (re-present choices) |
+| `/` | Filter choices by typing |
 | `i` | Freeform text input |
 | `m` | Queue message for agent |
 | `space` | Voice input (toggle recording) |
