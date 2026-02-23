@@ -120,6 +120,7 @@ All keys are configurable via `config.keyBindings`.
 | `x` | Quick actions |
 | `c` | Conversation mode |
 | `d` | Dashboard |
+| `g` | Agent log |
 | `h`/`l` | Switch tabs |
 | `space` | Voice input |
 | `i` | Freeform text input |

@@ -165,6 +165,7 @@ quickActions:               # macros accessible via 'x' key
 | `x` | Quick actions (configurable macros) |
 | `c` | Toggle conversation mode (continuous voice chat) |
 | `d` | Dashboard (overview of all agent sessions) |
+| `g` | Agent log (scrollable speech transcript) |
 | `i` | Freeform text input |
 | `m` | Queue message for agent |
 | `space` | Voice input (toggle recording) |

@@ -111,6 +111,7 @@ class IoMcpApp(App):
         quick_key = kb.get("quickActions", "x")
         convo_key = kb.get("conversationMode", "c")
         dashboard_key = kb.get("dashboard", "d")
+        log_key = kb.get("agentLog", "g")
         reload_key = kb.get("hotReload", "r")
         quit_key = kb.get("quit", "q")
 
@@ -133,6 +134,7 @@ class IoMcpApp(App):
             Binding(quick_key, "quick_actions", "Quick", show=False),
             Binding(convo_key, "toggle_conversation", "Chat", show=False),
             Binding(dashboard_key, "dashboard", "Dashboard", show=False),
+            Binding(log_key, "agent_log", "Log", show=False),
             Binding(reload_key, "hot_reload", "Reload", show=False),
         ] + [Binding(str(i), f"pick_{i}", "", show=False) for i in range(1, 10)]
         if quit_key:
@@ -203,6 +205,9 @@ class IoMcpApp(App):
 
         # Conversation mode — continuous voice back-and-forth
         self._conversation_mode = False
+
+        # Log viewer mode
+        self._log_viewer_mode = False
 
     # ─── Helpers to get focused session ────────────────────────────
 
@@ -1579,6 +1584,7 @@ class IoMcpApp(App):
         self._spawn_options = None
         self._quick_action_options = None
         self._dashboard_mode = False
+        self._log_viewer_mode = False
 
         # Guard: prevent the Enter keypress that triggered "close" from
         # also firing _do_select on the freshly-restored choice list.
@@ -1757,6 +1763,14 @@ class IoMcpApp(App):
 
         # In settings mode
         if self._in_settings:
+            # Log viewer: read the full speech entry text
+            if getattr(self, '_log_viewer_mode', False):
+                if isinstance(event.item, ChoiceItem) and session:
+                    idx = event.item.display_index
+                    speech_log = getattr(session, 'speech_log', [])
+                    if idx < len(speech_log):
+                        self._tts.speak_async(speech_log[idx].text)
+                return
             if isinstance(event.item, ChoiceItem):
                 s = self._settings_items[event.item.display_index] if event.item.display_index < len(self._settings_items) else None
                 if s:
@@ -1812,6 +1826,11 @@ class IoMcpApp(App):
                     self._in_settings = False
                     self._do_spawn(spawn_opts[idx])
                     self._spawn_options = None
+                    return
+                # Check if we're in log viewer mode (Enter closes it)
+                if getattr(self, '_log_viewer_mode', False):
+                    self._log_viewer_mode = False
+                    self._exit_settings()
                     return
                 # Check if we're in dashboard mode
                 if getattr(self, '_dashboard_mode', False):
@@ -2722,6 +2741,88 @@ class IoMcpApp(App):
 
         # Narrate the dashboard
         self._tts.speak_async(" ".join(narration_parts))
+
+    @_safe_action
+    def action_agent_log(self) -> None:
+        """Show the full speech log for the focused agent.
+
+        Displays all speech entries in a scrollable list. Each entry
+        is read aloud when highlighted. Press g or Escape to return.
+        """
+        # Toggle off if already in log viewer
+        if getattr(self, '_log_viewer_mode', False):
+            self._log_viewer_mode = False
+            self._exit_settings()
+            return
+
+        session = self._focused()
+        if session and (session.input_mode or session.voice_recording):
+            return
+        if self._in_settings or self._filter_mode:
+            return
+
+        if not session:
+            self._tts.speak_async("No active session")
+            return
+
+        speech_log = getattr(session, 'speech_log', [])
+        if not speech_log:
+            self._tts.speak_async("No speech log for this session")
+            return
+
+        self._tts.stop()
+
+        # Enter log viewer mode (uses settings infrastructure for modal display)
+        self._in_settings = True
+        self._setting_edit_mode = False
+        self._spawn_options = None
+        self._quick_action_options = None
+        self._dashboard_mode = False
+        self._log_viewer_mode = True
+
+        s = self._cs
+
+        preamble_widget = self.query_one("#preamble", Label)
+        count = len(speech_log)
+        preamble_widget.update(
+            f"[bold {s['accent']}]Agent Log[/bold {s['accent']}] — "
+            f"[{s['fg_dim']}]{session.name}[/{s['fg_dim']}] — "
+            f"{count} entr{'y' if count == 1 else 'ies'} "
+            f"[dim](g/esc to close)[/dim]"
+        )
+        preamble_widget.display = True
+
+        list_view = self.query_one("#choices", ListView)
+        list_view.clear()
+
+        import time as _time
+
+        for i, entry in enumerate(speech_log):
+            # Format timestamp as relative time
+            age = _time.time() - entry.timestamp
+            if age < 60:
+                time_str = f"{int(age)}s ago"
+            elif age < 3600:
+                time_str = f"{int(age)//60}m ago"
+            else:
+                time_str = f"{int(age)//3600}h{int(age)%3600//60:02d}m ago"
+
+            # Truncate text for display
+            text = entry.text
+            display_text = text[:120] + ("..." if len(text) > 120 else "")
+
+            # Priority indicator
+            priority_mark = f"[{s['error']}]![/{s['error']}] " if entry.priority >= 1 else ""
+
+            label = f"{priority_mark}[{s['fg_dim']}]{time_str}[/{s['fg_dim']}]  {display_text}"
+            list_view.append(ChoiceItem(label, "", index=i + 1, display_index=i))
+
+        list_view.display = True
+        # Start at the bottom (most recent)
+        list_view.index = max(0, len(speech_log) - 1)
+        list_view.focus()
+
+        self._tts.speak_async(f"Agent log. {count} entries. Most recent shown.")
 
     @_safe_action
     def action_quick_actions(self) -> None:
