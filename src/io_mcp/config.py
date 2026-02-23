@@ -115,6 +115,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "initialDelaySecs": 30,
             "repeatIntervalSecs": 45,
         },
+        "agents": {
+            "defaultWorkdir": "~",
+            "hosts": [],
+        },
         "keyBindings": {
             "cursorDown": "j",
             "cursorUp": "k",
@@ -130,6 +134,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "nextChoicesTab": "n",
             "undoSelection": "u",
             "filterChoices": "slash",
+            "spawnAgent": "t",
             "hotReload": "r",
             "quit": "q",
         },
@@ -501,6 +506,29 @@ class IoMcpConfig:
             self.expanded.get("config", {})
             .get("ambient", {})
             .get("repeatIntervalSecs", 45)
+        )
+
+    # ─── Agent spawner settings ───────────────────────────────────
+
+    @property
+    def agent_default_workdir(self) -> str:
+        """Default working directory for spawned agents."""
+        return str(
+            self.expanded.get("config", {})
+            .get("agents", {})
+            .get("defaultWorkdir", "~")
+        )
+
+    @property
+    def agent_hosts(self) -> list[dict]:
+        """Configured remote hosts for spawning agents.
+
+        Each host has: name, host, workdir (optional).
+        """
+        return list(
+            self.expanded.get("config", {})
+            .get("agents", {})
+            .get("hosts", [])
         )
 
     @property

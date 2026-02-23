@@ -237,6 +237,7 @@ class IoMcpApp(App):
         Binding("n", "next_choices_tab", "Next choices", show=False),
         Binding("u", "undo_selection", "Undo", show=False),
         Binding("slash", "filter_choices", "Filter", show=False),
+        Binding("t", "spawn_agent", "New agent", show=False),
         Binding("r", "hot_reload", "Reload", show=False),
         Binding("1", "pick_1", "", show=False),
         Binding("2", "pick_2", "", show=False),
@@ -278,6 +279,7 @@ class IoMcpApp(App):
         next_choices_key = kb.get("nextChoicesTab", "n")
         undo_key = kb.get("undoSelection", "u")
         filter_key = kb.get("filterChoices", "slash")
+        spawn_key = kb.get("spawnAgent", "t")
         reload_key = kb.get("hotReload", "r")
         quit_key = kb.get("quit", "q")
 
@@ -296,6 +298,7 @@ class IoMcpApp(App):
             Binding(next_choices_key, "next_choices_tab", "Next choices", show=False),
             Binding(undo_key, "undo_selection", "Undo", show=False),
             Binding(filter_key, "filter_choices", "Filter", show=False),
+            Binding(spawn_key, "spawn_agent", "New agent", show=False),
             Binding(reload_key, "hot_reload", "Reload", show=False),
         ] + [Binding(str(i), f"pick_{i}", "", show=False) for i in range(1, 10)]
         if quit_key:
@@ -1633,6 +1636,7 @@ class IoMcpApp(App):
             session.in_settings = False
         self._in_settings = False
         self._setting_edit_mode = False
+        self._spawn_options = None
 
         # UI first, then TTS
         if session and session.active:
@@ -1834,6 +1838,13 @@ class IoMcpApp(App):
         if self._in_settings:
             if isinstance(event.item, ChoiceItem):
                 idx = event.item.display_index
+                # Check if we're in spawn menu
+                spawn_opts = getattr(self, '_spawn_options', None)
+                if spawn_opts and idx < len(spawn_opts):
+                    self._in_settings = False
+                    self._do_spawn(spawn_opts[idx])
+                    self._spawn_options = None
+                    return
                 if idx < len(self._settings_items):
                     key = self._settings_items[idx]["key"]
                     if key == "close":
@@ -1920,6 +1931,13 @@ class IoMcpApp(App):
         if self._in_settings:
             list_view = self.query_one("#choices", ListView)
             idx = list_view.index or 0
+            # Check if we're in spawn menu
+            spawn_opts = getattr(self, '_spawn_options', None)
+            if spawn_opts and idx < len(spawn_opts):
+                self._in_settings = False
+                self._do_spawn(spawn_opts[idx])
+                self._spawn_options = None
+                return
             if idx < len(self._settings_items):
                 key = self._settings_items[idx]["key"]
                 if key == "close":
@@ -2436,6 +2454,136 @@ class IoMcpApp(App):
         # Re-activate the session with the saved choices
         session.selection = {"selected": "_undo", "summary": ""}
         session.selection_event.set()
+
+    def action_spawn_agent(self) -> None:
+        """Spawn a new Claude Code agent instance.
+
+        Shows a menu of spawn targets:
+        - Local (current machine, in tmux)
+        - Remote hosts from config
+
+        The spawned agent auto-connects to io-mcp via the MCP plugin.
+        """
+        session = self._focused()
+        if session and (session.input_mode or session.voice_recording):
+            return
+        if self._in_settings or self._filter_mode:
+            return
+
+        self._tts.stop()
+
+        # Build spawn options
+        options = [{"label": "Local agent", "summary": "Spawn Claude Code on this machine in a new tmux window"}]
+
+        # Add remote hosts from config
+        if self._config:
+            for host in self._config.agent_hosts:
+                name = host.get("name", host.get("host", "?"))
+                hostname = host.get("host", "")
+                workdir = host.get("workdir", "~")
+                options.append({
+                    "label": f"Remote: {name}",
+                    "summary": f"SSH to {hostname}, work in {workdir}",
+                    "_host": hostname,
+                    "_workdir": workdir,
+                })
+
+        options.append({"label": "Cancel", "summary": "Go back"})
+
+        # Show spawn menu using settings-style UI
+        self._in_settings = True
+        self._setting_edit_mode = False
+
+        # Store spawn options for selection handler
+        self._spawn_options = options
+
+        preamble_widget = self.query_one("#preamble", Label)
+        preamble_widget.update("[bold #7aa2f7]Spawn New Agent[/bold #7aa2f7]")
+        preamble_widget.display = True
+
+        list_view = self.query_one("#choices", ListView)
+        list_view.clear()
+        for i, opt in enumerate(options):
+            list_view.append(ChoiceItem(
+                opt["label"], opt.get("summary", ""),
+                index=i + 1, display_index=i,
+            ))
+        list_view.display = True
+        list_view.index = 0
+        list_view.focus()
+
+        self._tts.speak_async("Spawn a new agent. Pick a target.")
+
+    def _do_spawn(self, option: dict) -> None:
+        """Execute the agent spawn in a background thread."""
+        label = option.get("label", "")
+        host = option.get("_host", "")
+        workdir = option.get("_workdir", "")
+
+        if label == "Cancel":
+            self._exit_settings()
+            return
+
+        self._tts.speak_async(f"Spawning {label}")
+
+        def _spawn():
+            try:
+                import shutil
+                tmux = shutil.which("tmux")
+                if not tmux:
+                    self._tts.speak_async("tmux not found. Cannot spawn agent.")
+                    self.call_from_thread(self._exit_settings)
+                    return
+
+                claude_bin = shutil.which("claude")
+                if not claude_bin and not host:
+                    self._tts.speak_async("claude not found. Cannot spawn agent.")
+                    self.call_from_thread(self._exit_settings)
+                    return
+
+                # Generate a session name
+                import time as _time
+                ts = int(_time.time()) % 10000
+                session_name = f"io-agent-{ts}"
+
+                io_mcp_url = os.environ.get("IO_MCP_URL", "")
+
+                if host:
+                    # Remote spawn via SSH + tmux
+                    workdir_resolved = workdir or "~"
+                    remote_cmd = (
+                        f"cd {workdir_resolved} && "
+                        f"IO_MCP_URL={io_mcp_url} "
+                        f"claude -a io-mcp --dangerously-skip-permissions"
+                    )
+                    cmd = [
+                        tmux, "new-window", "-n", session_name,
+                        f"ssh -t {host} '{remote_cmd}'"
+                    ]
+                else:
+                    # Local spawn in tmux
+                    workdir_resolved = workdir or (
+                        self._config.agent_default_workdir if self._config else "~"
+                    )
+                    workdir_expanded = os.path.expanduser(workdir_resolved)
+                    cmd = [
+                        tmux, "new-window", "-n", session_name,
+                        f"cd {workdir_expanded} && IO_MCP_URL={io_mcp_url} claude -a io-mcp --dangerously-skip-permissions"
+                    ]
+
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+                if result.returncode == 0:
+                    self._tts.speak_async(f"Agent spawned: {session_name}. It will connect shortly.")
+                else:
+                    err = result.stderr[:100] if result.stderr else "unknown error"
+                    self._tts.speak_async(f"Spawn failed: {err}")
+
+            except Exception as e:
+                self._tts.speak_async(f"Spawn error: {str(e)[:80]}")
+
+            self.call_from_thread(self._exit_settings)
+
+        threading.Thread(target=_spawn, daemon=True).start()
 
 
 # ─── TUI Controller (public API for MCP server) ─────────────────────────────

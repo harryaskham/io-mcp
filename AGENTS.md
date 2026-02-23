@@ -110,6 +110,12 @@ config:
     enabled: true
     initialDelaySecs: 30      # first update after 30s of silence
     repeatIntervalSecs: 45    # subsequent updates every 45s
+  agents:                     # spawning new Claude Code agents
+    defaultWorkdir: ~
+    hosts:                    # remote hosts for agent spawning
+      - name: Desktop
+        host: desktop.local
+        workdir: ~/projects/myapp
   keyBindings:              # all keys are configurable
     cursorDown: j
     cursorUp: k
@@ -145,6 +151,7 @@ extraOptions:               # project-local in .io-mcp.yml
 | `n` | Next tab with open choices |
 | `u` | Undo last selection (re-present choices) |
 | `/` | Filter choices by typing |
+| `t` | Spawn new Claude Code agent (local or remote) |
 | `i` | Freeform text input |
 | `m` | Queue message for agent |
 | `space` | Voice input (toggle recording) |
