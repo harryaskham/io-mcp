@@ -662,6 +662,12 @@ class IoMcpApp(App):
             # Block until selection (voice recording will set it)
             session.selection_event.wait()
             session.active = False
+
+            # Reset ambient timer
+            import time as _time_mod
+            session.last_tool_call = _time_mod.time()
+            session.ambient_count = 0
+
             self.call_from_thread(self._update_tab_bar)
             return session.selection or {"selected": "timeout", "summary": ""}
 
@@ -746,6 +752,12 @@ class IoMcpApp(App):
         # Block until selection
         session.selection_event.wait()
         session.active = False
+
+        # Reset ambient timer — selection counts as activity
+        import time as _time_mod
+        session.last_tool_call = _time_mod.time()
+        session.ambient_count = 0
+
         self.call_from_thread(self._update_tab_bar)
 
         return session.selection or {"selected": "timeout", "summary": ""}
@@ -1462,7 +1474,10 @@ class IoMcpApp(App):
                         msgs.append(transcript)
                     count = len(msgs) if msgs else 1
                     self._tts.speak_async(f"Message queued: {transcript[:50]}. {count} pending.")
-                    self.call_from_thread(self._restore_choices)
+                    if session.active:
+                        self.call_from_thread(self._restore_choices)
+                    else:
+                        self.call_from_thread(self._show_session_waiting, session)
                 else:
                     self._tts.speak_async(f"Got: {transcript}")
 
@@ -2221,7 +2236,10 @@ class IoMcpApp(App):
             self._tts.stop()
             count = len(msgs) if msgs else 1
             self._tts.speak_async(f"Message queued. {count} pending.")
-            self._restore_choices()
+            if session.active:
+                self._restore_choices()
+            else:
+                self._show_session_waiting(session)
             return
 
         # Normal freeform input — select with the text
