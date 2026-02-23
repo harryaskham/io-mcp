@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>io-mcp — Hands-free Claude Code</title>
+  <meta name="description" content="Control Claude Code with a scroll wheel and earphones. No keyboard needed.">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- ─── Hero ──────────────────────────────────────────── -->
+<header class="hero">
+  <h1>io-mcp</h1>
+  <p class="tagline">
+    Control Claude Code with a scroll wheel and earphones.
+    No keyboard needed.
+  </p>
+  <div class="cta">
+    <a href="https://github.com/harryaskham/io-mcp" class="btn btn-primary">View on GitHub</a>
+    <a href="#quickstart" class="btn btn-secondary">Quick Start</a>
+  </div>
+
+  <div class="diagram">       ┌─────────────┐
+       │  Smart Ring  │ ── scroll input
+       └──────┬──────┘
+              │
+┌────────┐  ┌─▼──────────┐  ┌────────────┐
+│Claude A│◄►│   io-mcp   │◄►│ Android App│
+│Claude B│◄►│  TUI + MCP │  │  (Compose) │
+└────────┘  └─┬──────────┘  └────────────┘
+              │
+       ┌──────▼──────┐
+       │  Earphones  │ ── TTS audio
+       └─────────────┘</div>
+</header>
+
+<!-- ─── Interaction Modes ──────────────────────────────── -->
+<section>
+  <h2>Four Ways to Interact</h2>
+  <p class="subtitle">From scroll-and-pick to free conversation — choose the mode that fits.</p>
+  <div class="modes">
+    <div class="mode">
+      <span class="mode-icon">🎯</span>
+      <h3>Choice Mode</h3>
+      <p>Scroll through options, hear each one, select with Enter</p>
+    </div>
+    <div class="mode">
+      <span class="mode-icon">🗣</span>
+      <h3>Conversation</h3>
+      <p>Continuous voice back-and-forth — like a phone call with AI</p>
+    </div>
+    <div class="mode">
+      <span class="mode-icon">⌨</span>
+      <h3>Freeform Input</h3>
+      <p>Type replies with live espeak readback as you type</p>
+    </div>
+    <div class="mode">
+      <span class="mode-icon">📨</span>
+      <h3>Message Queue</h3>
+      <p>Queue messages for the agent's next response</p>
+    </div>
+  </div>
+</section>
+
+<!-- ─── Features ───────────────────────────────────────── -->
+<section>
+  <h2>Features</h2>
+  <p class="subtitle">Everything you need for hands-free AI coding.</p>
+  <div class="features">
+    <div class="feature">
+      <span class="icon">📡</span>
+      <h3>Multi-Agent Tabs</h3>
+      <p>Run multiple Claude Code instances, each in its own tab with independent state and TTS.</p>
+    </div>
+    <div class="feature">
+      <span class="icon">🎛</span>
+      <h3>Agent Spawner</h3>
+      <p>Press <code class="inline-code">t</code> to launch new agents locally or on remote hosts via SSH.</p>
+    </div>
+    <div class="feature">
+      <span class="icon">📊</span>
+      <h3>Dashboard</h3>
+      <p>Press <code class="inline-code">d</code> for a mission control overview of all active agents.</p>
+    </div>
+    <div class="feature">
+      <span class="icon">⚡</span>
+      <h3>Quick Actions</h3>
+      <p>Configurable macros: "commit and push", "run tests" — one key away.</p>
+    </div>
+    <div class="feature">
+      <span class="icon">↩</span>
+      <h3>Undo Selection</h3>
+      <p>Press <code class="inline-code">u</code> to go back if you scrolled past the right option.</p>
+    </div>
+    <div class="feature">
+      <span class="icon">🔍</span>
+      <h3>Choice Filter</h3>
+      <p>Press <code class="inline-code">/</code> to type and filter choices by name or description.</p>
+    </div>
+    <div class="feature">
+      <span class="icon">🎨</span>
+      <h3>Color Schemes</h3>
+      <p>Nord, Tokyo Night, Catppuccin, or Dracula. Switch from the settings menu.</p>
+    </div>
+    <div class="feature">
+      <span class="icon">🔔</span>
+      <h3>Audio Cues</h3>
+      <p>Subtle chimes for new choices, selections, agent connections, and recording.</p>
+    </div>
+    <div class="feature">
+      <span class="icon">⏱</span>
+      <h3>Ambient Mode</h3>
+      <p>Escalating TTS updates during long silence: "Still working, 2 minutes in..."</p>
+    </div>
+    <div class="feature">
+      <span class="icon">📱</span>
+      <h3>Android App</h3>
+      <p>Jetpack Compose companion — touch, scroll, mic, notifications. TTS stays on the phone.</p>
+    </div>
+    <div class="feature">
+      <span class="icon">💬</span>
+      <h3>CLI Messaging</h3>
+      <p><code class="inline-code">io-mcp-msg "check this"</code> — send messages from any terminal pane.</p>
+    </div>
+    <div class="feature">
+      <span class="icon">📳</span>
+      <h3>Haptic Feedback</h3>
+      <p>Vibration on scroll and selection. Feels tactile even without seeing the screen.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ─── Keyboard Shortcuts ─────────────────────────────── -->
+<section>
+  <h2>Keyboard Shortcuts</h2>
+  <p class="subtitle">All configurable via <code class="inline-code">config.keyBindings</code>.</p>
+  <div class="shortcuts">
+    <div class="shortcut"><kbd>j</kbd><kbd>k</kbd> <span>Navigate choices</span></div>
+    <div class="shortcut"><kbd>⏎</kbd> <span>Select / stop recording</span></div>
+    <div class="shortcut"><kbd>u</kbd> <span>Undo last selection</span></div>
+    <div class="shortcut"><kbd>/</kbd> <span>Filter choices</span></div>
+    <div class="shortcut"><kbd>t</kbd> <span>Spawn new agent</span></div>
+    <div class="shortcut"><kbd>x</kbd> <span>Quick actions</span></div>
+    <div class="shortcut"><kbd>c</kbd> <span>Conversation mode</span></div>
+    <div class="shortcut"><kbd>d</kbd> <span>Dashboard</span></div>
+    <div class="shortcut"><kbd>h</kbd><kbd>l</kbd> <span>Switch tabs</span></div>
+    <div class="shortcut"><kbd>␣</kbd> <span>Voice input</span></div>
+    <div class="shortcut"><kbd>i</kbd> <span>Freeform text input</span></div>
+    <div class="shortcut"><kbd>m</kbd> <span>Queue message</span></div>
+    <div class="shortcut"><kbd>s</kbd> <span>Settings</span></div>
+    <div class="shortcut"><kbd>1</kbd>–<kbd>9</kbd> <span>Instant select</span></div>
+  </div>
+</section>
+
+<!-- ─── Quick Start ────────────────────────────────────── -->
+<section id="quickstart">
+  <h2>Quick Start</h2>
+  <p class="subtitle">Get running in three commands.</p>
+<pre><span style="color:#616e88"># Install and run</span>
+nix develop
+uv run io-mcp
+
+<span style="color:#616e88"># Demo mode (no agent needed)</span>
+uv run io-mcp --demo
+
+<span style="color:#616e88"># Send a message from another terminal</span>
+io-mcp-msg "check this file"</pre>
+</section>
+
+<!-- ─── Configuration ──────────────────────────────────── -->
+<section>
+  <h2>Configuration</h2>
+  <p class="subtitle">
+    Global config at <code class="inline-code">~/.config/io-mcp/config.yml</code>,
+    project overrides in <code class="inline-code">.io-mcp.yml</code>.
+  </p>
+<pre><span style="color:#81a1c1">config</span>:
+  <span style="color:#81a1c1">colorScheme</span>: <span style="color:#a3be8c">nord</span>
+  <span style="color:#81a1c1">tts</span>:
+    <span style="color:#81a1c1">model</span>: <span style="color:#a3be8c">mai-voice-1</span>
+    <span style="color:#81a1c1">speed</span>: <span style="color:#b48ead">1.3</span>
+    <span style="color:#81a1c1">emotion</span>: <span style="color:#a3be8c">shy</span>
+  <span style="color:#81a1c1">ambient</span>:
+    <span style="color:#81a1c1">enabled</span>: <span style="color:#b48ead">true</span>
+    <span style="color:#81a1c1">initialDelaySecs</span>: <span style="color:#b48ead">30</span>
+  <span style="color:#81a1c1">agents</span>:
+    <span style="color:#81a1c1">hosts</span>:
+      - <span style="color:#81a1c1">name</span>: <span style="color:#a3be8c">Desktop</span>
+        <span style="color:#81a1c1">host</span>: <span style="color:#a3be8c">desktop.local</span>
+
+<span style="color:#616e88"># Project-local quick actions</span>
+<span style="color:#81a1c1">quickActions</span>:
+  - <span style="color:#81a1c1">key</span>: <span style="color:#a3be8c">"!"</span>
+    <span style="color:#81a1c1">label</span>: <span style="color:#a3be8c">Commit and push</span>
+    <span style="color:#81a1c1">action</span>: <span style="color:#a3be8c">message</span>
+    <span style="color:#81a1c1">value</span>: <span style="color:#a3be8c">"commit all changes and push"</span></pre>
+</section>
+
+<!-- ─── Architecture ───────────────────────────────────── -->
+<section>
+  <h2>Architecture</h2>
+  <p class="subtitle">Modular design with clean separation of concerns.</p>
+<pre>src/io_mcp/
+├── __main__.py   <span style="color:#616e88"># CLI entry, server startup, watchdog</span>
+├── api.py        <span style="color:#616e88"># Frontend API: SSE events, REST</span>
+├── cli.py        <span style="color:#616e88"># io-mcp-msg CLI tool</span>
+├── config.py     <span style="color:#616e88"># YAML config, env expansion</span>
+├── server.py     <span style="color:#616e88"># 15 MCP tools, Frontend protocol</span>
+├── session.py    <span style="color:#616e88"># Per-agent session state</span>
+├── tui.py        <span style="color:#616e88"># Textual TUI: choices, TTS, voice</span>
+└── tts.py        <span style="color:#616e88"># TTS engine: cache, stream, tones</span>
+android/          <span style="color:#616e88"># Jetpack Compose companion app</span></pre>
+</section>
+
+<!-- ─── Footer ─────────────────────────────────────────── -->
+<footer>
+  <p>
+    <a href="https://github.com/harryaskham/io-mcp">GitHub</a> &middot;
+    MIT License &middot;
+    Built for <a href="https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview">Claude Code</a>
+  </p>
+</footer>
+
+</body>
+</html>
