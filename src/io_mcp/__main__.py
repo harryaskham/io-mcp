@@ -709,14 +709,95 @@ def _run_server_command(args) -> None:
         host=args.host,
         port=args.port,
         backend_url=backend_url,
-        foreground=True,  # Always foreground — parent manages daemonization
+        foreground=True,
     )
+
+
+def _run_status_command() -> None:
+    """Show status of proxy and backend processes."""
+    import urllib.request
+    import urllib.error
+
+    print("io-mcp status")
+    print("─" * 40)
+
+    # Check proxy
+    proxy_pid = None
+    proxy_alive = False
+    try:
+        with open(PROXY_PID_FILE, "r") as f:
+            proxy_pid = int(f.read().strip())
+        os.kill(proxy_pid, 0)
+        proxy_alive = True
+    except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError):
+        pass
+
+    if proxy_alive:
+        print(f"  Proxy:   ✔ running (PID {proxy_pid}, port {DEFAULT_PROXY_PORT})")
+    else:
+        print(f"  Proxy:   ✘ not running (port {DEFAULT_PROXY_PORT})")
+
+    # Check backend
+    backend_pid = None
+    backend_alive = False
+    try:
+        with open(PID_FILE, "r") as f:
+            backend_pid = int(f.read().strip())
+        os.kill(backend_pid, 0)
+        backend_alive = True
+    except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError):
+        pass
+
+    if backend_alive:
+        print(f"  Backend: ✔ running (PID {backend_pid}, port {DEFAULT_BACKEND_PORT})")
+    else:
+        print(f"  Backend: ✘ not running (port {DEFAULT_BACKEND_PORT})")
+
+    # Check backend health endpoint
+    backend_healthy = False
+    if backend_alive:
+        try:
+            url = f"http://localhost:{DEFAULT_BACKEND_PORT}/health"
+            req = urllib.request.Request(url, method="GET")
+            with urllib.request.urlopen(req, timeout=2) as resp:
+                backend_healthy = resp.status == 200
+        except Exception:
+            pass
+        if backend_healthy:
+            print(f"  Backend: ✔ /health responding")
+        else:
+            print(f"  Backend: ✘ /health not responding")
+
+    # Check Android API
+    api_healthy = False
+    try:
+        url = f"http://localhost:{DEFAULT_API_PORT}/api/health"
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            api_healthy = resp.status == 200
+    except Exception:
+        pass
+
+    if api_healthy:
+        print(f"  Android: ✔ API on port {DEFAULT_API_PORT}")
+    else:
+        print(f"  Android: ✘ API not responding (port {DEFAULT_API_PORT})")
+
+    print("─" * 40)
+    if proxy_alive and backend_alive and backend_healthy:
+        print("  All systems operational")
+    elif proxy_alive and not backend_alive:
+        print("  Proxy OK, backend down — run: io-mcp")
+    elif not proxy_alive and not backend_alive:
+        print("  Everything down — run: io-mcp --restart")
+    else:
+        print("  Partial — check logs at /tmp/io-mcp-*.log")
 
 
 # ─── Main entry point ────────────────────────────────────────────
 
 def main() -> None:
-    # Check for "server" subcommand first (before argparse to avoid conflicts)
+    # Check for subcommands first (before argparse to avoid conflicts)
     if len(sys.argv) > 1 and sys.argv[1] == "server":
         parser = argparse.ArgumentParser(prog="io-mcp server",
             description="Run the MCP proxy server daemon")
@@ -727,6 +808,10 @@ def main() -> None:
         parser.add_argument("--foreground", action="store_true")
         args = parser.parse_args()
         _run_server_command(args)
+        return
+
+    if len(sys.argv) > 1 and sys.argv[1] == "status":
+        _run_status_command()
         return
 
     # ─── Main backend ─────────────────────────────────────────

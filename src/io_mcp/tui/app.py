@@ -1000,6 +1000,31 @@ class IoMcpApp(App):
         status.update(f"[{self._cs['warning']}]⧗[/{self._cs['warning']}] [{session.name}] Waiting for agent...{msg_info} [dim](u=undo)[/dim]")
         status.display = True
 
+    def _request_compact(self) -> None:
+        """Request context compaction by returning instructions to the agent."""
+        session = self._focused()
+        if not session or not session.active:
+            self._tts.speak_async("No active session to compact")
+            return
+
+        self._tts.play_chime("select")
+        self._tts.speak_async("Compacting context")
+
+        compact_instructions = (
+            "The user wants you to compact your context window. "
+            "To do this, you need to send /compact to your own Claude Code pane via tmux. "
+            "Steps:\n"
+            "1. Find your own tmux pane: run `tmux-cli list_panes` and find the pane with your Claude Code process\n"
+            "2. Send the compact command: `tmux send-keys -t %<your-pane-id> '/compact' Enter`\n"
+            "3. Wait a few seconds for compaction to complete\n"
+            "4. Then continue with present_choices() as normal\n\n"
+            "If tmux-cli is not available, tell the user to type /compact manually."
+        )
+
+        session.selection = {"selected": compact_instructions, "summary": "(compact context)"}
+        session.selection_event.set()
+        self._show_waiting("Compact context")
+
     def _enter_worktree_mode(self) -> None:
         """Start worktree creation flow.
 
@@ -2916,6 +2941,8 @@ class IoMcpApp(App):
             self._enter_multi_select_mode()
         elif label == "Branch to worktree":
             self._enter_worktree_mode()
+        elif label == "Compact context":
+            self._request_compact()
         elif label == "Switch tab":
             self._enter_tab_picker()
         elif label == "Fast toggle":
