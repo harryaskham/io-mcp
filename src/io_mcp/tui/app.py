@@ -3241,9 +3241,9 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         self._show_dialog(
             title="Quit io-mcp?",
-            message="This will stop the TUI. Agents will lose their connection.",
+            message="The TUI will close. Proxy and agent connections stay alive.",
             buttons=[
-                {"label": "Quit", "summary": "Exit io-mcp"},
+                {"label": "Quit", "summary": "Exit io-mcp TUI"},
                 {"label": "Cancel", "summary": "Go back"},
             ],
             callback=_on_quit_confirm,
