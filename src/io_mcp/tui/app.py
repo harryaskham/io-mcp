@@ -28,6 +28,9 @@ from ..session import Session, SessionManager, SpeechEntry, HistoryEntry
 from ..settings import Settings
 from ..tts import PORTAUDIO_LIB, TTSEngine, _find_binary
 from .. import api as frontend_api
+from ..notifications import (
+    NotificationDispatcher, NotificationEvent, create_dispatcher,
+)
 
 from .themes import COLOR_SCHEMES, DEFAULT_SCHEME, get_scheme, build_css
 from .widgets import ChoiceItem, DwellBar, EXTRA_OPTIONS, _safe_action
@@ -224,6 +227,9 @@ class IoMcpApp(App):
         # Multi-select mode (toggle choices then confirm)
         self._multi_select_mode = False
         self._multi_select_checked: list[bool] = []
+
+        # Notification webhooks
+        self._notifier = create_dispatcher(config)
 
     # ─── Helpers to get focused session ────────────────────────────
 
@@ -604,6 +610,22 @@ class IoMcpApp(App):
         except Exception:
             pass
 
+        # Send notification webhook
+        try:
+            event_type = f"health_{status}"
+            self._notifier.notify(NotificationEvent(
+                event_type=event_type,
+                title=f"Agent {status}: {name}",
+                message=msg,
+                session_name=name,
+                session_id=session.session_id,
+                priority=5 if status == "unresponsive" else 4,
+                tags=["skull" if pane_dead else "warning", status],
+            ))
+        except Exception:
+            pass
+
+    def _check_heartbeat(self) -> None:
         """Ambient mode: speak escalating status updates during agent silence.
 
         Tracks elapsed time since the last MCP tool call and speaks
@@ -792,6 +814,17 @@ class IoMcpApp(App):
             # Speak the error so the user hears it
             try:
                 self._tts.speak_async(f"Choice presentation error: {str(exc)[:80]}")
+            except Exception:
+                pass
+            # Notify via webhook
+            try:
+                self._notifier.notify(NotificationEvent(
+                    event_type="error",
+                    title="TUI Error",
+                    message=f"Choice presentation error: {err}",
+                    priority=4,
+                    tags=["x", "error"],
+                ))
             except Exception:
                 pass
             # Return error to agent so it has context
@@ -1976,13 +2009,45 @@ class IoMcpApp(App):
         except Exception:
             pass
 
+        # Notification webhook
+        try:
+            self._notifier.notify(NotificationEvent(
+                event_type="agent_connected",
+                title=f"Agent connected: {session.name}",
+                message=f"New agent session '{session.name}' registered.",
+                session_name=session.name,
+                session_id=session.session_id,
+                priority=2,
+                tags=["new", "robot_face"],
+            ))
+        except Exception:
+            pass
+
     def on_session_removed(self, session_id: str) -> None:
         """Called when a session is removed."""
+        # Capture name before removal for notification
+        removed_session = self.manager.get(session_id)
+        removed_name = removed_session.name if removed_session else session_id
+
         new_active = self.manager.remove(session_id)
 
         # Emit for remote frontends
         try:
             frontend_api.emit_session_removed(session_id)
+        except Exception:
+            pass
+
+        # Notification webhook
+        try:
+            self._notifier.notify(NotificationEvent(
+                event_type="agent_disconnected",
+                title=f"Agent disconnected: {removed_name}",
+                message=f"Agent session '{removed_name}' was removed.",
+                session_name=removed_name,
+                session_id=session_id,
+                priority=2,
+                tags=["wave"],
+            ))
         except Exception:
             pass
 

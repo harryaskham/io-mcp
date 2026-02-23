@@ -259,6 +259,47 @@ class TestConfigAccessors:
         assert "checkTmuxPane" in health_cfg
         assert health_cfg["warningThresholdSecs"] < health_cfg["unresponsiveThresholdSecs"]
 
+    def test_notifications_defaults(self, config_with_defaults):
+        """Notification config defaults are set correctly (disabled by default)."""
+        c = config_with_defaults
+        assert c.notifications_enabled == False
+        assert c.notifications_cooldown == 60.0
+        assert c.notifications_channels == []
+
+    def test_notifications_custom_config(self, tmp_config):
+        """Notification channels can be configured."""
+        custom = {
+            "config": {
+                "notifications": {
+                    "enabled": True,
+                    "cooldownSecs": 30,
+                    "channels": [
+                        {
+                            "name": "test-ntfy",
+                            "type": "ntfy",
+                            "url": "https://ntfy.sh/test",
+                            "events": ["health_warning"],
+                        }
+                    ],
+                }
+            }
+        }
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert c.notifications_enabled == True
+        assert c.notifications_cooldown == 30.0
+        assert len(c.notifications_channels) == 1
+        assert c.notifications_channels[0]["name"] == "test-ntfy"
+        assert c.notifications_channels[0]["type"] == "ntfy"
+
+    def test_notifications_in_default_config(self):
+        """DEFAULT_CONFIG includes notifications section."""
+        notif_cfg = DEFAULT_CONFIG.get("config", {}).get("notifications", {})
+        assert "enabled" in notif_cfg
+        assert "cooldownSecs" in notif_cfg
+        assert "channels" in notif_cfg
+        assert notif_cfg["enabled"] == False  # disabled by default
 
     def test_ambient_custom_values(self, tmp_config):
         custom = {"config": {"ambient": {

@@ -148,6 +148,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "checkIntervalSecs": 30,           # how often to run the health check
             "checkTmuxPane": True,             # verify tmux pane is still alive
         },
+        "notifications": {
+            "enabled": False,                  # opt-in: must configure channels
+            "cooldownSecs": 60,                # min gap between identical notifications
+            "channels": [],                    # list of {name, type, url, events, ...}
+        },
         "agents": {
             "defaultWorkdir": "~",
             "hosts": [],
@@ -633,6 +638,35 @@ class IoMcpConfig:
             self.expanded.get("config", {})
             .get("healthMonitor", {})
             .get("checkTmuxPane", True)
+        )
+
+    # ─── Notification settings ───────────────────────────────────
+
+    @property
+    def notifications_enabled(self) -> bool:
+        """Whether webhook notifications are enabled."""
+        return bool(
+            self.expanded.get("config", {})
+            .get("notifications", {})
+            .get("enabled", False)
+        )
+
+    @property
+    def notifications_cooldown(self) -> float:
+        """Minimum seconds between identical notifications."""
+        return float(
+            self.expanded.get("config", {})
+            .get("notifications", {})
+            .get("cooldownSecs", 60)
+        )
+
+    @property
+    def notifications_channels(self) -> list[dict]:
+        """Raw notification channel configurations."""
+        return list(
+            self.expanded.get("config", {})
+            .get("notifications", {})
+            .get("channels", [])
         )
 
     # ─── Agent spawner settings ───────────────────────────────────
