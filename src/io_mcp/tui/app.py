@@ -74,6 +74,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         Binding("c", "toggle_conversation", "Chat", show=False),
         Binding("d", "dashboard", "Dashboard", show=False),
         Binding("v", "pane_view", "Pane", show=False),
+        Binding("g", "agent_log", "Log", show=False),
+        Binding("question_mark", "show_help", "Help", show=False),
         Binding("r", "hot_reload", "Reload", show=False),
         Binding("1", "pick_1", "", show=False),
         Binding("2", "pick_2", "", show=False),
@@ -243,6 +245,20 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
     def _is_focused(self, session_id: str) -> bool:
         """Check if a session is the focused one."""
         return self.manager.active_session_id == session_id
+
+    def _speak_ui(self, text: str) -> None:
+        """Speak a UI message (settings, navigation, prompts) with optional separate voice.
+
+        Uses tts.uiVoice from config if set, otherwise falls back to the
+        regular voice. This keeps UI narration distinct from agent speech.
+        """
+        voice_ov = None
+        if self._config:
+            ui_voice = self._config.tts_ui_voice
+            # Only override if uiVoice is explicitly set and different from default
+            if ui_voice and ui_voice != self._config.tts_voice:
+                voice_ov = ui_voice
+        self._tts.speak_async(text, voice_override=voice_ov)
 
     # ─── Haptic feedback ────────────────────────────────────────────
 
@@ -707,7 +723,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 session.ambient_count = 1
                 self._tts.play_chime("heartbeat") if hasattr(self._tts, 'play_chime') else None
                 self._vibrate_pattern("heartbeat")
-                self._tts.speak_async("Agent is still working...")
+                self._speak_ui("Agent is still working...")
                 self._update_ambient_indicator(session, elapsed)
         else:
             # Subsequent updates: exponential backoff after 4th update
@@ -1066,7 +1082,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
             # Alert: chime + speak session name so user knows which tab needs attention
             self._tts.play_chime("choices")
-            self._tts.speak_async(f"{session.name} has choices")
+            self._speak_ui(f"{session.name} has choices")
 
             # Try to speak in background if fg is idle
             self._try_play_background_queue()
@@ -1674,7 +1690,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         """Request context compaction by sending /compact directly to the agent's tmux pane."""
         session = self._focused()
         if not session:
-            self._tts.speak_async("No active session to compact")
+            self._speak_ui("No active session to compact")
             return
 
         # Need tmux pane to send the command
@@ -1684,7 +1700,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             return
 
         self._tts.play_chime("select")
-        self._tts.speak_async("Sending compact command to agent")
+        self._speak_ui("Sending compact command to agent")
 
         # Send /compact directly to the agent's tmux pane
         import subprocess as _sp
@@ -1708,7 +1724,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 session.selection_event.set()
                 self._show_waiting("Compact context")
             else:
-                self._tts.speak_async("Compact command sent. Agent will process it when ready.")
+                self._speak_ui("Compact command sent. Agent will process it when ready.")
         except Exception as e:
             self._tts.speak_async(f"Failed to send compact command: {e}")
 
@@ -1751,7 +1767,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         """
         session = self._focused()
         if not session:
-            self._tts.speak_async("No active session")
+            self._speak_ui("No active session")
             return
 
         self._tts.stop()
@@ -1978,7 +1994,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         """
         session = self._focused()
         if not session or not session.active or not session.choices:
-            self._tts.speak_async("No choices to multi-select from")
+            self._speak_ui("No choices to multi-select from")
             return
 
         self._tts.stop()
@@ -2115,7 +2131,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             self._multi_select_mode = False
             self._multi_select_checked = []
             self._show_choices()
-            self._tts.speak_async("Multi-select cancelled.")
+            self._speak_ui("Multi-select cancelled.")
 
     def _confirm_multi_select(self, team: bool = False) -> None:
         """Confirm multi-select and return all selected choices as one response."""
@@ -2129,7 +2145,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         ]
 
         if not selected:
-            self._tts.speak_async("Nothing selected. Toggle some choices first.")
+            self._speak_ui("Nothing selected. Toggle some choices first.")
             return
 
         self._multi_select_mode = False
@@ -2145,13 +2161,13 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 f"Use the same model you are using. "
                 f"Actions:\n" + "\n".join(f"- {l}" for l in labels)
             )
-            self._tts.speak_async(f"Team mode. {len(selected)} tasks for agent team.")
+            self._speak_ui(f"Team mode. {len(selected)} tasks for agent team.")
         else:
             response_text = (
                 f"The user selected multiple actions to do sequentially:\n"
                 + "\n".join(f"- {l}" for l in labels)
             )
-            self._tts.speak_async(f"Confirmed {len(selected)} selections.")
+            self._speak_ui(f"Confirmed {len(selected)} selections.")
 
         # Haptic + audio
         self._vibrate(100)
@@ -2169,7 +2185,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         """
         sessions = self.manager.all_sessions()
         if len(sessions) <= 1:
-            self._tts.speak_async("Only one tab open. Press t to spawn a new agent.")
+            self._speak_ui("Only one tab open. Press t to spawn a new agent.")
             return
 
         self._tts.stop()
@@ -2213,7 +2229,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         list_view.focus()
 
         self._tab_picker_sessions = sessions
-        self._tts.speak_async(f"Pick a tab. {len(sessions)} tabs. Scrolling switches live.")
+        self._speak_ui(f"Pick a tab. {len(sessions)} tabs. Scrolling switches live.")
 
     def action_next_tab(self) -> None:
         """Switch to next tab."""
@@ -2248,7 +2264,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             self._tts.speak_async(new_session.name)
             self._switch_to_session(new_session)
         else:
-            self._tts.speak_async("No other tabs with choices")
+            self._speak_ui("No other tabs with choices")
 
     # ─── Session lifecycle ─────────────────────────────────────────
 
@@ -2284,7 +2300,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         # Speak the connection
         try:
-            self._tts.speak_async(f"{session.name} connected")
+            self._speak_ui(f"{session.name} connected")
         except Exception:
             pass
 
@@ -2520,7 +2536,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             elif idx == num_choices + 2:
                 self._tts.speak_async(f"Team mode. {checked_count} for parallel agents.")
             elif idx == num_choices + 3:
-                self._tts.speak_async("Cancel.")
+                self._speak_ui("Cancel.")
             return
 
         # During intro/options readout, suppress highlight-triggered speech.
@@ -2773,7 +2789,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         # TTS after UI
         self._tts.stop()
-        self._tts.speak_async("Type your reply")
+        self._speak_ui("Type your reply")
 
     def action_queue_message(self) -> None:
         """Open text input to queue a message for the agent's next response.
@@ -2798,7 +2814,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         inp.focus()
 
         self._tts.stop()
-        self._tts.speak_async("Type or speak a message for the agent")
+        self._speak_ui("Type or speak a message for the agent")
 
     def action_filter_choices(self) -> None:
         """Open filter input to narrow the choice list by typing."""
@@ -2819,7 +2835,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         filter_inp.styles.display = "block"
         filter_inp.focus()
 
-        self._tts.speak_async("Type to filter choices")
+        self._speak_ui("Type to filter choices")
 
     def _apply_filter(self, query: str) -> None:
         """Filter the choices ListView to show only matching items."""
@@ -2896,7 +2912,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         list_view.focus()
 
         count = sum(1 for c in list_view.children if isinstance(c, ChoiceItem) and c.choice_index > 0)
-        self._tts.speak_async(f"{count} matches")
+        self._speak_ui(f"{count} matches")
 
     @on(Input.Changed, "#freeform-input")
     def on_freeform_changed(self, event: Input.Changed) -> None:
@@ -2948,7 +2964,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             self._freeform_tts.stop()
             self._tts.stop()
             count = len(msgs) if msgs else 1
-            self._tts.speak_async(f"Message queued. {count} pending.")
+            self._speak_ui(f"Message queued. {count} pending.")
             if session.active:
                 self._restore_choices()
             else:
@@ -2961,7 +2977,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         self._freeform_tts.stop()
         self._tts.stop()
-        self._tts.speak_async(f"Selected: {text}")
+        self._speak_ui(f"Selected: {text}")
 
         session.selection = {"selected": text, "summary": "(freeform input)"}
         session.selection_event.set()
@@ -2977,7 +2993,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         inp.styles.display = "none"
         inp.placeholder = "Type your reply, press Enter to send, Escape to cancel"
         self._restore_choices()
-        self._tts.speak_async("Cancelled.")
+        self._speak_ui("Cancelled.")
 
     def on_key(self, event) -> None:
         """Handle Escape in freeform/voice/settings/filter mode.
@@ -2992,7 +3008,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             return
         if self._filter_mode and event.key == "escape":
             self._exit_filter()
-            self._tts.speak_async("Filter cleared")
+            self._speak_ui("Filter cleared")
             event.prevent_default()
             event.stop()
         elif self._message_mode and event.key == "escape":
@@ -3032,7 +3048,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 self._tts.unmute()
             else:
                 self._tts._muted = False
-            self._tts.speak_async("Recording cancelled")
+            self._speak_ui("Recording cancelled")
             self._restore_choices()
             event.prevent_default()
             event.stop()
@@ -3089,7 +3105,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             self._multi_select_mode = False
             self._multi_select_checked = []
             self._show_choices()
-            self._tts.speak_async("Multi-select cancelled.")
+            self._speak_ui("Multi-select cancelled.")
             return
 
         # Filter mode → exit filter
@@ -3110,7 +3126,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         if self._conversation_mode:
             self._conversation_mode = False
             self._tts.play_chime("convo_off")
-            self._tts.speak_async("Conversation mode off.")
+            self._speak_ui("Conversation mode off.")
             session = self._focused()
             if session and session.active:
                 self._show_choices()
@@ -3184,7 +3200,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             if self._config:
                 self._config.reload()
 
-            self._tts.speak_async("Reloaded")
+            self._speak_ui("Reloaded")
         except Exception as e:
             self._tts.speak_async(f"Reload failed: {str(e)[:80]}")
 
@@ -3248,7 +3264,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         self._tts.play_chime("select")
 
         self._tts.stop()
-        self._tts.speak_async(f"Selected: {label}")
+        self._speak_ui(f"Selected: {label}")
 
         # Record in history
         try:
@@ -3327,12 +3343,12 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         """
         session = self._focused()
         if not session:
-            self._tts.speak_async("No session active")
+            self._speak_ui("No session active")
             return
 
         history = getattr(session, 'history', [])
         if not history:
-            self._tts.speak_async("No history yet for this session")
+            self._speak_ui("No history yet for this session")
             return
 
         # Toggle off if already in history mode
@@ -3381,7 +3397,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         list_view.index = max(0, len(history) - 1)  # Start at most recent
         list_view.focus()
 
-        self._tts.speak_async(f"History. {count} selections. Most recent shown.")
+        self._speak_ui(f"History. {count} selections. Most recent shown.")
 
     def action_undo_selection(self) -> None:
         """Undo the last selection — signal the server to re-present choices.
@@ -3402,20 +3418,20 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         if session.active:
             # During active choices: just speak current position reminder
             self._tts.stop()
-            self._tts.speak_async("Already in choices. Scroll to pick.")
+            self._speak_ui("Already in choices. Scroll to pick.")
             return
 
         # After selection: check if we have choices to go back to
         last_choices = getattr(session, 'last_choices', [])
         last_preamble = getattr(session, 'last_preamble', '')
         if not last_choices:
-            self._tts.speak_async("Nothing to undo")
+            self._speak_ui("Nothing to undo")
             return
 
         # Set the undo sentinel — the server loop will re-present
         self._vibrate(100)
         self._tts.stop()
-        self._tts.speak_async("Undoing selection")
+        self._speak_ui("Undoing selection")
 
         # Re-activate the session with the saved choices
         session.selection = {"selected": "_undo", "summary": ""}
@@ -3497,7 +3513,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             self._exit_settings()
             return
 
-        self._tts.speak_async(f"Spawning {label}")
+        self._speak_ui(f"Spawning {label}")
 
         def _spawn():
             try:
@@ -3546,7 +3562,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
                 if result.returncode == 0:
-                    self._tts.speak_async(f"Agent spawned: {session_name}. It will connect shortly.")
+                    self._speak_ui(f"Agent spawned: {session_name}. It will connect shortly.")
                 else:
                     err = result.stderr[:100] if result.stderr else "unknown error"
                     self._tts.speak_async(f"Spawn failed: {err}")
@@ -3577,10 +3593,10 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         if self._conversation_mode:
             self._tts.play_chime("convo_on")
-            self._tts.speak_async("Conversation mode on. I'll listen after each response.")
+            self._speak_ui("Conversation mode on. I'll listen after each response.")
         else:
             self._tts.play_chime("convo_off")
-            self._tts.speak_async("Conversation mode off. Back to choices.")
+            self._speak_ui("Conversation mode off. Back to choices.")
             # If session is active, restore the choices UI
             if session and session.active:
                 self.call_from_thread(self._show_choices)
@@ -3603,7 +3619,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             return
 
         if not self._config:
-            self._tts.speak_async("No config loaded")
+            self._speak_ui("No config loaded")
             return
 
         actions = self._config.quick_actions

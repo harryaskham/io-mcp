@@ -69,7 +69,7 @@ class SettingsMixin:
 
         # TTS after UI is updated
         self._tts.stop()
-        self._tts.speak_async("Settings")
+        self._speak_ui("Settings")
 
     def _exit_settings(self) -> None:
         """Leave settings and restore choices."""
@@ -104,11 +104,11 @@ class SettingsMixin:
         if session and session.active:
             self._show_choices()
             self._tts.stop()
-            self._tts.speak_async("Back to choices")
+            self._speak_ui("Back to choices")
         else:
             self._show_idle()
             self._tts.stop()
-            self._tts.speak_async("Settings closed")
+            self._speak_ui("Settings closed")
 
     def _clear_settings_guard(self) -> None:
         """Clear the settings-just-closed guard after a frame."""
@@ -179,7 +179,7 @@ class SettingsMixin:
         # TTS after UI
         self._tts.stop()
         current_val = self._setting_edit_values[self._setting_edit_index]
-        self._tts.speak_async(f"Editing {key}. Current: {current_val}. Scroll to change, Enter to confirm.")
+        self._speak_ui(f"Editing {key}. Current: {current_val}. Scroll to change, Enter to confirm.")
 
         # Pregenerate in background
         if key in ("speed", "voice"):
@@ -221,7 +221,7 @@ class SettingsMixin:
 
         self._setting_edit_mode = False
         self._tts.stop()
-        self._tts.speak_async(f"{key} set to {value}")
+        self._speak_ui(f"{key} set to {value}")
 
         self._enter_settings()
 

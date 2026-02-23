@@ -124,6 +124,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "tts": {
             "model": "mai-voice-1",
             "voice": "en-US-Noa:MAI-Voice-1",
+            "uiVoice": "",
             "speed": 1.3,
             "emotion": "shy",
             "voiceRotation": [],
@@ -466,6 +467,12 @@ class IoMcpConfig:
     @property
     def tts_voice(self) -> str:
         return self.runtime.get("tts", {}).get("voice", "sage")
+
+    @property
+    def tts_ui_voice(self) -> str:
+        """Get the UI voice. Falls back to regular voice if not set."""
+        ui = self.runtime.get("tts", {}).get("uiVoice", "")
+        return ui if ui else self.tts_voice
 
     @property
     def tts_speed(self) -> float:

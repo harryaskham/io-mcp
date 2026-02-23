@@ -42,7 +42,7 @@ class ViewsMixin:
         sessions = self.manager.all_sessions()
 
         if not sessions:
-            self._tts.speak_async("No active agents")
+            self._speak_ui("No active agents")
             return
 
         # Build dashboard display
@@ -136,7 +136,7 @@ class ViewsMixin:
         list_view.focus()
 
         # Narrate the dashboard
-        self._tts.speak_async(" ".join(narration_parts))
+        self._speak_ui(" ".join(narration_parts))
 
     @_safe_action
     def action_agent_log(self: "IoMcpApp") -> None:
@@ -159,13 +159,13 @@ class ViewsMixin:
             return
 
         if not session:
-            self._tts.speak_async("No active session")
+            self._speak_ui("No active session")
             return
 
         # Build timeline from speech log + history
         timeline = session.timeline(max_entries=50)
         if not timeline:
-            self._tts.speak_async("No activity log for this session")
+            self._speak_ui("No activity log for this session")
             return
 
         self._tts.stop()
@@ -228,7 +228,7 @@ class ViewsMixin:
         list_view.index = 0
         list_view.focus()
 
-        self._tts.speak_async(f"Timeline. {count} entries. Most recent shown.")
+        self._speak_ui(f"Timeline. {count} entries. Most recent shown.")
 
     @_safe_action
     def action_pane_view(self: "IoMcpApp") -> None:
@@ -244,7 +244,7 @@ class ViewsMixin:
             if hasattr(self, '_pane_refresh_timer') and self._pane_refresh_timer:
                 self._pane_refresh_timer.stop()
                 self._pane_refresh_timer = None
-            self._tts.speak_async("Pane view closed.")
+            self._speak_ui("Pane view closed.")
             session = self._focused()
             if session and session.active:
                 self._show_choices()
@@ -252,7 +252,7 @@ class ViewsMixin:
 
         session = self._focused()
         if not session:
-            self._tts.speak_async("No active session")
+            self._speak_ui("No active session")
             return
         if session.input_mode or session.voice_recording:
             return
@@ -263,11 +263,11 @@ class ViewsMixin:
         hostname = getattr(session, 'hostname', '')
 
         if not pane:
-            self._tts.speak_async("No tmux pane registered for this agent.")
+            self._speak_ui("No tmux pane registered for this agent.")
             return
 
         self._tts.stop()
-        self._tts.speak_async(f"Pane view for {session.name}. Press v to close.")
+        self._speak_ui(f"Pane view for {session.name}. Press v to close.")
 
         # Show pane view, hide choices
         self.query_one("#choices").display = False
@@ -384,4 +384,4 @@ class ViewsMixin:
         list_view.index = 0
         list_view.focus()
 
-        self._tts.speak_async(f"Help screen. {len(shortcuts)} shortcuts.")
+        self._speak_ui(f"Help screen. {len(shortcuts)} shortcuts.")
