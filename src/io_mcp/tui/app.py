@@ -627,6 +627,10 @@ class IoMcpApp(App):
             session.unplayed_speech.append(entry)
             session.speech_log.append(SpeechEntry(text=f"[choices] {preamble}"))
 
+            # Alert: chime + speak session name so user knows which tab needs attention
+            self._tts.play_chime("choices")
+            self._tts.speak_async(f"{session.name} has choices")
+
             # Try to speak in background if fg is idle
             self._try_play_background_queue()
 
