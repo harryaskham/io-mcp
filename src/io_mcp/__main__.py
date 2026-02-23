@@ -1,40 +1,34 @@
 """
 io-mcp — MCP server for agent I/O via scroll-wheel and TTS.
 
-Exposes MCP tools via streamable-http transport on port 8444:
+Two-process architecture:
+  io-mcp server    Thin MCP proxy daemon on :8444 — agents connect here.
+                   Survives backend restarts so agents stay connected.
 
-  present_choices(preamble, choices)
-      Show choices in the TUI, block until user scrolls and selects.
-      Returns JSON: {"selected": "label", "summary": "..."}.
-
-  speak(text)
-      Blocking TTS narration through earphones.
-
-  speak_async(text)
-      Non-blocking TTS narration.
-
-Multiple agents can connect simultaneously — each gets a session tab.
-
-Textual TUI runs in the main thread (needs signal handlers).
-MCP streamable-http server runs in a background thread via uvicorn.
+  io-mcp           Main backend with TUI, TTS, session logic on :8446.
+                   Exposes /handle-mcp for the proxy to call.
+                   Also serves Android SSE API on :8445.
+                   Auto-starts the proxy daemon if not already running.
 
 Usage:
-    cd ~/cosmos/projects/io-mcp && uv run io-mcp
-    # or: uv run io-mcp --local   (use espeak-ng instead of gpt-4o-mini-tts)
-    # or: uv run io-mcp --port 9000
-    # or: uv run io-mcp --dwell=5  (auto-select after 5s)
+    uv run io-mcp                    # Start backend (auto-starts proxy)
+    uv run io-mcp server             # Start proxy daemon only
+    uv run io-mcp server --foreground  # Proxy in foreground (debug)
+    uv run io-mcp --demo             # Demo mode, no MCP
 """
 
 from __future__ import annotations
 
 import argparse
 import atexit
+import asyncio
+import json
 import logging
 import os
 import signal
+import subprocess
+import sys
 import threading
-
-from mcp.server.fastmcp import Context
 
 from .config import IoMcpConfig
 from .tui import IoMcpApp
@@ -43,35 +37,34 @@ from .tts import TTSEngine
 log = logging.getLogger("io_mcp")
 
 PID_FILE = "/tmp/io-mcp.pid"
+PROXY_PID_FILE = "/tmp/io-mcp-server.pid"
+
+DEFAULT_PROXY_PORT = 8444
+DEFAULT_BACKEND_PORT = 8446
+DEFAULT_API_PORT = 8445
 
 
 def _write_pid_file() -> None:
-    """Write PID file so hooks can detect io-mcp is running."""
     with open(PID_FILE, "w") as f:
         f.write(str(os.getpid()))
 
 
 def _remove_pid_file() -> None:
-    """Remove PID file on exit."""
     try:
         os.unlink(PID_FILE)
     except OSError:
         pass
 
 
-def _kill_existing_instance() -> None:
-    """Kill any previous io-mcp instance so we can rebind the port cleanly.
-
-    This ensures that after a restart, the HTTP port is immediately available
-    for new agent connections.
-    """
+def _kill_existing_backend() -> None:
+    """Kill any previous io-mcp backend so we can rebind ports."""
     try:
         with open(PID_FILE, "r") as f:
             old_pid = int(f.read().strip())
         if old_pid != os.getpid():
             os.kill(old_pid, signal.SIGTERM)
             import time
-            time.sleep(0.3)  # Give it a moment to die
+            time.sleep(0.3)
             try:
                 os.kill(old_pid, signal.SIGKILL)
             except (ProcessLookupError, PermissionError):
@@ -80,108 +73,15 @@ def _kill_existing_instance() -> None:
         pass
 
 
-def _get_session_id(ctx: Context) -> str:
-    """Extract a stable session ID from the MCP context.
-
-    For streamable-http: uses the mcp_session_id (a UUID string).
-    Fallback: uses id(ctx.session) as a string.
-    """
-    session = ctx.session
-    # streamable-http transport has mcp_session_id
-    sid = getattr(session, "mcp_session_id", None)
-    if sid:
-        return str(sid)
-    return str(id(session))
-
-
-
-def _run_mcp_server(app: IoMcpApp, host: str, port: int,
-                    append_options: list[str] | None = None,
-                    append_silent_options: list[str] | None = None) -> None:
-    """Run the MCP streamable-http server in a background thread."""
-    try:
-        from .server import create_mcp_server
-
-        # Adapt IoMcpApp to the Frontend protocol
-        class _AppFrontend:
-            @property
-            def manager(self):
-                return app.manager
-
-            @property
-            def config(self):
-                return app._config
-
-            @property
-            def tts(self):
-                return app._tts
-
-            def present_choices(self, session, preamble, choices):
-                return app.present_choices(session, preamble, choices)
-
-            def present_multi_select(self, session, preamble, choices):
-                return app.present_multi_select(session, preamble, choices)
-
-            def session_speak(self, session, text, block=True, priority=0, emotion=""):
-                return app.session_speak(session, text, block, priority, emotion)
-
-            def session_speak_async(self, session, text):
-                return app.session_speak(session, text, block=False)
-
-            def on_session_created(self, session):
-                return app.on_session_created(session)
-
-            def update_tab_bar(self):
-                app.call_from_thread(app._update_tab_bar)
-
-            def hot_reload(self):
-                app.call_from_thread(app.action_hot_reload)
-
-        frontend = _AppFrontend()
-        server = create_mcp_server(
-            frontend, host=host, port=port,
-            append_options=append_options,
-            append_silent_options=append_silent_options,
-        )
-
-        import logging
-        # Suppress uvicorn and MCP server logs — they print over the TUI
-        for logger_name in ("mcp", "uvicorn", "uvicorn.access", "uvicorn.error", "httpx"):
-            _log = logging.getLogger(logger_name)
-            _log.setLevel(logging.WARNING)
-            _log.handlers = []  # Remove any existing handlers
-
-        with open("/tmp/io-mcp-server.log", "w") as f:
-            f.write(f"Starting MCP server on {host}:{port}\n")
-
-        server.run(transport="streamable-http")
-
-    except Exception:
-        import traceback
-        crash = traceback.format_exc()
-        with open("/tmp/io-mcp-crash.log", "w") as f:
-            f.write(crash)
-        log.error("MCP server thread crashed — see /tmp/io-mcp-crash.log")
-
-
 def _acquire_wake_lock() -> None:
-    """Acquire Android wake lock via termux-exec to prevent the device
-    from sleeping and killing the process. Only works on Nix-on-Droid.
-
-    For keeping the screen on, users should enable:
-      Settings → Developer options → Stay awake (while charging)
-    or use `termux-exec settings put system screen_off_timeout 2147483647`
-    """
     import shutil
     termux_exec = shutil.which("termux-exec")
     if not termux_exec:
         return
     try:
-        import subprocess
         subprocess.Popen(
             [termux_exec, "termux-wake-lock"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
         print("  Wake lock: acquired", flush=True)
     except Exception:
@@ -189,92 +89,520 @@ def _acquire_wake_lock() -> None:
 
 
 def _release_wake_lock() -> None:
-    """Release Android wake lock."""
     import shutil
     termux_exec = shutil.which("termux-exec")
     if not termux_exec:
         return
     try:
-        import subprocess
-        subprocess.run(
-            [termux_exec, "termux-wake-unlock"],
-            timeout=3, capture_output=True,
-        )
+        subprocess.run([termux_exec, "termux-wake-unlock"], timeout=3, capture_output=True)
     except Exception:
         pass
 
 
+def _is_local_address(addr: str) -> bool:
+    """Check if an address refers to this machine."""
+    host = addr.split(":")[0] if ":" in addr else addr
+    return host in ("localhost", "127.0.0.1", "0.0.0.0", "::1", "")
+
+
+def _ensure_proxy_running(proxy_address: str, backend_port: int) -> None:
+    """Start the MCP proxy daemon if not already running.
+
+    Only starts if the proxy address is local (we can't start remote proxies).
+    """
+    from .proxy import check_health
+
+    if check_health(proxy_address):
+        print(f"  Proxy: already running at {proxy_address}", flush=True)
+        return
+
+    if not _is_local_address(proxy_address):
+        print(f"  ERROR: Proxy at {proxy_address} is not responding and is remote — cannot start it", flush=True)
+        print(f"  Start it manually on that machine: io-mcp server --io-mcp-address <this-machine>:{backend_port}", flush=True)
+        sys.exit(1)
+
+    # Parse host:port from proxy address
+    parts = proxy_address.split(":")
+    proxy_host = parts[0] if parts[0] else "0.0.0.0"
+    proxy_port = int(parts[1]) if len(parts) > 1 else DEFAULT_PROXY_PORT
+
+    print(f"  Proxy: starting daemon on {proxy_host}:{proxy_port}...", flush=True)
+
+    # Start proxy as a subprocess (it will daemonize itself)
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "io_mcp", "server",
+             "--host", proxy_host,
+             "--port", str(proxy_port),
+             "--io-mcp-address", f"localhost:{backend_port}"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        # Wait a moment for the daemon to start
+        import time
+        time.sleep(1.0)
+
+        if check_health(proxy_address):
+            print(f"  Proxy: started (PID in {PROXY_PID_FILE})", flush=True)
+        else:
+            print(f"  Proxy: started subprocess but health check failed (may need a moment)", flush=True)
+    except Exception as e:
+        print(f"  Proxy: failed to start — {e}", flush=True)
+        print(f"  Start it manually: io-mcp server", flush=True)
+
+
+# ─── Backend tool dispatcher ──────────────────────────────────────────
+
+def _create_tool_dispatcher(app: IoMcpApp, append_options: list[str],
+                            append_silent_options: list[str]):
+    """Create a function that dispatches tool calls to the app.
+
+    Returns a callable(tool_name, args, session_id) -> str
+    """
+    from .server import create_mcp_server
+
+    # Adapt IoMcpApp to the Frontend protocol
+    class _AppFrontend:
+        @property
+        def manager(self):
+            return app.manager
+        @property
+        def config(self):
+            return app._config
+        @property
+        def tts(self):
+            return app._tts
+
+        def present_choices(self, session, preamble, choices):
+            return app.present_choices(session, preamble, choices)
+        def present_multi_select(self, session, preamble, choices):
+            return app.present_multi_select(session, preamble, choices)
+        def session_speak(self, session, text, block=True, priority=0, emotion=""):
+            return app.session_speak(session, text, block, priority, emotion)
+        def session_speak_async(self, session, text):
+            return app.session_speak(session, text, block=False)
+        def on_session_created(self, session):
+            return app.on_session_created(session)
+        def update_tab_bar(self):
+            app.call_from_thread(app._update_tab_bar)
+        def hot_reload(self):
+            app.call_from_thread(app.action_hot_reload)
+
+    frontend = _AppFrontend()
+
+    # Create the MCP server (we won't run its HTTP transport, just use
+    # its tool dispatch logic via the Frontend protocol)
+    # Instead, we'll create tool handlers directly
+
+    # Build tool dispatch table
+    import time as _time
+
+    # Build config-based extra options
+    _config_extras: list[dict] = []
+    if frontend.config:
+        for opt in frontend.config.extra_options:
+            _config_extras.append({
+                "label": opt.get("title", ""),
+                "summary": opt.get("description", ""),
+                "_silent": opt.get("silent", False),
+            })
+
+    def _drain_messages(session) -> list[str]:
+        msgs = getattr(session, 'pending_messages', None)
+        if msgs is None:
+            return []
+        drained = list(msgs)
+        msgs.clear()
+        return drained
+
+    def _attach_messages(response: str, session) -> str:
+        messages = _drain_messages(session)
+        if not messages:
+            return response
+        try:
+            data = json.loads(response)
+            data["user_messages"] = messages
+            return json.dumps(data)
+        except (json.JSONDecodeError, TypeError):
+            msg_text = "\n\n[User messages queued while you were working:\n" + "\n".join(f"- {m}" for m in messages) + "\n]"
+            return response + msg_text
+
+    def _get_session(session_id: str):
+        session, created = frontend.manager.get_or_create(session_id)
+        if created:
+            try:
+                frontend.on_session_created(session)
+            except Exception:
+                pass
+        session.last_tool_call = _time.time()
+        session.heartbeat_spoken = False
+        session.ambient_count = 0
+        return session
+
+    def _registration_reminder(session) -> str:
+        if not session.registered:
+            return ("\n\n[REMINDER: Call register_session() first with your cwd, "
+                    "hostname, tmux_session, and tmux_pane so io-mcp can manage "
+                    "your session properly.]")
+        return ""
+
+    # ─── Tool implementations ─────────────────────────────────
+
+    def _tool_present_choices(args, session_id):
+        session = _get_session(session_id)
+        session.last_tool_name = "present_choices"
+        preamble = args.get("preamble", "")
+        choices = args.get("choices", [])
+        if not choices:
+            return json.dumps({"selected": "error", "summary": "No choices provided"})
+
+        all_choices = list(choices)
+        for opt in append_options:
+            if "::" in opt:
+                title, desc = opt.split("::", 1)
+            else:
+                title, desc = opt, ""
+            if not any(c.get("label", "").lower() == title.lower() for c in all_choices):
+                all_choices.append({"label": title, "summary": desc})
+        for opt in append_silent_options:
+            if "::" in opt:
+                title, desc = opt.split("::", 1)
+            else:
+                title, desc = opt, ""
+            if not any(c.get("label", "").lower() == title.lower() for c in all_choices):
+                all_choices.append({"label": title, "summary": desc, "_silent": True})
+        for opt in _config_extras:
+            if not any(c.get("label", "").lower() == opt["label"].lower() for c in all_choices):
+                all_choices.append(dict(opt))
+
+        # Undo loop
+        while True:
+            session.last_preamble = preamble
+            session.last_choices = list(all_choices)
+            result = frontend.present_choices(session, preamble, all_choices)
+            if result.get("selected") == "_undo":
+                continue
+            break
+
+        return _attach_messages(json.dumps(result), session) + _registration_reminder(session)
+
+    def _tool_present_multi_select(args, session_id):
+        session = _get_session(session_id)
+        session.last_tool_name = "present_multi_select"
+        preamble = args.get("preamble", "")
+        choices = args.get("choices", [])
+        if not choices:
+            return json.dumps({"selected": []})
+        result = frontend.present_multi_select(session, preamble, list(choices))
+        return _attach_messages(json.dumps({"selected": result}), session)
+
+    def _tool_speak(args, session_id):
+        session = _get_session(session_id)
+        session.last_tool_name = "speak"
+        text = args.get("text", "")
+        frontend.session_speak(session, text, True, 0, "")
+        preview = text[:100] + ("..." if len(text) > 100 else "")
+        return _attach_messages(f"Spoke: {preview}", session)
+
+    def _tool_speak_async(args, session_id):
+        session = _get_session(session_id)
+        session.last_tool_name = "speak_async"
+        text = args.get("text", "")
+        frontend.session_speak(session, text, False, 0, "")
+        preview = text[:100] + ("..." if len(text) > 100 else "")
+        return _attach_messages(f"Spoke: {preview}", session)
+
+    def _tool_speak_urgent(args, session_id):
+        session = _get_session(session_id)
+        session.last_tool_name = "speak_urgent"
+        text = args.get("text", "")
+        frontend.session_speak(session, text, True, 1, "")
+        preview = text[:100] + ("..." if len(text) > 100 else "")
+        return _attach_messages(f"Urgently spoke: {preview}", session)
+
+    def _tool_set_speed(args, session_id):
+        speed = args.get("speed", 1.0)
+        if frontend.config:
+            frontend.config.set_tts_speed(speed)
+            frontend.config.save()
+            frontend.tts.clear_cache()
+        return f"Speed set to {speed}"
+
+    def _tool_set_voice(args, session_id):
+        voice = args.get("voice", "")
+        if frontend.config:
+            frontend.config.set_tts_voice(voice)
+            frontend.config.save()
+            frontend.tts.clear_cache()
+        return f"Voice set to {voice}"
+
+    def _tool_set_tts_model(args, session_id):
+        model = args.get("model", "")
+        if frontend.config:
+            frontend.config.set_tts_model(model)
+            frontend.config.save()
+            frontend.tts.clear_cache()
+            return f"TTS model set to {model}, voice reset to {frontend.config.tts_voice}"
+        return f"TTS model set to {model}"
+
+    def _tool_set_stt_model(args, session_id):
+        model = args.get("model", "")
+        if frontend.config:
+            frontend.config.set_stt_model(model)
+            frontend.config.save()
+        return f"STT model set to {model}"
+
+    def _tool_set_emotion(args, session_id):
+        emotion = args.get("emotion", "")
+        if frontend.config:
+            frontend.config.set_tts_emotion(emotion)
+            frontend.config.save()
+            frontend.tts.clear_cache()
+        return f"Emotion set to: {emotion}"
+
+    def _tool_get_settings(args, session_id):
+        if frontend.config:
+            return json.dumps({
+                "tts_model": frontend.config.tts_model_name,
+                "tts_voice": frontend.config.tts_voice,
+                "tts_speed": frontend.config.tts_speed,
+                "tts_emotion": frontend.config.tts_emotion,
+                "tts_voice_options": frontend.config.tts_voice_options,
+                "tts_models": frontend.config.tts_model_names,
+                "emotion_presets": frontend.config.emotion_preset_names,
+                "stt_model": frontend.config.stt_model_name,
+                "stt_models": frontend.config.stt_model_names,
+            })
+        return json.dumps({"error": "No config available"})
+
+    def _tool_register_session(args, session_id):
+        session = _get_session(session_id)
+        session.last_tool_name = "register_session"
+        session.registered = True
+        for field in ("cwd", "hostname", "tmux_session", "tmux_pane"):
+            val = args.get(field, "")
+            if val:
+                setattr(session, field, val)
+        if args.get("name"):
+            session.name = args["name"]
+        if args.get("voice"):
+            session.voice_override = args["voice"]
+        if args.get("emotion"):
+            session.emotion_override = args["emotion"]
+        if args.get("metadata"):
+            session.agent_metadata.update(args["metadata"])
+
+        import socket
+        local_hostname = socket.gethostname()
+        hostname = args.get("hostname", "")
+        is_local = (hostname == local_hostname) if hostname else True
+
+        try:
+            frontend.update_tab_bar()
+        except Exception:
+            pass
+        try:
+            frontend.manager.save_registered()
+        except Exception:
+            pass
+
+        return json.dumps({
+            "status": "registered",
+            "session_id": session.session_id,
+            "name": session.name,
+            "is_local": is_local,
+            "io_mcp_hostname": local_hostname,
+            "features": [
+                "present_choices", "present_multi_select",
+                "speak", "speak_async", "speak_urgent",
+                "set_speed", "set_voice", "set_emotion",
+                "set_tts_model", "set_stt_model",
+                "rename_session", "get_settings", "reload_config",
+                "pull_latest", "run_command",
+            ],
+        })
+
+    def _tool_rename_session(args, session_id):
+        session = _get_session(session_id)
+        session.name = args.get("name", "")
+        try:
+            frontend.update_tab_bar()
+        except Exception:
+            pass
+        return f"Session renamed to: {session.name}"
+
+    def _tool_reload_config(args, session_id):
+        if frontend.config:
+            frontend.config.reload()
+            frontend.tts.clear_cache()
+            return json.dumps({
+                "status": "reloaded",
+                "tts_model": frontend.config.tts_model_name,
+                "tts_voice": frontend.config.tts_voice,
+                "tts_speed": frontend.config.tts_speed,
+                "tts_emotion": frontend.config.tts_emotion,
+                "stt_model": frontend.config.stt_model_name,
+            })
+        return json.dumps({"status": "no config to reload"})
+
+    def _tool_pull_latest(args, session_id):
+        import subprocess as sp
+        project_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        try:
+            result = sp.run(
+                ["git", "pull", "--rebase", "origin", "main"],
+                cwd=project_dir, capture_output=True, text=True, timeout=30,
+            )
+            output = result.stdout.strip()
+            if result.returncode != 0:
+                return json.dumps({"status": "error", "output": output, "error": result.stderr.strip()})
+            try:
+                frontend.hot_reload()
+                return json.dumps({"status": "pulled_and_reloaded", "output": output})
+            except Exception:
+                return json.dumps({"status": "pulled", "output": output, "note": "Hot reload failed"})
+        except sp.TimeoutExpired:
+            return json.dumps({"status": "error", "error": "Git pull timed out"})
+        except Exception as e:
+            return json.dumps({"status": "error", "error": str(e)})
+
+    def _tool_run_command(args, session_id):
+        import subprocess as sp
+        session = _get_session(session_id)
+        command = args.get("command", "")
+
+        result = frontend.present_choices(
+            session,
+            f"Agent wants to run: {command}",
+            [
+                {"label": "Approve", "summary": f"Run: {command}"},
+                {"label": "Deny", "summary": "Reject this command"},
+            ],
+        )
+        if result.get("selected", "").lower() != "approve":
+            return json.dumps({"status": "denied", "command": command})
+
+        try:
+            proc = sp.run(command, shell=True, capture_output=True, text=True, timeout=60)
+            return json.dumps({
+                "status": "completed", "command": command,
+                "returncode": proc.returncode,
+                "stdout": proc.stdout[:5000],
+                "stderr": proc.stderr[:2000],
+            })
+        except sp.TimeoutExpired:
+            return json.dumps({"status": "timeout", "command": command, "error": "Timed out after 60s"})
+        except Exception as e:
+            return json.dumps({"status": "error", "command": command, "error": str(e)})
+
+    # ─── Dispatch table ───────────────────────────────────────
+
+    TOOLS = {
+        "present_choices": _tool_present_choices,
+        "present_multi_select": _tool_present_multi_select,
+        "speak": _tool_speak,
+        "speak_async": _tool_speak_async,
+        "speak_urgent": _tool_speak_urgent,
+        "set_speed": _tool_set_speed,
+        "set_voice": _tool_set_voice,
+        "set_tts_model": _tool_set_tts_model,
+        "set_stt_model": _tool_set_stt_model,
+        "set_emotion": _tool_set_emotion,
+        "get_settings": _tool_get_settings,
+        "register_session": _tool_register_session,
+        "rename_session": _tool_rename_session,
+        "reload_config": _tool_reload_config,
+        "pull_latest": _tool_pull_latest,
+        "run_command": _tool_run_command,
+    }
+
+    def dispatch(tool_name: str, args: dict, session_id: str) -> str:
+        handler = TOOLS.get(tool_name)
+        if handler is None:
+            return json.dumps({"error": f"Unknown tool: {tool_name}"})
+        try:
+            return handler(args, session_id)
+        except Exception as e:
+            import traceback
+            log.error(f"Tool {tool_name} error: {e}")
+            try:
+                with open("/tmp/io-mcp-tool-error.log", "a") as f:
+                    f.write(f"\n--- {tool_name} ---\n{traceback.format_exc()}\n")
+            except Exception:
+                pass
+            try:
+                frontend.tts.speak_async(f"Tool error: {tool_name}. {str(e)[:80]}")
+            except Exception:
+                pass
+            return json.dumps({"error": f"{type(e).__name__}: {str(e)[:200]}", "tool": tool_name})
+
+    return dispatch
+
+
+# ─── Server subcommand ────────────────────────────────────────────
+
+def _run_server_command(args) -> None:
+    """Run the MCP proxy server (io-mcp server)."""
+    from .proxy import run_proxy_server
+
+    backend_url = f"http://{args.io_mcp_address}"
+    print(f"  io-mcp server: proxy on {args.host}:{args.port} → backend {backend_url}", flush=True)
+
+    run_proxy_server(
+        host=args.host,
+        port=args.port,
+        backend_url=backend_url,
+        foreground=args.foreground,
+    )
+
+
+# ─── Main entry point ────────────────────────────────────────────
+
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="io-mcp — scroll-wheel input + TTS narration MCP server"
+        description="io-mcp — scroll-wheel input + TTS narration for Claude Code"
     )
-    parser.add_argument(
-        "--local", action="store_true",
-        help="Use espeak-ng (local, fast) instead of gpt-4o-mini-tts (API)"
-    )
-    parser.add_argument(
-        "--port", type=int, default=8444,
-        help="Server port (default: 8444)"
-    )
-    parser.add_argument(
-        "--host", default="0.0.0.0",
-        help="Server bind address (default: 0.0.0.0)"
-    )
-    parser.add_argument(
-        "--dwell", type=float, default=0.0, metavar="SECONDS",
-        help="Enable dwell-to-select after SECONDS (default: off, require Enter)"
-    )
-    parser.add_argument(
-        "--scroll-debounce", type=float, default=0.15, metavar="SECONDS",
-        help="Minimum time between scroll events (default: 0.15s)"
-    )
-    parser.add_argument(
-        "--append-option", action="append", default=[], metavar="LABEL",
-        help="Always append this option to every choice list (repeatable)"
-    )
-    parser.add_argument(
-        "--append-silent-option", action="append", default=[], metavar="LABEL",
-        help="Append option that is NOT read aloud during intro (repeatable). "
-        "Format: 'title' or 'title::description'"
-    )
-    parser.add_argument(
-        "--demo", action="store_true",
-        help="Demo mode: show test choices immediately, no MCP server"
-    )
-    parser.add_argument(
-        "--freeform-tts", choices=["api", "local"], default="local",
-        help="TTS backend for freeform typing readback (default: local)"
-    )
-    parser.add_argument(
-        "--freeform-tts-speed", type=float, default=1.6, metavar="SPEED",
-        help="TTS speed multiplier for freeform readback (default: 1.6)"
-    )
-    parser.add_argument(
-        "--freeform-tts-delimiters", default=" .,;:!?",
-        help="Characters that trigger TTS readback while typing (default: ' .,;:!?')"
-    )
-    parser.add_argument(
-        "--invert", action="store_true",
-        help="Invert scroll direction (scroll-down → cursor-up, scroll-up → cursor-down)"
-    )
-    parser.add_argument(
-        "--config-file", default=None, metavar="PATH",
-        help="Path to config YAML file (default: ~/.config/io-mcp/config.yml)"
-    )
-    parser.add_argument(
-        "--djent", action="store_true",
-        help="Enable djent integration (swarm management quick actions and options)"
-    )
+    subparsers = parser.add_subparsers(dest="command")
+
+    # ─── io-mcp server ────────────────────────────────────────
+    server_parser = subparsers.add_parser("server", help="Run the MCP proxy server daemon")
+    server_parser.add_argument("--host", default="0.0.0.0", help="Bind address (default: 0.0.0.0)")
+    server_parser.add_argument("--port", type=int, default=DEFAULT_PROXY_PORT, help=f"Port (default: {DEFAULT_PROXY_PORT})")
+    server_parser.add_argument("--io-mcp-address", default=f"localhost:{DEFAULT_BACKEND_PORT}",
+                               help=f"Backend address (default: localhost:{DEFAULT_BACKEND_PORT})")
+    server_parser.add_argument("--foreground", action="store_true", help="Run in foreground (don't daemonize)")
+
+    # ─── io-mcp (main backend) ────────────────────────────────
+    parser.add_argument("--local", action="store_true", help="Use espeak-ng instead of API TTS")
+    parser.add_argument("--port", type=int, default=DEFAULT_BACKEND_PORT, help=f"Backend port (default: {DEFAULT_BACKEND_PORT})")
+    parser.add_argument("--host", default="0.0.0.0", help="Bind address (default: 0.0.0.0)")
+    parser.add_argument("--proxy-address", default=f"localhost:{DEFAULT_PROXY_PORT}",
+                        help=f"MCP proxy address (default: localhost:{DEFAULT_PROXY_PORT})")
+    parser.add_argument("--dwell", type=float, default=0.0, metavar="SECONDS")
+    parser.add_argument("--scroll-debounce", type=float, default=0.15, metavar="SECONDS")
+    parser.add_argument("--append-option", action="append", default=[], metavar="LABEL")
+    parser.add_argument("--append-silent-option", action="append", default=[], metavar="LABEL")
+    parser.add_argument("--demo", action="store_true", help="Demo mode")
+    parser.add_argument("--freeform-tts", choices=["api", "local"], default="local")
+    parser.add_argument("--freeform-tts-speed", type=float, default=1.6, metavar="SPEED")
+    parser.add_argument("--freeform-tts-delimiters", default=" .,;:!?")
+    parser.add_argument("--invert", action="store_true")
+    parser.add_argument("--config-file", default=None, metavar="PATH")
+    parser.add_argument("--djent", action="store_true")
+
     args = parser.parse_args()
 
-    # Default append option: always offer to generate more options
+    # ─── io-mcp server ────────────────────────────────────────
+    if args.command == "server":
+        _run_server_command(args)
+        return
+
+    # ─── io-mcp (main backend) ────────────────────────────────
+
     if not args.append_option:
         args.append_option = ["More options"]
 
-    # Load config
     config = IoMcpConfig.load(args.config_file)
-
-    # Enable djent integration via CLI flag
     if args.djent:
         config.djent_enabled = True
 
@@ -285,12 +613,9 @@ def main() -> None:
         print(f"  Djent: enabled", flush=True)
 
     tts = TTSEngine(local=args.local, config=config)
-
-    # Separate TTS engine for freeform typing readback (can be different backend/speed)
     freeform_local = args.freeform_tts == "local"
     freeform_tts = TTSEngine(local=freeform_local, speed=args.freeform_tts_speed, config=config)
 
-    # Create the textual app
     app = IoMcpApp(
         tts=tts,
         freeform_tts=freeform_tts,
@@ -303,82 +628,51 @@ def main() -> None:
     )
 
     if args.demo:
-        # Demo mode: loop test choices, no MCP server
         def _demo_loop():
             import time
-            time.sleep(0.5)  # let textual mount
-            # Create a demo session
+            time.sleep(0.5)
             demo_session, _ = app.manager.get_or_create("demo")
             demo_session.name = "Demo"
-
             round_num = 0
             while True:
                 round_num += 1
                 choices = [
-                    {"label": "Fix the bug", "summary": "There's a null pointer in the auth module on line 42"},
-                    {"label": "Run the tests", "summary": "Execute the full test suite and report failures"},
-                    {"label": "Show the diff", "summary": "Display what changed since the last commit"},
-                    {"label": "Deploy to staging", "summary": "Push current branch to the staging environment"},
+                    {"label": "Fix the bug", "summary": "Null pointer in auth module"},
+                    {"label": "Run the tests", "summary": "Execute test suite"},
+                    {"label": "Show the diff", "summary": "Changes since last commit"},
+                    {"label": "Deploy to staging", "summary": "Push to staging env"},
                 ]
-                # Append persistent options
                 for opt in args.append_option:
-                    if "::" in opt:
-                        title, desc = opt.split("::", 1)
-                    else:
-                        title, desc = opt, ""
-                    if not any(c["label"].lower() == title.lower() for c in choices):
-                        choices.append({"label": title, "summary": desc})
-
-                result = app.present_choices(
-                    demo_session,
-                    f"Demo round {round_num}. Pick any option to test scrolling and TTS.",
-                    choices,
-                )
-                selected = result.get("selected", "")
-                if selected == "quit":
+                    t, d = (opt.split("::", 1) + [""])[:2]
+                    if not any(c["label"].lower() == t.lower() for c in choices):
+                        choices.append({"label": t, "summary": d})
+                result = app.present_choices(demo_session, f"Demo round {round_num}.", choices)
+                if result.get("selected") == "quit":
                     break
-                # Brief pause then loop
                 time.sleep(0.3)
-
-        demo_thread = threading.Thread(target=_demo_loop, daemon=True)
-        demo_thread.start()
+        threading.Thread(target=_demo_loop, daemon=True).start()
     else:
-        # Kill any existing io-mcp instance so we can rebind the port
-        _kill_existing_instance()
-
-        # Write PID file so global hooks can detect io-mcp is running
+        # Kill any existing backend
+        _kill_existing_backend()
         _write_pid_file()
         atexit.register(_remove_pid_file)
 
-        # Acquire wake lock on Android to prevent sleep
+        # Wake lock on Android
         _acquire_wake_lock()
         atexit.register(_release_wake_lock)
 
-        # Start MCP streamable-http server in background thread with watchdog
-        def _run_with_watchdog():
-            """Run the MCP server with auto-restart on crash."""
-            import time as _time
-            restart_count = 0
-            max_restarts = 5
-            while restart_count < max_restarts:
-                try:
-                    _run_mcp_server(app, args.host, args.port,
-                                   args.append_option, args.append_silent_option)
-                    break  # Normal exit
-                except Exception:
-                    restart_count += 1
-                    import traceback
-                    with open("/tmp/io-mcp-crash.log", "a") as f:
-                        f.write(f"\n--- Crash #{restart_count} ---\n")
-                        f.write(traceback.format_exc())
-                    backoff = min(2 ** restart_count, 30)
-                    print(f"  MCP server crashed (#{restart_count}), restarting in {backoff}s...", flush=True)
-                    _time.sleep(backoff)
+        # Ensure proxy daemon is running
+        _ensure_proxy_running(args.proxy_address, args.port)
 
-        mcp_thread = threading.Thread(target=_run_with_watchdog, daemon=True)
-        mcp_thread.start()
+        # Create tool dispatcher and start backend HTTP server
+        dispatch = _create_tool_dispatcher(app, args.append_option, args.append_silent_option or [])
 
-        # Start frontend API server for remote clients (Android app, etc.)
+        from .backend import start_backend_server
+        backend_host = "0.0.0.0"  # Accept from proxy (could be remote)
+        start_backend_server(dispatch, host=backend_host, port=args.port)
+        print(f"  Backend: /handle-mcp on {backend_host}:{args.port}", flush=True)
+
+        # Start Android SSE API on :8445
         try:
             from .api import start_api_server
             from .tui import EXTRA_OPTIONS
@@ -392,58 +686,44 @@ def main() -> None:
                     return app._config
 
             def _on_highlight(session_id: str, choice_index: int):
-                """Handle highlight from Android app — update TUI ListView."""
                 session = app.manager.get(session_id)
                 if not session or not session.active:
                     return
-                # Convert 1-based choice index to display index
-                # Display index = extras_count + (choice_index - 1)
                 extras = getattr(session, 'extras_count', len(EXTRA_OPTIONS))
                 display_idx = extras + (choice_index - 1)
-
-                def _set_highlight():
+                def _set():
                     try:
-                        from .tui import ListView
-                        list_view = app.query_one("#choices", ListView)
-                        if list_view.display and 0 <= display_idx < len(list_view.children):
-                            list_view.index = display_idx
+                        from textual.widgets import ListView
+                        lv = app.query_one("#choices", ListView)
+                        if lv.display and 0 <= display_idx < len(lv.children):
+                            lv.index = display_idx
                     except Exception:
                         pass
-
                 try:
-                    app.call_from_thread(_set_highlight)
+                    app.call_from_thread(_set)
                 except Exception:
                     pass
 
             def _on_key(session_id: str, key: str):
-                """Handle key event from Android app — forward to TUI."""
-                def _do_key():
+                def _do():
                     try:
-                        if key == "j":
-                            app.action_cursor_down()
-                        elif key == "k":
-                            app.action_cursor_up()
-                        elif key == "enter":
-                            app.action_select()
-                        elif key == "space":
-                            app.action_voice_input()
-                        elif key == "u":
-                            app.action_undo_selection()
+                        {"j": app.action_cursor_down, "k": app.action_cursor_up,
+                         "enter": app.action_select, "space": app.action_voice_input,
+                         "u": app.action_undo_selection}.get(key, lambda: None)()
                     except Exception:
                         pass
                 try:
-                    app.call_from_thread(_do_key)
+                    app.call_from_thread(_do)
                 except Exception:
                     pass
 
-            api_port = args.port + 1  # 8445 by default
-            start_api_server(_ApiFrontend(), port=api_port, host=args.host,
-                           highlight_callback=_on_highlight,
-                           key_callback=_on_key)
+            start_api_server(_ApiFrontend(), port=DEFAULT_API_PORT, host=args.host,
+                           highlight_callback=_on_highlight, key_callback=_on_key)
+            print(f"  Android API: SSE on {args.host}:{DEFAULT_API_PORT}", flush=True)
         except Exception as e:
-            print(f"  Frontend API: failed to start — {e}", flush=True)
+            print(f"  Android API: failed — {e}", flush=True)
 
-    # Run textual app in main thread (needs signal handlers)
+    # Run TUI in main thread
     app.run()
 
 

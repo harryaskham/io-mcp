@@ -372,7 +372,7 @@ class TestGetSessionId:
     """Test _get_session_id extracts mcp_session_id or falls back."""
 
     def test_extracts_mcp_session_id(self):
-        from io_mcp.__main__ import _get_session_id
+        from io_mcp.server import _get_session_id
 
         class FakeCtx:
             class session:
@@ -381,7 +381,7 @@ class TestGetSessionId:
         assert _get_session_id(FakeCtx()) == "deadbeef1234"
 
     def test_fallback_to_id(self):
-        from io_mcp.__main__ import _get_session_id
+        from io_mcp.server import _get_session_id
 
         class FakeSession:
             pass  # no mcp_session_id
