@@ -96,10 +96,9 @@ SSE events: `choices_presented`, `speech_requested`, `selection_made`, `recordin
 config:
   colorScheme: nord         # nord, tokyo-night, catppuccin, dracula
   tts:
-    model: mai-voice-1
-    voice: en-US-Noa:MAI-Voice-1
+    model: gpt-4o-mini-tts
     speed: 1.3
-    emotion: shy            # default: soft whisper style
+    emotion: happy
     voiceRotation: []       # cycle voices across agent tabs
     emotionRotation: []
   stt:

@@ -77,10 +77,9 @@ Config lives at `~/.config/io-mcp/config.yml` with optional per-project `.io-mcp
 config:
   colorScheme: nord         # nord, tokyo-night, catppuccin, dracula
   tts:
-    model: mai-voice-1
-    voice: en-US-Noa:MAI-Voice-1
+    model: gpt-4o-mini-tts
     speed: 1.3
-    emotion: shy
+    emotion: happy
   stt:
     model: whisper
   ambient:
