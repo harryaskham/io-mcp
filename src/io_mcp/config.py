@@ -173,7 +173,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "undoSelection": "u",
             "filterChoices": "slash",
             "spawnAgent": "t",
-            "quickActions": "x",
+            "multiSelect": "x",
             "conversationMode": "c",
             "dashboard": "d",
             "agentLog": "g",

@@ -67,7 +67,7 @@ class IoMcpApp(App):
         Binding("u", "undo_selection", "Undo", show=False),
         Binding("slash", "filter_choices", "Filter", show=False),
         Binding("t", "spawn_agent", "New agent", show=False),
-        Binding("x", "quick_actions", "Quick", show=False),
+        Binding("x", "multi_select_toggle", "Multi", show=False),
         Binding("c", "toggle_conversation", "Chat", show=False),
         Binding("d", "dashboard", "Dashboard", show=False),
         Binding("v", "pane_view", "Pane", show=False),
@@ -113,7 +113,7 @@ class IoMcpApp(App):
         undo_key = kb.get("undoSelection", "u")
         filter_key = kb.get("filterChoices", "slash")
         spawn_key = kb.get("spawnAgent", "t")
-        quick_key = kb.get("quickActions", "x")
+        multi_select_key = kb.get("multiSelect", "x")
         convo_key = kb.get("conversationMode", "c")
         dashboard_key = kb.get("dashboard", "d")
         pane_key = kb.get("paneView", "v")
@@ -138,7 +138,7 @@ class IoMcpApp(App):
             Binding(undo_key, "undo_selection", "Undo", show=False),
             Binding(filter_key, "filter_choices", "Filter", show=False),
             Binding(spawn_key, "spawn_agent", "New agent", show=False),
-            Binding(quick_key, "quick_actions", "Quick", show=False),
+            Binding(multi_select_key, "multi_select_toggle", "Multi", show=False),
             Binding(convo_key, "toggle_conversation", "Chat", show=False),
             Binding(dashboard_key, "dashboard", "Dashboard", show=False),
             Binding(pane_key, "pane_view", "Pane", show=False),
@@ -321,7 +321,7 @@ class IoMcpApp(App):
         yield Input(placeholder="Type your reply, press Enter to send, Escape to cancel", id="freeform-input")
         yield Input(placeholder="Filter choices...", id="filter-input")
         yield DwellBar(id="dwell-bar")
-        yield Static("[dim]↕[/dim] Scroll  [dim]⏎[/dim] Select  [dim]u[/dim] Undo  [dim]i[/dim] Type  [dim]m[/dim] Msg  [dim]␣[/dim] Voice  [dim]/[/dim] Filter  [dim]s[/dim] Settings  [dim]q[/dim] Quit", id="footer-help")
+        yield Static("[dim]↕[/dim] Scroll  [dim]⏎[/dim] Select  [dim]x[/dim] Multi  [dim]u[/dim] Undo  [dim]i[/dim] Type  [dim]m[/dim] Msg  [dim]␣[/dim] Voice  [dim]/[/dim] Filter  [dim]s[/dim] Settings  [dim]q[/dim] Back/Quit", id="footer-help")
 
     def on_mount(self) -> None:
         self.title = "io-mcp"
@@ -1763,6 +1763,30 @@ class IoMcpApp(App):
 
         threading.Thread(target=_do_create, daemon=True).start()
 
+    @_safe_action
+    def action_multi_select_toggle(self) -> None:
+        """Toggle multi-select mode.
+
+        If currently viewing normal choices → enter multi-select mode.
+        If already in multi-select mode → confirm selection (like pressing Confirm).
+        """
+        session = self._focused()
+        if not session:
+            return
+
+        # Guard: don't activate in settings/filter/input modes
+        if session.input_mode or session.voice_recording:
+            return
+        if self._in_settings or self._filter_mode:
+            return
+
+        if self._multi_select_mode:
+            # Already in multi-select → confirm
+            self._confirm_multi_select(team=False)
+        else:
+            # Enter multi-select mode
+            self._enter_multi_select_mode()
+
     def _enter_multi_select_mode(self) -> None:
         """Enter multi-select mode for the current choices.
 
@@ -1778,7 +1802,7 @@ class IoMcpApp(App):
         self._multi_select_mode = True
         self._multi_select_checked = [False] * len(session.choices)
         self._refresh_multi_select()
-        self._tts.speak_async("Multi-select mode. Scroll and press Enter to toggle. Scroll to Confirm when done.")
+        self._tts.speak_async("Multi-select mode. Enter to toggle choices. Press x to confirm, q to cancel.")
 
     def _refresh_multi_select(self) -> None:
         """Redraw the choice list with checkbox state."""
@@ -3485,12 +3509,66 @@ class IoMcpApp(App):
     def action_pick_9(self) -> None: self._pick_by_number(9)
 
     def action_quit_app(self) -> None:
-        # Set quit for all active sessions
-        for session in self.manager.all_sessions():
+        """Context-aware quit: back/escape in modal views, exit at top level."""
+        self._quit_or_back()
+
+    def action_quit(self) -> None:
+        """Context-aware quit (bound to configurable quit key)."""
+        self._quit_or_back()
+
+    def _quit_or_back(self) -> None:
+        """If in a modal (settings, dashboard, log, filter, multi-select), go back.
+        If at the top level (idle or viewing choices), actually quit."""
+
+        # Multi-select mode → cancel multi-select
+        if self._multi_select_mode:
+            self._multi_select_mode = False
+            self._multi_select_checked = []
+            self._show_choices()
+            self._tts.speak_async("Multi-select cancelled.")
+            return
+
+        # Filter mode → exit filter
+        if self._filter_mode:
+            self._filter_mode = False
+            filter_input = self.query_one("#filter-input", Input)
+            filter_input.value = ""
+            filter_input.styles.display = "none"
+            self._show_choices()
+            return
+
+        # Settings / dashboard / log / help / any modal → back
+        if self._in_settings:
+            self._exit_settings()
+            return
+
+        # Conversation mode → exit conversation
+        if self._conversation_mode:
+            self._conversation_mode = False
+            self._tts.play_chime("convo_off")
+            self._tts.speak_async("Conversation mode off.")
+            session = self._focused()
+            if session and session.active:
+                self._show_choices()
+            return
+
+        # Session has active input mode → cancel input
+        session = self._focused()
+        if session and session.input_mode:
+            session.input_mode = False
+            inp = self.query_one("#freeform-input", Input)
+            inp.value = ""
+            inp.styles.display = "none"
             if session.active:
+                self._show_choices()
+            return
+
+        # Top level: actually quit
+        for sess in self.manager.all_sessions():
+            if sess.active:
                 self._cancel_dwell()
-                session.selection = {"selected": "quit", "summary": "User quit"}
-                session.selection_event.set()
+                sess.selection = {"selected": "quit", "summary": "User quit"}
+                sess.selection_event.set()
         self.exit()
 
     def action_hot_reload(self) -> None:
@@ -4318,7 +4396,7 @@ class IoMcpApp(App):
             (kb.get("nextTab", "l") + "/" + kb.get("prevTab", "h"), "Switch between agent tabs"),
             (kb.get("nextChoicesTab", "n"), "Jump to next tab with active choices"),
             (kb.get("spawnAgent", "t"), "Spawn a new Claude Code agent"),
-            (kb.get("quickActions", "x"), "Run a quick action macro"),
+            (kb.get("multiSelect", "x"), "Enter/confirm multi-select mode"),
             (kb.get("conversationMode", "c"), "Toggle continuous voice conversation mode"),
             (kb.get("dashboard", "d"), "Show dashboard overview of all agents"),
             (kb.get("agentLog", "g"), "View scrollable speech log for focused agent"),
