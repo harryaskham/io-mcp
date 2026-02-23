@@ -217,6 +217,10 @@ class IoMcpApp(App):
         # Tab picker mode
         self._tab_picker_mode = False
 
+        # Multi-select mode (toggle choices then confirm)
+        self._multi_select_mode = False
+        self._multi_select_checked: list[bool] = []
+
     # ─── Helpers to get focused session ────────────────────────────
 
     def _focused(self) -> Optional[Session]:
@@ -988,6 +992,150 @@ class IoMcpApp(App):
         msg_info = f" [dim]·[/dim] [{self._cs['purple']}]{len(msgs)} msg{'s' if len(msgs) != 1 else ''}[/{self._cs['purple']}]" if msgs else ""
         status.update(f"[{self._cs['warning']}]⧗[/{self._cs['warning']}] [{session.name}] Waiting for agent...{msg_info} [dim](u=undo)[/dim]")
         status.display = True
+
+    def _enter_multi_select_mode(self) -> None:
+        """Enter multi-select mode for the current choices.
+
+        Re-renders the choice list with checkbox indicators. Enter toggles
+        each item. Adds "Confirm" and "Confirm with team" at the bottom.
+        """
+        session = self._focused()
+        if not session or not session.active or not session.choices:
+            self._tts.speak_async("No choices to multi-select from")
+            return
+
+        self._tts.stop()
+        self._multi_select_mode = True
+        self._multi_select_checked = [False] * len(session.choices)
+        self._refresh_multi_select()
+        self._tts.speak_async("Multi-select mode. Scroll and press Enter to toggle. Scroll to Confirm when done.")
+
+    def _refresh_multi_select(self) -> None:
+        """Redraw the choice list with checkbox state."""
+        session = self._focused()
+        if not session:
+            return
+
+        s = self._cs
+        preamble_widget = self.query_one("#preamble", Label)
+        checked_count = sum(self._multi_select_checked)
+        preamble_widget.update(
+            f"[bold {s['purple']}]Multi-select[/bold {s['purple']}] — "
+            f"{checked_count} selected "
+            f"[dim](enter=toggle, scroll to confirm)[/dim]"
+        )
+        preamble_widget.display = True
+
+        list_view = self.query_one("#choices", ListView)
+
+        # Remember current position
+        current_idx = list_view.index or 0
+
+        list_view.clear()
+
+        # Choices with checkboxes
+        for i, c in enumerate(session.choices):
+            check = f"[{s['success']}]✓[/{s['success']}]" if self._multi_select_checked[i] else "○"
+            label = f" {check}  {c.get('label', '')}"
+            summary = c.get('summary', '')
+            list_view.append(ChoiceItem(label, summary, index=i + 1, display_index=i))
+
+        # Confirm options
+        confirm_idx = len(session.choices)
+        list_view.append(ChoiceItem(
+            f"[bold {s['success']}]✅ Confirm selection[/bold {s['success']}]",
+            f"{checked_count} item(s) — do all selected",
+            index=confirm_idx + 1, display_index=confirm_idx,
+        ))
+        list_view.append(ChoiceItem(
+            f"[bold {s['accent']}]🚀 Confirm with team[/bold {s['accent']}]",
+            f"{checked_count} item(s) — delegate each to a parallel sub-agent",
+            index=confirm_idx + 2, display_index=confirm_idx + 1,
+        ))
+        list_view.append(ChoiceItem(
+            "[dim]Cancel[/dim]", "Exit multi-select, return to choices",
+            index=confirm_idx + 3, display_index=confirm_idx + 2,
+        ))
+
+        list_view.display = True
+        # Restore position
+        if current_idx < len(list_view.children):
+            list_view.index = current_idx
+        else:
+            list_view.index = 0
+        list_view.focus()
+
+    def _handle_multi_select_enter(self, idx: int) -> None:
+        """Handle Enter press in multi-select mode."""
+        session = self._focused()
+        if not session:
+            return
+
+        num_choices = len(session.choices)
+
+        if idx < num_choices:
+            # Toggle the choice
+            self._multi_select_checked[idx] = not self._multi_select_checked[idx]
+            state = "selected" if self._multi_select_checked[idx] else "unselected"
+            label = session.choices[idx].get("label", "")
+            self._tts.speak_async(f"{label} {state}")
+            self._refresh_multi_select()
+        elif idx == num_choices:
+            # Confirm selection
+            self._confirm_multi_select(team=False)
+        elif idx == num_choices + 1:
+            # Confirm with team
+            self._confirm_multi_select(team=True)
+        elif idx == num_choices + 2:
+            # Cancel
+            self._multi_select_mode = False
+            self._multi_select_checked = []
+            self._show_choices()
+            self._tts.speak_async("Multi-select cancelled. Back to choices.")
+
+    def _confirm_multi_select(self, team: bool = False) -> None:
+        """Confirm multi-select and return all selected choices as one response."""
+        session = self._focused()
+        if not session:
+            return
+
+        selected = [
+            session.choices[i] for i in range(len(session.choices))
+            if i < len(self._multi_select_checked) and self._multi_select_checked[i]
+        ]
+
+        if not selected:
+            self._tts.speak_async("Nothing selected. Toggle some choices first.")
+            return
+
+        self._multi_select_mode = False
+        self._multi_select_checked = []
+
+        labels = [s.get("label", "") for s in selected]
+        combined_label = "; ".join(labels)
+
+        if team:
+            response_text = (
+                f"The user selected multiple actions to be done IN PARALLEL. "
+                f"Start an agent team to handle all of these actions simultaneously. "
+                f"Use the same model you are using. "
+                f"Actions:\n" + "\n".join(f"- {l}" for l in labels)
+            )
+            self._tts.speak_async(f"Team mode. {len(selected)} tasks for agent team.")
+        else:
+            response_text = (
+                f"The user selected multiple actions to do sequentially:\n"
+                + "\n".join(f"- {l}" for l in labels)
+            )
+            self._tts.speak_async(f"Confirmed {len(selected)} selections.")
+
+        # Haptic + audio
+        self._vibrate(100)
+        self._tts.play_chime("select")
+
+        session.selection = {"selected": response_text, "summary": f"(multi-select: {combined_label[:60]})"}
+        session.selection_event.set()
+        self._show_waiting(f"Multi: {combined_label[:50]}")
 
     def _enter_tab_picker(self) -> None:
         """Enter tab picking mode.
@@ -1914,6 +2062,10 @@ class IoMcpApp(App):
         if self._setting_edit_mode:
             self._apply_setting_edit()
             return
+        # Multi-select mode: toggle or confirm
+        if self._multi_select_mode and isinstance(event.item, ChoiceItem):
+            self._handle_multi_select_enter(event.item.display_index)
+            return
         if self._in_settings:
             if isinstance(event.item, ChoiceItem):
                 idx = event.item.display_index
@@ -2043,6 +2195,12 @@ class IoMcpApp(App):
         # Enter stops voice recording (same as space)
         if session and session.voice_recording:
             self._stop_voice_recording()
+            return
+        # Multi-select mode: toggle or confirm
+        if self._multi_select_mode:
+            list_view = self.query_one("#choices", ListView)
+            idx = list_view.index or 0
+            self._handle_multi_select_enter(idx)
             return
         if self._in_settings:
             list_view = self.query_one("#choices", ListView)
@@ -2529,6 +2687,8 @@ class IoMcpApp(App):
         label = EXTRA_OPTIONS[ei]["label"]
         if label == "Record response":
             self.action_voice_input()
+        elif label == "Multi select":
+            self._enter_multi_select_mode()
         elif label == "Switch tab":
             self._enter_tab_picker()
         elif label == "Fast toggle":

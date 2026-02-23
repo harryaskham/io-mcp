@@ -44,6 +44,7 @@ def _safe_action(fn):
 
 EXTRA_OPTIONS = [
     {"label": "Queue message", "summary": "Type or speak a message to queue for the agent's next response"},
+    {"label": "Multi select", "summary": "Toggle multiple choices then confirm — do several things at once"},
     {"label": "History", "summary": "Review past selections for this session"},
     {"label": "Notifications", "summary": "Check Android notifications"},
     {"label": "Switch tab", "summary": "Scroll through agent tabs and select one"},
