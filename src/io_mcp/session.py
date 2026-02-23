@@ -185,14 +185,14 @@ class Session:
         else:
             status = "Working"
 
-        # Elapsed time since connection
-        elapsed = now - (self.last_activity - (now - self.last_tool_call) if self.last_tool_call else now)
-        # More useful: time since first tool call
-        # Use creation time (approximated by last_activity minus elapsed)
-        session_age = now - (self.last_tool_call - (self.tool_call_count * 2))  # rough estimate
+        # Session age: use earliest history entry if available, else last_activity
         if self.history:
             first_action = min(h.timestamp for h in self.history)
             session_age = now - first_action
+        elif self.last_tool_call > 0:
+            session_age = now - self.last_tool_call + (self.tool_call_count * 2)  # rough estimate
+        else:
+            session_age = now - self.last_activity
 
         # Format duration
         mins = int(session_age) // 60

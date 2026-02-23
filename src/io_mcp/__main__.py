@@ -300,6 +300,8 @@ def _ensure_proxy_running(proxy_address: str, backend_port: int, dev: bool = Fal
             cwd=cwd,
             start_new_session=True,  # Detach from parent process group
         )
+        # Close the file descriptor in the parent — child inherited it
+        log_file.close()
         # Write PID file ourselves since the child runs in foreground mode
         with open(PROXY_PID_FILE, "w") as f:
             f.write(str(proc.pid))

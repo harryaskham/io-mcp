@@ -9,7 +9,7 @@ from __future__ import annotations
 import threading
 from typing import TYPE_CHECKING
 
-from textual.widgets import Label, ListView
+from textual.widgets import Label, ListView, RichLog
 
 from .themes import get_scheme, DEFAULT_SCHEME
 from .widgets import ChoiceItem, _safe_action
