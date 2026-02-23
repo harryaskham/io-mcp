@@ -268,6 +268,7 @@ class IoMcpApp(App):
     def compose(self) -> ComposeResult:
         yield Header(name="io-mcp", show_clock=False)
         yield Static("", id="tab-bar")
+        yield Static("", id="daemon-status")
         status_text = "[dim]Ready — demo mode[/dim]" if self._demo else "[dim]Waiting for agent...[/dim]"
         yield Label(status_text, id="status")
         yield Label("", id="agent-activity")
@@ -292,6 +293,10 @@ class IoMcpApp(App):
         self._cleanup_timer = self.set_interval(60, self._cleanup_stale_sessions)
         # Heartbeat: check every 15s if agent has been silent too long
         self._heartbeat_timer = self.set_interval(15, self._check_heartbeat)
+        # Daemon health check: every 10s update status indicators
+        self._daemon_health_timer = self.set_interval(10, self._update_daemon_status)
+        # Initial health check
+        self._update_daemon_status()
 
     def _touch_session(self, session: Session) -> None:
         """Update last_activity, safe for old Session objects without the field."""
@@ -299,6 +304,69 @@ class IoMcpApp(App):
             session.last_activity = time.time()
         except AttributeError:
             pass
+
+    def _update_daemon_status(self) -> None:
+        """Check proxy/backend/API health and update the status bar.
+
+        Runs health checks in a background thread to avoid blocking the TUI.
+        """
+        def _check():
+            import urllib.request
+            import urllib.error
+
+            # Check proxy via PID file
+            proxy_ok = False
+            try:
+                with open("/tmp/io-mcp-server.pid", "r") as f:
+                    pid = int(f.read().strip())
+                os.kill(pid, 0)
+                proxy_ok = True
+            except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError):
+                pass
+
+            # Check backend /health
+            backend_ok = False
+            try:
+                req = urllib.request.Request("http://localhost:8446/health", method="GET")
+                with urllib.request.urlopen(req, timeout=1) as resp:
+                    backend_ok = resp.status == 200
+            except Exception:
+                pass
+
+            # Check Android API /health
+            api_ok = False
+            try:
+                req = urllib.request.Request("http://localhost:8445/api/health", method="GET")
+                with urllib.request.urlopen(req, timeout=1) as resp:
+                    api_ok = resp.status == 200
+            except Exception:
+                pass
+
+            # Session count
+            session_count = len(self.manager.sessions) if hasattr(self.manager, 'sessions') else 0
+
+            # Update UI from main thread
+            s = self._cs
+
+            def _dot(ok: bool) -> str:
+                color = s['success'] if ok else s['error']
+                return f"[{color}]●[/{color}]"
+
+            status_text = (
+                f"{_dot(proxy_ok)} proxy  "
+                f"{_dot(backend_ok)} backend  "
+                f"{_dot(api_ok)} api  "
+                f"[dim]│[/dim] [dim]{session_count} session{'s' if session_count != 1 else ''}[/dim]"
+            )
+
+            try:
+                self.call_from_thread(
+                    lambda: self.query_one("#daemon-status", Static).update(status_text)
+                )
+            except Exception:
+                pass
+
+        threading.Thread(target=_check, daemon=True).start()
 
     def _cleanup_stale_sessions(self) -> None:
         """Remove sessions that have been inactive past the configured timeout.
@@ -1001,6 +1069,103 @@ class IoMcpApp(App):
         status.update(f"[{self._cs['warning']}]⧗[/{self._cs['warning']}] [{session.name}] Waiting for agent...{msg_info} [dim](u=undo)[/dim]")
         status.display = True
 
+    # ─── Dialog system ────────────────────────────────────────────
+
+    def _show_dialog(
+        self,
+        title: str,
+        message: str,
+        buttons: list[dict],
+        callback: callable,
+        speak_title: bool = True,
+    ) -> None:
+        """Show a modal dialog with action buttons.
+
+        Uses the choice list UI but styled as a dialog with a title,
+        message body, and action buttons. The callback receives the
+        selected button's label.
+
+        Args:
+            title: Dialog title (shown in preamble area)
+            message: Body text (shown as a dim info item at top)
+            buttons: List of {"label": "...", "summary": "..."} dicts
+            callback: Function called with selected label string
+            speak_title: Whether to speak the title via TTS
+        """
+        session = self._focused()
+
+        self._tts.stop()
+
+        # Enter a settings-like modal
+        self._in_settings = True
+        self._dialog_callback = callback
+        self._dialog_buttons = buttons
+
+        s = self._cs
+        preamble_widget = self.query_one("#preamble", Label)
+        preamble_widget.update(f"[bold {s['purple']}]{title}[/bold {s['purple']}]")
+        preamble_widget.display = True
+
+        list_view = self.query_one("#choices", ListView)
+        list_view.clear()
+
+        # Message body as a non-selectable info item
+        if message:
+            list_view.append(ChoiceItem(
+                f"[dim]{message}[/dim]", "",
+                index=0, display_index=0,
+            ))
+
+        # Action buttons
+        for i, btn in enumerate(buttons):
+            display_idx = i + (1 if message else 0)
+            list_view.append(ChoiceItem(
+                btn["label"], btn.get("summary", ""),
+                index=i + 1, display_index=display_idx,
+            ))
+
+        list_view.display = True
+        # Focus first button (skip message)
+        list_view.index = 1 if message else 0
+        list_view.focus()
+
+        if speak_title:
+            self._tts.speak_async(f"{title}. {message}" if message else title)
+
+    def _handle_dialog_select(self, idx: int) -> None:
+        """Handle a selection in dialog mode."""
+        buttons = getattr(self, '_dialog_buttons', [])
+        callback = getattr(self, '_dialog_callback', None)
+
+        # Adjust for message item offset
+        btn_idx = idx - 1 if hasattr(self, '_dialog_has_message') else idx
+        # Actually check if first item is a message
+        list_view = self.query_one("#choices", ListView)
+        first_item = list_view.children[0] if list_view.children else None
+        has_message = first_item and isinstance(first_item, ChoiceItem) and first_item.choice_index == 0
+
+        if has_message:
+            btn_idx = idx - 1
+        else:
+            btn_idx = idx
+
+        if btn_idx < 0:
+            # Clicked on message — ignore
+            return
+
+        # Exit dialog
+        self._in_settings = False
+        self._dialog_callback = None
+        self._dialog_buttons = []
+
+        if btn_idx < len(buttons) and callback:
+            label = buttons[btn_idx]["label"]
+            self._tts.speak_async(label)
+            callback(label)
+        else:
+            # Cancel / out of bounds
+            self._exit_settings()
+
     def _request_compact(self) -> None:
         """Request context compaction by returning instructions to the agent."""
         session = self._focused()
@@ -1029,21 +1194,33 @@ class IoMcpApp(App):
     def _restart_tui(self) -> None:
         """Restart the TUI backend process.
 
-        Uses os.execv to replace the current process with a fresh one.
-        The proxy stays alive so agent MCP connections are preserved.
-        Strips --restart from argv since it's a one-time cleanup flag.
+        Shows a confirmation dialog, then uses os.execv to replace the
+        current process with a fresh one. The proxy stays alive so agent
+        MCP connections are preserved.
         """
-        self._tts.speak_async("Restarting TUI in 2 seconds")
+        def _on_confirm(label: str):
+            if label.lower().startswith("restart"):
+                self._tts.speak_async("Restarting TUI in 2 seconds")
 
-        import time as _time
+                def _do_restart():
+                    time.sleep(2.0)
+                    # Strip one-time flags that shouldn't persist across restarts
+                    argv = [a for a in sys.argv if a != "--restart"]
+                    os.execv(sys.executable, [sys.executable] + argv)
 
-        def _do_restart():
-            _time.sleep(2.0)
-            # Strip one-time flags that shouldn't persist across restarts
-            argv = [a for a in sys.argv if a != "--restart"]
-            os.execv(sys.executable, [sys.executable] + argv)
+                threading.Thread(target=_do_restart, daemon=True).start()
+            else:
+                self._exit_settings()
 
-        threading.Thread(target=_do_restart, daemon=True).start()
+        self._show_dialog(
+            title="Restart TUI?",
+            message="The TUI will restart. Agent connections via proxy are preserved.",
+            buttons=[
+                {"label": "Restart now", "summary": "Restart the TUI backend process"},
+                {"label": "Cancel", "summary": "Go back to choices"},
+            ],
+            callback=_on_confirm,
+        )
 
     def _enter_worktree_mode(self) -> None:
         """Start worktree creation flow.
@@ -1271,11 +1448,13 @@ class IoMcpApp(App):
             return
 
         s = self._cs
-        preamble_widget = self.query_one("#preamble", Label)
         checked_count = sum(self._multi_select_checked)
+        total = len(session.choices)
+
+        preamble_widget = self.query_one("#preamble", Label)
         preamble_widget.update(
             f"[bold {s['purple']}]Multi-select[/bold {s['purple']}] — "
-            f"{checked_count} selected "
+            f"[{s['success']}]{checked_count}[/{s['success']}]/{total} selected "
             f"[dim](enter=toggle, scroll to confirm)[/dim]"
         )
         preamble_widget.display = True
@@ -1287,28 +1466,54 @@ class IoMcpApp(App):
 
         list_view.clear()
 
+        # Select all / Deselect all toggle at top
+        all_selected = all(self._multi_select_checked) if self._multi_select_checked else False
+        toggle_label = f"[{s['accent']}]□ Deselect all[/{s['accent']}]" if all_selected else f"[{s['accent']}]■ Select all[/{s['accent']}]"
+        list_view.append(ChoiceItem(
+            toggle_label, f"{'Deselect' if all_selected else 'Select'} all {total} items",
+            index=-99, display_index=0,
+        ))
+
         # Choices with checkboxes
         for i, c in enumerate(session.choices):
-            check = f"[{s['success']}]✓[/{s['success']}]" if self._multi_select_checked[i] else "○"
-            label = f" {check}  {c.get('label', '')}"
+            is_checked = i < len(self._multi_select_checked) and self._multi_select_checked[i]
+            if is_checked:
+                check = f"[{s['success']}]☑[/{s['success']}]"
+            else:
+                check = f"[{s['fg_dim']}]☐[/{s['fg_dim']}]"
+            num = str(i + 1)
+            pad = " " * (2 - len(num))
+            label = f"{pad}{num}. {check}  {c.get('label', '')}"
             summary = c.get('summary', '')
-            list_view.append(ChoiceItem(label, summary, index=i + 1, display_index=i))
+            list_view.append(ChoiceItem(label, summary, index=i + 1, display_index=i + 1))
 
         # Confirm options
-        confirm_idx = len(session.choices)
+        confirm_offset = total + 1  # +1 for the select-all row
+        if checked_count > 0:
+            selected_labels = [
+                session.choices[i].get("label", "")
+                for i in range(total)
+                if i < len(self._multi_select_checked) and self._multi_select_checked[i]
+            ]
+            selected_summary = ", ".join(selected_labels[:3])
+            if len(selected_labels) > 3:
+                selected_summary += f" +{len(selected_labels) - 3} more"
+        else:
+            selected_summary = "Nothing selected yet"
+
         list_view.append(ChoiceItem(
-            f"[bold {s['success']}]✅ Confirm selection[/bold {s['success']}]",
-            f"{checked_count} item(s) — do all selected",
-            index=confirm_idx + 1, display_index=confirm_idx,
+            f"[bold {s['success']}]✅ Confirm ({checked_count})[/bold {s['success']}]",
+            selected_summary,
+            index=total + 1, display_index=confirm_offset,
         ))
         list_view.append(ChoiceItem(
-            f"[bold {s['accent']}]🚀 Confirm with team[/bold {s['accent']}]",
-            f"{checked_count} item(s) — delegate each to a parallel sub-agent",
-            index=confirm_idx + 2, display_index=confirm_idx + 1,
+            f"[bold {s['accent']}]🚀 Team mode ({checked_count})[/bold {s['accent']}]",
+            f"Delegate {checked_count} task{'s' if checked_count != 1 else ''} to parallel sub-agents",
+            index=total + 2, display_index=confirm_offset + 1,
         ))
         list_view.append(ChoiceItem(
-            "[dim]Cancel[/dim]", "Exit multi-select, return to choices",
-            index=confirm_idx + 3, display_index=confirm_idx + 2,
+            f"[dim]Cancel[/dim]", "Return to choices",
+            index=total + 3, display_index=confirm_offset + 2,
         ))
 
         list_view.display = True
@@ -1320,7 +1525,15 @@ class IoMcpApp(App):
         list_view.focus()
 
     def _handle_multi_select_enter(self, idx: int) -> None:
-        """Handle Enter press in multi-select mode."""
+        """Handle Enter press in multi-select mode.
+
+        Layout (display_index):
+          0 = Select all / Deselect all
+          1..num_choices = Checkable choices
+          num_choices+1 = Confirm
+          num_choices+2 = Team mode
+          num_choices+3 = Cancel
+        """
         session = self._focused()
         if not session:
             return
@@ -1328,25 +1541,35 @@ class IoMcpApp(App):
         num_choices = len(session.choices)
         num_checked = len(self._multi_select_checked)
 
-        if idx < num_choices and idx < num_checked:
-            # Toggle the choice
-            self._multi_select_checked[idx] = not self._multi_select_checked[idx]
-            state = "selected" if self._multi_select_checked[idx] else "unselected"
-            label = session.choices[idx].get("label", "")
-            self._tts.speak_async(f"{label} {state}")
+        if idx == 0:
+            # Select all / Deselect all toggle
+            all_selected = all(self._multi_select_checked) if self._multi_select_checked else False
+            new_val = not all_selected
+            self._multi_select_checked = [new_val] * num_choices
+            state = "all selected" if new_val else "all deselected"
+            self._tts.speak_async(state)
             self._refresh_multi_select()
-        elif idx == num_choices:
+        elif 1 <= idx <= num_choices:
+            # Toggle the choice (adjusted for select-all offset)
+            choice_idx = idx - 1
+            if choice_idx < num_checked:
+                self._multi_select_checked[choice_idx] = not self._multi_select_checked[choice_idx]
+                state = "selected" if self._multi_select_checked[choice_idx] else "unselected"
+                label = session.choices[choice_idx].get("label", "")
+                self._tts.speak_async(f"{label} {state}")
+                self._refresh_multi_select()
+        elif idx == num_choices + 1:
             # Confirm selection
             self._confirm_multi_select(team=False)
-        elif idx == num_choices + 1:
+        elif idx == num_choices + 2:
             # Confirm with team
             self._confirm_multi_select(team=True)
-        elif idx == num_choices + 2:
+        elif idx == num_choices + 3:
             # Cancel
             self._multi_select_mode = False
             self._multi_select_checked = []
             self._show_choices()
-            self._tts.speak_async("Multi-select cancelled. Back to choices.")
+            self._tts.speak_async("Multi-select cancelled.")
 
     def _confirm_multi_select(self, team: bool = False) -> None:
         """Confirm multi-select and return all selected choices as one response."""
@@ -2246,6 +2469,23 @@ class IoMcpApp(App):
 
         # In settings mode
         if self._in_settings:
+            # Dialog mode: read button labels
+            if getattr(self, '_dialog_callback', None):
+                if isinstance(event.item, ChoiceItem):
+                    buttons = getattr(self, '_dialog_buttons', [])
+                    idx = event.item.display_index
+                    # First item may be the message (choice_index == 0)
+                    if event.item.choice_index == 0:
+                        return  # Don't read the message on highlight
+                    btn_idx = idx - 1 if any(
+                        c.choice_index == 0 for c in self.query_one("#choices", ListView).children
+                        if isinstance(c, ChoiceItem)
+                    ) else idx
+                    if 0 <= btn_idx < len(buttons):
+                        btn = buttons[btn_idx]
+                        text = f"{btn['label']}. {btn.get('summary', '')}" if btn.get('summary') else btn['label']
+                        self._tts.speak_async(text)
+                return
             # Log viewer: read the full speech entry text
             if getattr(self, '_log_viewer_mode', False):
                 if isinstance(event.item, ChoiceItem) and session:
@@ -2282,21 +2522,26 @@ class IoMcpApp(App):
             return
 
         # Multi-select mode: speak checkbox items and action buttons
+        # Layout: idx 0=toggle-all, 1..N=choices, N+1=confirm, N+2=team, N+3=cancel
         if self._multi_select_mode and isinstance(event.item, ChoiceItem):
             idx = event.item.display_index
             num_choices = len(session.choices)
-            if idx < num_choices:
-                check = "checked" if (idx < len(self._multi_select_checked) and self._multi_select_checked[idx]) else "unchecked"
-                label = session.choices[idx].get("label", "")
+            checked_count = sum(self._multi_select_checked) if self._multi_select_checked else 0
+            if idx == 0:
+                # Select all / Deselect all
+                all_selected = all(self._multi_select_checked) if self._multi_select_checked else False
+                self._tts.speak_async("Deselect all" if all_selected else "Select all")
+            elif 1 <= idx <= num_choices:
+                choice_idx = idx - 1
+                check = "checked" if (choice_idx < len(self._multi_select_checked) and self._multi_select_checked[choice_idx]) else "unchecked"
+                label = session.choices[choice_idx].get("label", "")
                 self._tts.speak_async(f"{label}, {check}")
-            elif idx == num_choices:
-                checked_count = sum(self._multi_select_checked) if self._multi_select_checked else 0
-                self._tts.speak_async(f"Confirm selection. {checked_count} items selected.")
             elif idx == num_choices + 1:
-                checked_count = sum(self._multi_select_checked) if self._multi_select_checked else 0
-                self._tts.speak_async(f"Confirm with team. {checked_count} items for parallel agents.")
+                self._tts.speak_async(f"Confirm. {checked_count} selected.")
             elif idx == num_choices + 2:
-                self._tts.speak_async("Cancel multi-select.")
+                self._tts.speak_async(f"Team mode. {checked_count} for parallel agents.")
+            elif idx == num_choices + 3:
+                self._tts.speak_async("Cancel.")
             return
 
         # During intro/options readout, suppress highlight-triggered speech.
@@ -2340,6 +2585,10 @@ class IoMcpApp(App):
         # Multi-select mode: toggle or confirm
         if self._multi_select_mode and isinstance(event.item, ChoiceItem):
             self._handle_multi_select_enter(event.item.display_index)
+            return
+        # Dialog mode: dispatch to dialog handler
+        if getattr(self, '_dialog_callback', None) and isinstance(event.item, ChoiceItem):
+            self._handle_dialog_select(event.item.display_index)
             return
         if self._in_settings:
             if isinstance(event.item, ChoiceItem):

@@ -101,6 +101,14 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
         border-bottom: solid {s['border']};
     }}
 
+    #daemon-status {{
+        margin: 0 2 0 2;
+        height: 1;
+        color: {s['fg_dim']};
+        width: 1fr;
+        padding: 0 1;
+    }}
+
     #preamble {{
         margin: 1 2 0 2;
         padding: 1 1;
