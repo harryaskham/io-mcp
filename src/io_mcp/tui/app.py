@@ -326,7 +326,8 @@ class IoMcpApp(App):
     def on_mount(self) -> None:
         self.title = "io-mcp"
         self.sub_title = ""
-        self.query_one("#tab-bar").display = False
+        # Tab bar always visible — shows branding or agent names
+        self._update_tab_bar()
         self.query_one("#preamble").display = False
         self.query_one("#choices").display = False
         self.query_one("#dwell-bar").display = False
@@ -736,18 +737,51 @@ class IoMcpApp(App):
     # ─── Tab bar rendering ─────────────────────────────────────────
 
     def _update_tab_bar(self) -> None:
-        """Update the tab bar display."""
+        """Update the tab bar display.
+
+        Always visible — shows 'io-mcp' branding when no sessions,
+        agent name for single sessions, and full tab bar for multiple.
+        """
         tab_bar = self.query_one("#tab-bar", Static)
-        if self.manager.count() <= 0:
-            tab_bar.display = False
-            return
         s = get_scheme(getattr(self, '_color_scheme', DEFAULT_SCHEME))
-        tab_bar.update(self.manager.tab_bar_text(
-            accent=s['accent'],
-            success=s['success'],
-            warning=s['warning'],
-            error=s['error'],
-        ))
+
+        if self.manager.count() <= 0:
+            # No agents — show branding
+            tab_bar.update(f"[bold {s['accent']}]io-mcp[/bold {s['accent']}]  [dim]waiting for agent...[/dim]")
+            tab_bar.display = True
+            return
+
+        if self.manager.count() == 1:
+            # Single agent — show descriptive name prominently
+            session = self._focused()
+            if session:
+                name = session.name
+                # Health indicator for single agent
+                health = getattr(session, 'health_status', 'healthy')
+                health_icon = ""
+                if session.active:
+                    health_icon = f" [{s['success']}]●[/{s['success']}]"
+                elif health == "warning":
+                    health_icon = f" [{s['warning']}]⚠[/{s['warning']}]"
+                elif health == "unresponsive":
+                    health_icon = f" [{s['error']}]✗[/{s['error']}]"
+
+                tab_bar.update(
+                    f"[bold {s['accent']}]{name}[/bold {s['accent']}]{health_icon}"
+                    f"  [{s['fg_dim']}]│[/{s['fg_dim']}]  "
+                    f"[dim]io-mcp[/dim]"
+                )
+            else:
+                tab_bar.update(f"[bold {s['accent']}]io-mcp[/bold {s['accent']}]")
+        else:
+            # Multiple agents — full tab bar
+            tab_bar.update(self.manager.tab_bar_text(
+                accent=s['accent'],
+                success=s['success'],
+                warning=s['warning'],
+                error=s['error'],
+            ))
+
         tab_bar.display = True
 
     # ─── Speech log rendering ──────────────────────────────────────

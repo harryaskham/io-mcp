@@ -92,57 +92,70 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
         background: {s['bg']};
     }}
 
+    /* ─── Tab bar (replaces Header) ─────────────────────────── */
+
     #tab-bar {{
-        margin: 0 1;
+        dock: top;
         height: 1;
+        width: 1fr;
         color: {s['accent']};
         background: {s['bg_alt']};
         padding: 0 1;
         border-bottom: solid {s['border']};
     }}
 
+    /* ─── Daemon status line ────────────────────────────────── */
+
     #daemon-status {{
-        margin: 0 2 0 2;
         height: 1;
         color: {s['fg_dim']};
         width: 1fr;
-        padding: 0 1;
+        padding: 0 2;
     }}
 
+    /* ─── Agent prompt / preamble ──────────────────────────── */
+
     #preamble {{
-        margin: 1 2 0 2;
-        padding: 1 1;
+        margin: 0 1;
+        padding: 1 2;
         color: {s['success']};
+        background: {s['bg_alt']};
         width: 1fr;
         height: auto;
         text-style: bold;
         border-bottom: solid {s['border']};
     }}
 
+    /* ─── Status / waiting message ─────────────────────────── */
+
     #status {{
-        margin: 0 2 0 2;
-        padding: 1 1;
+        margin: 0 1;
+        padding: 1 2;
         color: {s['warning']};
         width: 1fr;
         height: auto;
     }}
 
+    /* ─── Agent activity indicator ─────────────────────────── */
+
     #agent-activity {{
-        margin: 0 2;
-        padding: 0 1;
+        margin: 0 1;
+        padding: 0 2;
         height: auto;
         color: {s['blue']};
         width: 1fr;
         display: none;
     }}
 
+    /* ─── Speech log ──────────────────────────────────────── */
+
     #speech-log {{
-        margin: 0 2;
+        margin: 0 1;
         height: auto;
         max-height: 5;
-        padding: 0 1;
+        padding: 0 2;
+        background: {s['bg']};
         border-top: solid {s['border']};
-        border-bottom: solid {s['border']};
     }}
 
     .speech-entry {{
@@ -152,12 +165,20 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
         width: 1fr;
     }}
 
+    /* ─── Choices list ────────────────────────────────────── */
+
     #choices {{
         margin: 0 1;
         height: 1fr;
         overflow-x: hidden;
         padding: 1 0;
+        background: {s['bg_alt']};
+        border-left: solid {s['border']};
+        border-right: solid {s['border']};
+        border-bottom: solid {s['border']};
     }}
+
+    /* ─── Tmux pane view ──────────────────────────────────── */
 
     #pane-view {{
         margin: 0 1;
@@ -168,11 +189,14 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
         display: none;
     }}
 
+    /* ─── Choice item styling ─────────────────────────────── */
+
     ChoiceItem {{
         padding: 0 2;
         height: auto;
         width: 1fr;
         margin: 0 0;
+        background: {s['bg_alt']};
     }}
 
     ChoiceItem > .choice-label {{
@@ -201,11 +225,15 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
         color: {s['highlight_accent']};
     }}
 
+    /* ─── Dwell countdown bar ─────────────────────────────── */
+
     #dwell-bar {{
         margin: 0 2;
         color: {s['warning']};
         height: 1;
     }}
+
+    /* ─── Bottom help bar ─────────────────────────────────── */
 
     #footer-help {{
         dock: bottom;
@@ -213,22 +241,28 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
         background: {s['bg_alt']};
         color: {s['fg_dim']};
         padding: 0 1;
+        border-top: solid {s['border']};
     }}
 
+    /* ─── Input fields ────────────────────────────────────── */
+
     #freeform-input {{
-        margin: 1 2;
+        margin: 1 1;
         display: none;
         border: tall {s['accent']};
+        background: {s['bg_alt']};
     }}
 
     #filter-input {{
-        margin: 0 2;
+        margin: 0 1;
         display: none;
         border: tall {s['purple']};
+        background: {s['bg_alt']};
     }}
 
+    /* ─── Hide Textual Header (replaced by tab-bar) ───────── */
+
     Header {{
-        background: {s['bg']};
-        color: {s['accent']};
+        display: none;
     }}
     """
