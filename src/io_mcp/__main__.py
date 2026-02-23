@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import argparse
 import atexit
-import asyncio
 import json
 import logging
 import os
@@ -100,55 +99,64 @@ def _release_wake_lock() -> None:
 
 
 def _is_local_address(addr: str) -> bool:
-    """Check if an address refers to this machine."""
     host = addr.split(":")[0] if ":" in addr else addr
     return host in ("localhost", "127.0.0.1", "0.0.0.0", "::1", "")
 
 
+def _is_proxy_alive() -> bool:
+    """Check if the proxy daemon process is alive via PID file."""
+    try:
+        with open(PROXY_PID_FILE, "r") as f:
+            pid = int(f.read().strip())
+        os.kill(pid, 0)  # signal 0 = check if alive
+        return True
+    except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError):
+        return False
+
+
 def _ensure_proxy_running(proxy_address: str, backend_port: int) -> None:
-    """Start the MCP proxy daemon if not already running.
-
-    Only starts if the proxy address is local (we can't start remote proxies).
-    """
-    from .proxy import check_health
-
-    if check_health(proxy_address):
-        print(f"  Proxy: already running at {proxy_address}", flush=True)
+    """Start the MCP proxy daemon if not already running."""
+    if _is_proxy_alive():
+        print(f"  Proxy: already running (PID in {PROXY_PID_FILE})", flush=True)
         return
 
     if not _is_local_address(proxy_address):
-        print(f"  ERROR: Proxy at {proxy_address} is not responding and is remote — cannot start it", flush=True)
-        print(f"  Start it manually on that machine: io-mcp server --io-mcp-address <this-machine>:{backend_port}", flush=True)
+        print(f"  ERROR: Proxy at {proxy_address} is not running and is remote", flush=True)
+        print(f"  Start it manually: io-mcp server --io-mcp-address <this-machine>:{backend_port}", flush=True)
         sys.exit(1)
 
-    # Parse host:port from proxy address
     parts = proxy_address.split(":")
     proxy_host = parts[0] if parts[0] else "0.0.0.0"
     proxy_port = int(parts[1]) if len(parts) > 1 else DEFAULT_PROXY_PORT
 
     print(f"  Proxy: starting daemon on {proxy_host}:{proxy_port}...", flush=True)
 
-    # Start proxy as a subprocess (it will daemonize itself)
     try:
+        # Start proxy as a detached subprocess
+        log_file = open("/tmp/io-mcp-server.log", "a")
         proc = subprocess.Popen(
             [sys.executable, "-m", "io_mcp", "server",
              "--host", proxy_host,
              "--port", str(proxy_port),
-             "--io-mcp-address", f"localhost:{backend_port}"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+             "--io-mcp-address", f"localhost:{backend_port}",
+             "--foreground"],
+            stdout=log_file,
+            stderr=log_file,
+            start_new_session=True,  # Detach from parent process group
         )
-        # Wait a moment for the daemon to start
-        import time
-        time.sleep(1.0)
+        # Write PID file ourselves since the child runs in foreground mode
+        with open(PROXY_PID_FILE, "w") as f:
+            f.write(str(proc.pid))
 
-        if check_health(proxy_address):
-            print(f"  Proxy: started (PID in {PROXY_PID_FILE})", flush=True)
+        import time
+        time.sleep(0.5)
+
+        if proc.poll() is None:
+            print(f"  Proxy: started (PID {proc.pid})", flush=True)
         else:
-            print(f"  Proxy: started subprocess but health check failed (may need a moment)", flush=True)
+            print(f"  Proxy: process exited immediately — check /tmp/io-mcp-server.log", flush=True)
     except Exception as e:
         print(f"  Proxy: failed to start — {e}", flush=True)
-        print(f"  Start it manually: io-mcp server", flush=True)
 
 
 # ─── Backend tool dispatcher ──────────────────────────────────────────
@@ -159,8 +167,6 @@ def _create_tool_dispatcher(app: IoMcpApp, append_options: list[str],
 
     Returns a callable(tool_name, args, session_id) -> str
     """
-    from .server import create_mcp_server
-
     # Adapt IoMcpApp to the Frontend protocol
     class _AppFrontend:
         @property
@@ -190,11 +196,6 @@ def _create_tool_dispatcher(app: IoMcpApp, append_options: list[str],
 
     frontend = _AppFrontend()
 
-    # Create the MCP server (we won't run its HTTP transport, just use
-    # its tool dispatch logic via the Frontend protocol)
-    # Instead, we'll create tool handlers directly
-
-    # Build tool dispatch table
     import time as _time
 
     # Build config-based extra options
@@ -275,7 +276,6 @@ def _create_tool_dispatcher(app: IoMcpApp, append_options: list[str],
             if not any(c.get("label", "").lower() == opt["label"].lower() for c in all_choices):
                 all_choices.append(dict(opt))
 
-        # Undo loop
         while True:
             session.last_preamble = preamble
             session.last_choices = list(all_choices)
@@ -321,12 +321,11 @@ def _create_tool_dispatcher(app: IoMcpApp, append_options: list[str],
         return _attach_messages(f"Urgently spoke: {preview}", session)
 
     def _tool_set_speed(args, session_id):
-        speed = args.get("speed", 1.0)
         if frontend.config:
-            frontend.config.set_tts_speed(speed)
+            frontend.config.set_tts_speed(args.get("speed", 1.0))
             frontend.config.save()
             frontend.tts.clear_cache()
-        return f"Speed set to {speed}"
+        return f"Speed set to {args.get('speed', 1.0)}"
 
     def _tool_set_voice(args, session_id):
         voice = args.get("voice", "")
@@ -412,14 +411,7 @@ def _create_tool_dispatcher(app: IoMcpApp, append_options: list[str],
             "name": session.name,
             "is_local": is_local,
             "io_mcp_hostname": local_hostname,
-            "features": [
-                "present_choices", "present_multi_select",
-                "speak", "speak_async", "speak_urgent",
-                "set_speed", "set_voice", "set_emotion",
-                "set_tts_model", "set_stt_model",
-                "rename_session", "get_settings", "reload_config",
-                "pull_latest", "run_command",
-            ],
+            "features": list(TOOLS.keys()),
         })
 
     def _tool_rename_session(args, session_id):
@@ -449,10 +441,8 @@ def _create_tool_dispatcher(app: IoMcpApp, append_options: list[str],
         import subprocess as sp
         project_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         try:
-            result = sp.run(
-                ["git", "pull", "--rebase", "origin", "main"],
-                cwd=project_dir, capture_output=True, text=True, timeout=30,
-            )
+            result = sp.run(["git", "pull", "--rebase", "origin", "main"],
+                          cwd=project_dir, capture_output=True, text=True, timeout=30)
             output = result.stdout.strip()
             if result.returncode != 0:
                 return json.dumps({"status": "error", "output": output, "error": result.stderr.strip()})
@@ -461,7 +451,7 @@ def _create_tool_dispatcher(app: IoMcpApp, append_options: list[str],
                 return json.dumps({"status": "pulled_and_reloaded", "output": output})
             except Exception:
                 return json.dumps({"status": "pulled", "output": output, "note": "Hot reload failed"})
-        except sp.TimeoutExpired:
+        except subprocess.TimeoutExpired:
             return json.dumps({"status": "error", "error": "Git pull timed out"})
         except Exception as e:
             return json.dumps({"status": "error", "error": str(e)})
@@ -470,26 +460,16 @@ def _create_tool_dispatcher(app: IoMcpApp, append_options: list[str],
         import subprocess as sp
         session = _get_session(session_id)
         command = args.get("command", "")
-
-        result = frontend.present_choices(
-            session,
-            f"Agent wants to run: {command}",
-            [
-                {"label": "Approve", "summary": f"Run: {command}"},
-                {"label": "Deny", "summary": "Reject this command"},
-            ],
-        )
+        result = frontend.present_choices(session, f"Agent wants to run: {command}",
+            [{"label": "Approve", "summary": f"Run: {command}"},
+             {"label": "Deny", "summary": "Reject this command"}])
         if result.get("selected", "").lower() != "approve":
             return json.dumps({"status": "denied", "command": command})
-
         try:
             proc = sp.run(command, shell=True, capture_output=True, text=True, timeout=60)
-            return json.dumps({
-                "status": "completed", "command": command,
-                "returncode": proc.returncode,
-                "stdout": proc.stdout[:5000],
-                "stderr": proc.stderr[:2000],
-            })
+            return json.dumps({"status": "completed", "command": command,
+                             "returncode": proc.returncode,
+                             "stdout": proc.stdout[:5000], "stderr": proc.stderr[:2000]})
         except sp.TimeoutExpired:
             return json.dumps({"status": "timeout", "command": command, "error": "Timed out after 60s"})
         except Exception as e:
@@ -498,28 +478,18 @@ def _create_tool_dispatcher(app: IoMcpApp, append_options: list[str],
     def _tool_request_restart(args, session_id):
         session = _get_session(session_id)
         session.last_tool_name = "request_restart"
-
-        # Ask user for confirmation
-        result = frontend.present_choices(
-            session,
-            "Agent is requesting a backend restart. This will reload TUI, config, and code. Your MCP connection stays alive.",
-            [
-                {"label": "Approve restart", "summary": "Restart the io-mcp backend now"},
-                {"label": "Deny", "summary": "Keep running, don't restart"},
-            ],
-        )
-
+        result = frontend.present_choices(session,
+            "Agent requests backend restart. TUI/config/code reloads. MCP connection stays alive.",
+            [{"label": "Approve restart", "summary": "Restart io-mcp backend now"},
+             {"label": "Deny", "summary": "Keep running"}])
         if result.get("selected", "").lower() != "approve restart":
-            return json.dumps({"status": "rejected", "message": "User denied restart request"})
+            return json.dumps({"status": "rejected", "message": "User denied restart"})
 
-        # Return success FIRST, then schedule the restart
-        # This ensures the MCP round-trip completes before we die
         def _do_restart():
             import time as _t
-            _t.sleep(0.5)  # Let the HTTP response complete
+            _t.sleep(0.5)
             frontend.tts.speak_async("Restarting backend...")
             _t.sleep(1.0)
-            # Re-exec ourselves
             os.execv(sys.executable, [sys.executable, "-m", "io_mcp"] + sys.argv[1:])
 
         threading.Thread(target=_do_restart, daemon=True).start()
@@ -583,30 +553,34 @@ def _run_server_command(args) -> None:
         host=args.host,
         port=args.port,
         backend_url=backend_url,
-        foreground=args.foreground,
+        foreground=True,  # Always foreground — parent manages daemonization
     )
 
 
 # ─── Main entry point ────────────────────────────────────────────
 
 def main() -> None:
+    # Check for "server" subcommand first (before argparse to avoid conflicts)
+    if len(sys.argv) > 1 and sys.argv[1] == "server":
+        parser = argparse.ArgumentParser(prog="io-mcp server",
+            description="Run the MCP proxy server daemon")
+        parser.add_argument("server", help=argparse.SUPPRESS)  # consume 'server'
+        parser.add_argument("--host", default="0.0.0.0")
+        parser.add_argument("--port", type=int, default=DEFAULT_PROXY_PORT)
+        parser.add_argument("--io-mcp-address", default=f"localhost:{DEFAULT_BACKEND_PORT}")
+        parser.add_argument("--foreground", action="store_true")
+        args = parser.parse_args()
+        _run_server_command(args)
+        return
+
+    # ─── Main backend ─────────────────────────────────────────
     parser = argparse.ArgumentParser(
         description="io-mcp — scroll-wheel input + TTS narration for Claude Code"
     )
-    subparsers = parser.add_subparsers(dest="command")
-
-    # ─── io-mcp server ────────────────────────────────────────
-    server_parser = subparsers.add_parser("server", help="Run the MCP proxy server daemon")
-    server_parser.add_argument("--host", default="0.0.0.0", help="Bind address (default: 0.0.0.0)")
-    server_parser.add_argument("--port", type=int, default=DEFAULT_PROXY_PORT, help=f"Port (default: {DEFAULT_PROXY_PORT})")
-    server_parser.add_argument("--io-mcp-address", default=f"localhost:{DEFAULT_BACKEND_PORT}",
-                               help=f"Backend address (default: localhost:{DEFAULT_BACKEND_PORT})")
-    server_parser.add_argument("--foreground", action="store_true", help="Run in foreground (don't daemonize)")
-
-    # ─── io-mcp (main backend) ────────────────────────────────
     parser.add_argument("--local", action="store_true", help="Use espeak-ng instead of API TTS")
-    parser.add_argument("--port", type=int, default=DEFAULT_BACKEND_PORT, help=f"Backend port (default: {DEFAULT_BACKEND_PORT})")
-    parser.add_argument("--host", default="0.0.0.0", help="Bind address (default: 0.0.0.0)")
+    parser.add_argument("--port", type=int, default=DEFAULT_BACKEND_PORT,
+                        help=f"Backend port (default: {DEFAULT_BACKEND_PORT})")
+    parser.add_argument("--host", default="0.0.0.0", help="Bind address")
     parser.add_argument("--proxy-address", default=f"localhost:{DEFAULT_PROXY_PORT}",
                         help=f"MCP proxy address (default: localhost:{DEFAULT_PROXY_PORT})")
     parser.add_argument("--dwell", type=float, default=0.0, metavar="SECONDS")
@@ -620,15 +594,7 @@ def main() -> None:
     parser.add_argument("--invert", action="store_true")
     parser.add_argument("--config-file", default=None, metavar="PATH")
     parser.add_argument("--djent", action="store_true")
-
     args = parser.parse_args()
-
-    # ─── io-mcp server ────────────────────────────────────────
-    if args.command == "server":
-        _run_server_command(args)
-        return
-
-    # ─── io-mcp (main backend) ────────────────────────────────
 
     if not args.append_option:
         args.append_option = ["More options"]
@@ -683,12 +649,10 @@ def main() -> None:
                 time.sleep(0.3)
         threading.Thread(target=_demo_loop, daemon=True).start()
     else:
-        # Kill any existing backend
         _kill_existing_backend()
         _write_pid_file()
         atexit.register(_remove_pid_file)
 
-        # Wake lock on Android
         _acquire_wake_lock()
         atexit.register(_release_wake_lock)
 
@@ -699,9 +663,8 @@ def main() -> None:
         dispatch = _create_tool_dispatcher(app, args.append_option, args.append_silent_option or [])
 
         from .backend import start_backend_server
-        backend_host = "0.0.0.0"  # Accept from proxy (could be remote)
-        start_backend_server(dispatch, host=backend_host, port=args.port)
-        print(f"  Backend: /handle-mcp on {backend_host}:{args.port}", flush=True)
+        start_backend_server(dispatch, host="0.0.0.0", port=args.port)
+        print(f"  Backend: /handle-mcp on 0.0.0.0:{args.port}", flush=True)
 
         # Start Android SSE API on :8445
         try:
@@ -754,7 +717,6 @@ def main() -> None:
         except Exception as e:
             print(f"  Android API: failed — {e}", flush=True)
 
-    # Run TUI in main thread
     app.run()
 
 

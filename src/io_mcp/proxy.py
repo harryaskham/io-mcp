@@ -463,15 +463,13 @@ def run_proxy_server(
     host: str = "0.0.0.0",
     port: int = 8444,
     backend_url: str = DEFAULT_BACKEND,
-    foreground: bool = False,
+    foreground: bool = True,
 ) -> None:
     """Run the MCP proxy server.
 
-    If not foreground, daemonizes and writes PID file.
+    Always runs in foreground — daemonization is handled by the parent
+    process via subprocess.Popen with start_new_session=True.
     """
-    if not foreground:
-        _daemonize()
-
     _write_pid(os.getpid())
 
     # Suppress noisy logs
@@ -483,8 +481,11 @@ def run_proxy_server(
     server = create_proxy_server(host=host, port=port, backend_url=backend_url)
 
     log.info(f"MCP proxy server starting on {host}:{port}, backend={backend_url}")
-    with open("/tmp/io-mcp-server.log", "w") as f:
-        f.write(f"MCP proxy on {host}:{port} → backend {backend_url}\n")
+    try:
+        with open("/tmp/io-mcp-server.log", "a") as f:
+            f.write(f"MCP proxy on {host}:{port} → backend {backend_url}\n")
+    except Exception:
+        pass
 
     server.run(transport="streamable-http")
 
@@ -519,36 +520,9 @@ def is_server_running() -> bool:
         return False
 
 
-def _daemonize() -> None:
-    """Daemonize the current process (Unix double-fork)."""
-    import sys
-
-    # First fork
-    pid = os.fork()
-    if pid > 0:
-        # Parent exits
-        sys.exit(0)
-
-    # Create new session
-    os.setsid()
-
-    # Second fork
-    pid = os.fork()
-    if pid > 0:
-        sys.exit(0)
-
-    # Redirect stdio
-    sys.stdin = open(os.devnull, 'r')
-    sys.stdout = open("/tmp/io-mcp-server.log", 'a')
-    sys.stderr = open("/tmp/io-mcp-server.log", 'a')
-
-
 def check_health(address: str) -> bool:
-    """Check if the proxy server is healthy at the given address."""
-    try:
-        url = f"http://{address}/health"
-        req = urllib.request.Request(url, method="GET")
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            return resp.status == 200
-    except Exception:
-        return False
+    """Check if the proxy server is healthy.
+
+    Uses PID file check (the proxy doesn't expose a /health endpoint).
+    """
+    return is_server_running()
