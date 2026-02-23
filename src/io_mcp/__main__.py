@@ -1006,7 +1006,26 @@ def main() -> None:
         except Exception as e:
             print(f"  Android API: failed — {e}", flush=True)
 
-    app.run()
+    # Run the TUI in a restart loop.
+    # Exit code 42 means "restart", anything else means "quit for real".
+    RESTART_CODE = 42
+    while True:
+        app.run()
+        if getattr(app, '_restart_requested', False):
+            print("\n  Restarting TUI...", flush=True)
+            # Re-create the TUI app for a clean restart
+            app = IoMcpApp(
+                tts=tts,
+                freeform_tts=freeform_tts,
+                freeform_delimiters=args.freeform_tts_delimiters,
+                dwell_time=args.dwell,
+                scroll_debounce=args.scroll_debounce,
+                invert_scroll=args.invert,
+                demo=args.demo,
+                config=config,
+            )
+            continue
+        break
 
 
 if __name__ == "__main__":

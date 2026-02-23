@@ -187,6 +187,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         # Message queue mode
         self._message_mode = False
+        self._restart_requested = False
 
         # Settings (global, not per-session)
         self.settings = Settings(config=config)
@@ -1729,21 +1730,24 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             self._tts.speak_async(f"Failed to send compact command: {e}")
 
     def _restart_tui(self) -> None:
-        """Restart the TUI backend process.
+        """Restart the TUI by exiting with a special code that triggers the restart loop.
 
-        Shows a confirmation dialog, then uses os.execv to replace the
-        current process with a fresh one. The proxy stays alive so agent
-        MCP connections are preserved.
+        The main() function wraps app.run() in a restart loop. Exit code 42
+        means "restart", any other code means "quit for real".
         """
         def _on_confirm(label: str):
             if label.lower().startswith("restart"):
-                self._tts.speak_async("Restarting TUI in 2 seconds")
+                self._speak_ui("Restarting TUI in 2 seconds")
 
                 def _do_restart():
                     time.sleep(2.0)
-                    # Strip one-time flags that shouldn't persist across restarts
-                    argv = [a for a in sys.argv if a != "--restart"]
-                    os.execv(sys.executable, [sys.executable] + argv)
+                    # Save session data before exit
+                    try:
+                        self.manager.save_registered()
+                    except Exception:
+                        pass
+                    self._restart_requested = True
+                    self.exit(return_code=42)
 
                 threading.Thread(target=_do_restart, daemon=True).start()
             else:
