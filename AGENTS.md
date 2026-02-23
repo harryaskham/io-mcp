@@ -271,5 +271,21 @@ register_session(
 - Config validated on load with specific warnings for invalid references
 - Ambient mode: escalating TTS updates during silence (30s initial, then every 45s with context). Configurable in `config.ambient`
 - Agent activity indicator shows last speech in TUI
+
+### Fallback TTS (when MCP is down)
+
+If the io-mcp MCP server is unavailable (connection refused, tools not found), you can still speak to the user by piping TTS audio directly to their phone's PulseAudio server over Tailscale:
+
+```bash
+PULSE_SERVER=100.67.137.9 tts "Your message here" \
+  --model gpt-4o-mini-tts --voice sage --speed 1.3 \
+  --stdout --response-format wav \
+  | PULSE_SERVER=100.67.137.9 paplay
+```
+
+Use the same host as the io-mcp MCP server (the phone's Tailscale IP). This bypasses MCP entirely and sends audio straight to the phone's speakers/earphones. Use this to:
+- Narrate what you're doing when MCP tools are unavailable
+- Communicate critical information if io-mcp crashes
+- Provide a summary and ask the user to restart io-mcp
 - Streaming TTS used automatically for blocking speak calls — lower latency
 - Haptic feedback auto-detected via `termux-vibrate`; no-op on non-Android

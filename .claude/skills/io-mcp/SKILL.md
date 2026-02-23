@@ -102,3 +102,25 @@ When `/io-mcp` is invoked:
 - **Never** work for more than 30 seconds without calling `speak_async()`
 - **Never** use `AskUserQuestion` — use `present_choices()` instead
 - **Never** output long text responses — narrate via `speak_async()` and present options via `present_choices()`
+
+### 7. Fallback TTS (when MCP is down)
+
+If the io-mcp MCP tools are unavailable (connection refused, tool not found errors), you can still speak to the user by piping TTS directly to their phone's PulseAudio server over Tailscale:
+
+```bash
+PULSE_SERVER=100.67.137.9 tts "Your message here" \
+  --model gpt-4o-mini-tts --voice sage --speed 1.3 \
+  --stdout --response-format wav \
+  | PULSE_SERVER=100.67.137.9 paplay
+```
+
+For non-blocking speech (like `speak_async`), run in background:
+
+```bash
+(PULSE_SERVER=100.67.137.9 tts "Working on it..." \
+  --model gpt-4o-mini-tts --voice sage --speed 1.3 \
+  --stdout --response-format wav \
+  | PULSE_SERVER=100.67.137.9 paplay) &
+```
+
+Use the same host as the io-mcp MCP server. This bypasses MCP entirely. Use it to narrate progress or ask the user to restart io-mcp.
