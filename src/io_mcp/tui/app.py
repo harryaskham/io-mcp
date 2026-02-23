@@ -2261,6 +2261,24 @@ class IoMcpApp(App):
         if not session or not session.active:
             return
 
+        # Multi-select mode: speak checkbox items and action buttons
+        if self._multi_select_mode and isinstance(event.item, ChoiceItem):
+            idx = event.item.display_index
+            num_choices = len(session.choices)
+            if idx < num_choices:
+                check = "checked" if (idx < len(self._multi_select_checked) and self._multi_select_checked[idx]) else "unchecked"
+                label = session.choices[idx].get("label", "")
+                self._tts.speak_async(f"{label}, {check}")
+            elif idx == num_choices:
+                checked_count = sum(self._multi_select_checked) if self._multi_select_checked else 0
+                self._tts.speak_async(f"Confirm selection. {checked_count} items selected.")
+            elif idx == num_choices + 1:
+                checked_count = sum(self._multi_select_checked) if self._multi_select_checked else 0
+                self._tts.speak_async(f"Confirm with team. {checked_count} items for parallel agents.")
+            elif idx == num_choices + 2:
+                self._tts.speak_async("Cancel multi-select.")
+            return
+
         # During intro/options readout, suppress highlight-triggered speech.
         # User scrolling is handled by on_mouse_scroll which sets
         # intro_speaking/reading_options = False before the highlight changes.
@@ -2271,6 +2289,8 @@ class IoMcpApp(App):
             logical = event.item.choice_index
             if logical > 0:
                 ci = logical - 1
+                if ci >= len(session.choices):
+                    return
                 c = session.choices[ci]
                 s = c.get('summary', '')
                 text = f"{logical}. {c.get('label', '')}. {s}" if s else f"{logical}. {c.get('label', '')}"
