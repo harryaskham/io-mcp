@@ -250,6 +250,8 @@ EXTRA_OPTIONS = [
     {"label": "Next tab", "summary": "Switch to the next session tab"},
     {"label": "Fast toggle", "summary": "Toggle speed between current and 1.8x"},
     {"label": "Voice toggle", "summary": "Quick-switch between voices"},
+    {"label": "New agent", "summary": "Spawn a new Claude Code agent (local or remote)"},
+    {"label": "Dashboard", "summary": "Overview of all active agents"},
     {"label": "Settings", "summary": "Open settings menu"},
     {"label": "Record response", "summary": "Speak your reply (voice input)"},
 ]
@@ -2636,6 +2638,10 @@ class IoMcpApp(App):
             msg = self.settings.toggle_voice()
             self._tts.clear_cache()
             self._tts.speak_async(msg)
+        elif label == "New agent":
+            self.action_spawn_agent()
+        elif label == "Dashboard":
+            self.action_dashboard()
         elif label == "Settings":
             self._enter_settings()
         elif label == "Notifications":
