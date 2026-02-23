@@ -456,6 +456,63 @@ def create_proxy_server(
         """
         return _fwd("request_restart", {}, ctx)
 
+    @server.tool()
+    async def request_proxy_restart(ctx: Context) -> str:
+        """Request a restart of the MCP proxy server.
+
+        This will BREAK your MCP connection. After this returns success,
+        your next MCP call will fail. You must reconnect by sending
+        /mcp to your own Claude Code tmux pane:
+
+            tmux send-keys -t %<your-pane> '/mcp' Enter
+            sleep 3
+            tmux send-keys -t %<your-pane> Enter  # select /mcp
+            sleep 2
+            tmux send-keys -t %<your-pane> Enter  # select io-mcp
+            sleep 2
+            tmux send-keys -t %<your-pane> Down Enter  # Reconnect
+            sleep 4
+            tmux send-keys -t %<your-pane> Escape Escape
+
+        Returns
+        -------
+        str
+            JSON with status and reconnect instructions.
+        """
+        # Ask the backend to confirm with the user
+        result_str = _fwd("request_proxy_restart", {}, ctx)
+        try:
+            result = json.loads(result_str)
+        except (json.JSONDecodeError, TypeError):
+            return result_str
+
+        if result.get("status") != "accepted":
+            return result_str
+
+        # Schedule proxy restart AFTER this response is sent
+        import threading
+
+        def _do_proxy_restart():
+            import time as _t
+            _t.sleep(1.0)  # Let the MCP response complete
+            import os as _os
+            import sys as _sys
+            _os.execv(_sys.executable, [_sys.executable] + _sys.argv)
+
+        threading.Thread(target=_do_proxy_restart, daemon=True).start()
+
+        return json.dumps({
+            "status": "accepted",
+            "message": "Proxy will restart in ~1 second. Your MCP connection will break.",
+            "reconnect_instructions": (
+                "Your next MCP tool call will fail. To reconnect, send /mcp to your "
+                "own Claude Code tmux pane using tmux send-keys, then navigate to "
+                "the io-mcp server and select Reconnect. Use tmux-cli or tmux "
+                "send-keys -t %<your-pane-id> '/mcp' Enter, then Enter, Enter, "
+                "Down, Enter to navigate the menu, then Escape to close."
+            ),
+        })
+
     return server
 
 

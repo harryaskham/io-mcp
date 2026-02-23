@@ -651,6 +651,17 @@ def _create_tool_dispatcher(app: IoMcpApp, append_options: list[str],
         threading.Thread(target=_do_restart, daemon=True).start()
         return json.dumps({"status": "accepted", "message": "Backend will restart in ~1.5 seconds"})
 
+    def _tool_request_proxy_restart(args, session_id):
+        session = _get_session(session_id)
+        session.last_tool_name = "request_proxy_restart"
+        result = frontend.present_choices(session,
+            "Agent requests PROXY restart. This will break ALL agent MCP connections. They must reconnect.",
+            [{"label": "Approve proxy restart", "summary": "Restart the MCP proxy — all agents disconnect"},
+             {"label": "Deny", "summary": "Keep proxy running"}])
+        if result.get("selected", "").lower() != "approve proxy restart":
+            return json.dumps({"status": "rejected", "message": "User denied proxy restart"})
+        return json.dumps({"status": "accepted", "message": "Proxy will restart"})
+
     # ─── Dispatch table ───────────────────────────────────────
 
     TOOLS = {
@@ -671,6 +682,7 @@ def _create_tool_dispatcher(app: IoMcpApp, append_options: list[str],
         "pull_latest": _tool_pull_latest,
         "run_command": _tool_run_command,
         "request_restart": _tool_request_restart,
+        "request_proxy_restart": _tool_request_proxy_restart,
     }
 
     def dispatch(tool_name: str, args: dict, session_id: str) -> str:
