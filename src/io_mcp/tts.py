@@ -421,7 +421,6 @@ class TTSEngine:
             samples.append(int(val * 32767))
 
         # Build WAV in memory
-        wav_data = struct.pack('<HHIIHHi' * 0, )  # placeholder
         raw_audio = struct.pack(f'<{num_samples}h', *samples)
 
         # WAV header

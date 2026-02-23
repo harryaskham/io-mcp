@@ -1295,6 +1295,7 @@ class IoMcpApp(App):
         self._dashboard_mode = False
         self._log_viewer_mode = False
         self._help_mode = False
+        self._history_mode = False
         self._tab_picker_mode = False
 
         s = self._cs
@@ -2342,6 +2343,7 @@ class IoMcpApp(App):
         self._dashboard_mode = False
         self._log_viewer_mode = False
         self._help_mode = False
+        self._history_mode = False
         self._tab_picker_mode = False
 
         # Clean up pane viewer if active
@@ -2564,6 +2566,16 @@ class IoMcpApp(App):
                         key, desc = shortcuts[idx]
                         self._tts.speak_async(f"{key}. {desc}")
                 return
+            # History mode: read the selection entry
+            if getattr(self, '_history_mode', False):
+                if isinstance(event.item, ChoiceItem) and session:
+                    idx = event.item.display_index
+                    history = getattr(session, 'history', [])
+                    if idx < len(history):
+                        entry = history[idx]
+                        text = f"{entry.label}. {entry.summary}" if entry.summary else entry.label
+                        self._tts.speak_async(text)
+                return
             # Tab picker: switch to the highlighted tab live
             if getattr(self, '_tab_picker_mode', False):
                 if isinstance(event.item, ChoiceItem):
@@ -2669,6 +2681,11 @@ class IoMcpApp(App):
                 # Check if we're in help mode (Enter closes it)
                 if getattr(self, '_help_mode', False):
                     self._help_mode = False
+                    self._exit_settings()
+                    return
+                # Check if we're in history mode (Enter closes it)
+                if getattr(self, '_history_mode', False):
+                    self._history_mode = False
                     self._exit_settings()
                     return
                 # Check if we're in tab picker mode
@@ -3321,7 +3338,11 @@ class IoMcpApp(App):
             self.action_queue_message()
 
     def _show_history(self) -> None:
-        """Read out recent selection history for the focused session."""
+        """Show selection history for the focused session in a scrollable list.
+
+        Displays entries with timestamps, labels, and preambles.
+        Each entry is read aloud when highlighted. Press Escape to return.
+        """
         session = self._focused()
         if not session:
             self._tts.speak_async("No session active")
@@ -3332,12 +3353,53 @@ class IoMcpApp(App):
             self._tts.speak_async("No history yet for this session")
             return
 
-        # Read the last 5 selections
-        recent = history[-5:]
+        # Toggle off if already in history mode
+        if getattr(self, '_history_mode', False):
+            self._history_mode = False
+            self._exit_settings()
+            return
+
+        self._tts.stop()
+
+        # Enter history mode (uses settings infrastructure for modal display)
+        self._in_settings = True
+        self._setting_edit_mode = False
+        self._history_mode = True
+
+        s = self._cs
         count = len(history)
-        self._tts.speak_async(f"{count} total selections. Last {len(recent)}:")
-        for i, entry in enumerate(reversed(recent), 1):
-            self._tts.speak(f"{i}. {entry.label}")
+        preamble_widget = self.query_one("#preamble", Label)
+        preamble_widget.update(
+            f"[bold {s['accent']}]History[/bold {s['accent']}] — "
+            f"[{s['fg_dim']}]{session.name}[/{s['fg_dim']}] — "
+            f"{count} selection{'s' if count != 1 else ''} "
+            f"[dim](esc to close)[/dim]"
+        )
+        preamble_widget.display = True
+
+        list_view = self.query_one("#choices", ListView)
+        list_view.clear()
+
+        import time as _time
+
+        for i, entry in enumerate(history):
+            age = _time.time() - entry.timestamp
+            if age < 60:
+                time_str = f"{int(age)}s ago"
+            elif age < 3600:
+                time_str = f"{int(age)//60}m ago"
+            else:
+                time_str = f"{int(age)//3600}h{int(age)%3600//60:02d}m ago"
+
+            label = f"[{s['fg_dim']}]{time_str}[/{s['fg_dim']}]  {entry.label}"
+            summary = entry.summary if entry.summary else entry.preamble[:80] if entry.preamble else ""
+            list_view.append(ChoiceItem(label, summary, index=i + 1, display_index=i))
+
+        list_view.display = True
+        list_view.index = max(0, len(history) - 1)  # Start at most recent
+        list_view.focus()
+
+        self._tts.speak_async(f"History. {count} selections. Most recent shown.")
 
     def action_undo_selection(self) -> None:
         """Undo the last selection — signal the server to re-present choices.
