@@ -495,6 +495,36 @@ def _create_tool_dispatcher(app: IoMcpApp, append_options: list[str],
         except Exception as e:
             return json.dumps({"status": "error", "command": command, "error": str(e)})
 
+    def _tool_request_restart(args, session_id):
+        session = _get_session(session_id)
+        session.last_tool_name = "request_restart"
+
+        # Ask user for confirmation
+        result = frontend.present_choices(
+            session,
+            "Agent is requesting a backend restart. This will reload TUI, config, and code. Your MCP connection stays alive.",
+            [
+                {"label": "Approve restart", "summary": "Restart the io-mcp backend now"},
+                {"label": "Deny", "summary": "Keep running, don't restart"},
+            ],
+        )
+
+        if result.get("selected", "").lower() != "approve restart":
+            return json.dumps({"status": "rejected", "message": "User denied restart request"})
+
+        # Return success FIRST, then schedule the restart
+        # This ensures the MCP round-trip completes before we die
+        def _do_restart():
+            import time as _t
+            _t.sleep(0.5)  # Let the HTTP response complete
+            frontend.tts.speak_async("Restarting backend...")
+            _t.sleep(1.0)
+            # Re-exec ourselves
+            os.execv(sys.executable, [sys.executable, "-m", "io_mcp"] + sys.argv[1:])
+
+        threading.Thread(target=_do_restart, daemon=True).start()
+        return json.dumps({"status": "accepted", "message": "Backend will restart in ~1.5 seconds"})
+
     # ─── Dispatch table ───────────────────────────────────────
 
     TOOLS = {
@@ -514,6 +544,7 @@ def _create_tool_dispatcher(app: IoMcpApp, append_options: list[str],
         "reload_config": _tool_reload_config,
         "pull_latest": _tool_pull_latest,
         "run_command": _tool_run_command,
+        "request_restart": _tool_request_restart,
     }
 
     def dispatch(tool_name: str, args: dict, session_id: str) -> str:

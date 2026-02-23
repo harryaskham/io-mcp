@@ -441,6 +441,21 @@ def create_proxy_server(
         """
         return _fwd("run_command", {"command": command}, ctx)
 
+    @server.tool()
+    async def request_restart(ctx: Context) -> str:
+        """Request a restart of the io-mcp backend.
+
+        Shows a confirmation dialog in the TUI. If approved, the backend
+        restarts (TUI, TTS, session state reload) while this MCP proxy
+        stays running — so your connection is preserved.
+
+        Returns
+        -------
+        str
+            JSON with status: "accepted", "rejected", or "error".
+        """
+        return _fwd("request_restart", {}, ctx)
+
     return server
 
 
