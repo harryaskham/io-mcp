@@ -362,20 +362,23 @@ class IoMcpApp(App):
                     if len(last_text) > 60:
                         last_text = last_text[:60]
 
+                last_tool = getattr(session, 'last_tool_name', '')
+                tool_hint = f" Last tool: {last_tool}." if last_tool else ""
+
                 if minutes >= 1 and last_text:
-                    msg = f"Still working, {minutes} {'minute' if minutes == 1 else 'minutes'} in. Last update: {last_text}"
+                    msg = f"Still working, {minutes} {'minute' if minutes == 1 else 'minutes'} in.{tool_hint} Last update: {last_text}"
                 elif minutes >= 1:
-                    msg = f"Still working, {minutes} {'minute' if minutes == 1 else 'minutes'} in."
+                    msg = f"Still working, {minutes} {'minute' if minutes == 1 else 'minutes'} in.{tool_hint}"
                 elif last_text:
-                    msg = f"Still working. Last update: {last_text}"
+                    msg = f"Still working.{tool_hint} Last update: {last_text}"
                 else:
-                    msg = "Agent is still working..."
+                    msg = f"Agent is still working...{tool_hint}"
 
                 self._tts.speak_async(msg)
                 self._update_ambient_indicator(session, elapsed)
 
     def _update_ambient_indicator(self, session: Session, elapsed: float) -> None:
-        """Update the agent activity label with elapsed time."""
+        """Update the agent activity label with elapsed time and last tool."""
         try:
             activity = self.query_one("#agent-activity", Label)
             minutes = int(elapsed) // 60
@@ -384,15 +387,20 @@ class IoMcpApp(App):
                 time_str = f"{minutes}m{secs:02d}s"
             else:
                 time_str = f"{secs}s"
+
+            # Show last tool name if available
+            last_tool = getattr(session, 'last_tool_name', '')
+            tool_info = f" [{self._cs['purple']}]{last_tool}[/{self._cs['purple']}]" if last_tool else ""
+
             last_text = ""
             if session.speech_log:
                 last_text = session.speech_log[-1].text
                 if len(last_text) > 60:
                     last_text = last_text[:60] + "..."
             if last_text:
-                activity.update(f"[bold {self._cs['warning']}]⧗[/bold {self._cs['warning']}] Working ({time_str}) — {last_text}")
+                activity.update(f"[bold {self._cs['warning']}]⧗[/bold {self._cs['warning']}] Working ({time_str}){tool_info} — {last_text}")
             else:
-                activity.update(f"[bold {self._cs['warning']}]⧗[/bold {self._cs['warning']}] Working ({time_str})")
+                activity.update(f"[bold {self._cs['warning']}]⧗[/bold {self._cs['warning']}] Working ({time_str}){tool_info}")
             activity.display = True
         except Exception:
             pass

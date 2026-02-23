@@ -183,6 +183,14 @@ def create_mcp_server(
         @functools.wraps(fn)
         async def wrapper(*args, **kwargs):
             try:
+                # Track last tool name on session for visual progress
+                ctx_arg = kwargs.get('ctx') or (args[-1] if args else None)
+                if ctx_arg:
+                    try:
+                        session = _safe_get_session(ctx_arg)
+                        session.last_tool_name = fn.__name__
+                    except Exception:
+                        pass
                 return await fn(*args, **kwargs)
             except Exception as exc:
                 err_msg = f"{type(exc).__name__}: {str(exc)[:200]}"

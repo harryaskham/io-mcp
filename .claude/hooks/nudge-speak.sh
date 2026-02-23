@@ -1,23 +1,30 @@
 #!/usr/bin/env bash
-# PreToolUse hook: Remind Claude to speak() before significant tool calls.
-# Checks if speak() was called recently — if not, nudges Claude.
+# PreToolUse hook: Remind Claude to speak_async() before significant tool calls.
+# Only nudges for tools that do real work (not speech or choice tools).
 
 set -euo pipefail
 
 INPUT=$(cat)
 TOOL=$(echo "$INPUT" | jq -r '.tool_name // ""')
 
-# Only nudge for significant tools (not for speak/present_choices themselves)
+# Don't nudge for io-mcp tools, read-only tools, or search tools
 case "$TOOL" in
-  mcp__io-mcp__speak|mcp__io-mcp__present_choices|Read|Glob|Grep)
+  mcp__io-mcp__speak|mcp__io-mcp__speak_async|mcp__io-mcp__speak_urgent)
+    exit 0
+    ;;
+  mcp__io-mcp__present_choices|mcp__io-mcp__present_multi_select)
+    exit 0
+    ;;
+  mcp__io-mcp__set_*|mcp__io-mcp__get_*|mcp__io-mcp__rename_*)
+    exit 0
+    ;;
+  Read|Glob|Grep|WebSearch|WebFetch)
     exit 0
     ;;
 esac
 
-# We can't easily track "time since last speak" in a stateless hook,
-# but we can remind Claude in the reason field.
-# Exit 0 = allow, just add a gentle nudge via stdout
+# Allow the tool but remind about narration
 jq -n '{
   decision: "allow",
-  reason: "Reminder: call speak() to narrate what you are about to do. The user is listening with earphones."
+  reason: "Remember: call speak_async() to narrate what you are doing. The user is listening with earphones and cannot see the screen."
 }'
