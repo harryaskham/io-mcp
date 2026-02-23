@@ -108,6 +108,32 @@ COLOR_SCHEMES: dict[str, dict[str, str]] = {
 DEFAULT_SCHEME = "nord"
 
 
+def _safe_action(fn):
+    """Decorator that catches exceptions in TUI action methods.
+
+    Logs the error and speaks it via TTS instead of crashing the app.
+    """
+    import functools
+
+    @functools.wraps(fn)
+    def wrapper(self, *args, **kwargs):
+        try:
+            return fn(self, *args, **kwargs)
+        except Exception as exc:
+            import traceback
+            err = f"{type(exc).__name__}: {str(exc)[:100]}"
+            try:
+                with open("/tmp/io-mcp-tui-error.log", "a") as f:
+                    f.write(f"\n--- {fn.__name__} ---\n{traceback.format_exc()}\n")
+            except Exception:
+                pass
+            try:
+                self._tts.speak_async(f"Error in {fn.__name__}: {err}")
+            except Exception:
+                pass
+    return wrapper
+
+
 def get_scheme(name: str = DEFAULT_SCHEME) -> dict[str, str]:
     """Get a color scheme by name, with fallback to default."""
     return COLOR_SCHEMES.get(name, COLOR_SCHEMES[DEFAULT_SCHEME])
@@ -716,6 +742,21 @@ class IoMcpApp(App):
         In conversation mode: speaks just the preamble, then auto-starts
         voice recording. The transcription becomes the selection.
         """
+        try:
+            return self._present_choices_inner(session, preamble, choices)
+        except Exception as exc:
+            import traceback
+            err = f"{type(exc).__name__}: {str(exc)[:200]}"
+            try:
+                with open("/tmp/io-mcp-tui-error.log", "a") as f:
+                    f.write(f"\n--- present_choices ---\n{traceback.format_exc()}\n")
+            except Exception:
+                pass
+            # Return error to agent so it has context
+            return {"selected": "error", "summary": f"TUI error: {err}"}
+
+    def _present_choices_inner(self, session: Session, preamble: str, choices: list[dict]) -> dict:
+        """Inner implementation of present_choices."""
         self._touch_session(session)
         session.preamble = preamble
         session.choices = list(choices)
@@ -2708,6 +2749,7 @@ class IoMcpApp(App):
         session.selection = {"selected": "_undo", "summary": ""}
         session.selection_event.set()
 
+    @_safe_action
     def action_spawn_agent(self) -> None:
         """Spawn a new Claude Code agent instance.
 
@@ -2844,6 +2886,7 @@ class IoMcpApp(App):
 
         threading.Thread(target=_spawn, daemon=True).start()
 
+    @_safe_action
     def action_toggle_conversation(self) -> None:
         """Toggle conversation mode on/off.
 
@@ -2870,6 +2913,7 @@ class IoMcpApp(App):
             if session and session.active:
                 self.call_from_thread(self._show_choices)
 
+    @_safe_action
     def action_dashboard(self) -> None:
         """Show a dashboard overview of all agent sessions.
 
@@ -2954,6 +2998,7 @@ class IoMcpApp(App):
         # Narrate the dashboard
         self._tts.speak_async(" ".join(narration_parts))
 
+    @_safe_action
     def action_quick_actions(self) -> None:
         """Show quick action picker.
 
