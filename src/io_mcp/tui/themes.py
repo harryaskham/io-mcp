@@ -106,6 +106,7 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
         padding: 1 1;
         color: {s['success']};
         width: 1fr;
+        height: auto;
         text-style: bold;
         border-bottom: solid {s['border']};
     }}
@@ -115,12 +116,13 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
         padding: 1 1;
         color: {s['warning']};
         width: 1fr;
+        height: auto;
     }}
 
     #agent-activity {{
         margin: 0 2;
         padding: 0 1;
-        height: 1;
+        height: auto;
         color: {s['blue']};
         width: 1fr;
         display: none;
@@ -139,6 +141,7 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
         color: {s['fg_dim']};
         margin: 0;
         padding: 0;
+        width: 1fr;
     }}
 
     #choices {{
@@ -158,12 +161,14 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
     ChoiceItem > .choice-label {{
         color: {s['fg']};
         width: 1fr;
+        height: auto;
     }}
 
     ChoiceItem > .choice-summary {{
         color: {s['fg_dim']};
         margin-left: 4;
         width: 1fr;
+        height: auto;
     }}
 
     ChoiceItem.-highlight {{
