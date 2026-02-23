@@ -154,6 +154,11 @@ class Session:
         if saved_last_call > 0:
             self.last_tool_call = saved_last_call
 
+        # Restore pending messages
+        saved_messages = data.get("pending_messages", [])
+        if saved_messages:
+            self.pending_messages.extend(saved_messages)
+
     def summary(self) -> str:
         """Build a concise activity summary for this session.
 
@@ -519,6 +524,7 @@ class SessionManager:
                         "tool_call_count": session.tool_call_count,
                         "last_tool_name": session.last_tool_name,
                         "last_tool_call": session.last_tool_call,
+                        "pending_messages": list(session.pending_messages),
                     })
 
         try:

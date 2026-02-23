@@ -513,6 +513,21 @@ def create_proxy_server(
             ),
         })
 
+    @server.tool()
+    async def check_inbox(ctx: Context) -> str:
+        """Check for queued user messages without waiting for another tool call.
+
+        Returns any messages the user has queued via the 'm' key or
+        message input. Use this to poll for user messages during long
+        operations where you haven't made a tool call in a while.
+
+        Returns
+        -------
+        str
+            JSON with messages array and count.
+        """
+        return _fwd("check_inbox", {}, ctx)
+
     return server
 
 

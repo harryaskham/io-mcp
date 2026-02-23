@@ -124,7 +124,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "tts": {
             "model": "mai-voice-1",
             "voice": "en-US-Noa:MAI-Voice-1",
-            "uiVoice": "",
+            "uiVoice": "en-US-Teo:MAI-Voice-1",
             "speed": 1.3,
             "emotion": "shy",
             "voiceRotation": [],

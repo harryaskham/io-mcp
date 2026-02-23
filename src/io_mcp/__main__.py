@@ -678,6 +678,16 @@ def _create_tool_dispatcher(app: IoMcpApp, append_options: list[str],
             return json.dumps({"status": "rejected", "message": "User denied proxy restart"})
         return json.dumps({"status": "accepted", "message": "Proxy will restart"})
 
+    def _tool_check_inbox(args, session_id):
+        """Check for queued user messages without waiting for another tool call."""
+        session = _get_session(session_id)
+        session.last_tool_name = "check_inbox"
+        session.tool_call_count += 1
+        messages = _drain_messages(session)
+        if messages:
+            return json.dumps({"messages": messages, "count": len(messages)})
+        return json.dumps({"messages": [], "count": 0})
+
     # ─── Dispatch table ───────────────────────────────────────
 
     TOOLS = {
@@ -699,6 +709,7 @@ def _create_tool_dispatcher(app: IoMcpApp, append_options: list[str],
         "run_command": _tool_run_command,
         "request_restart": _tool_request_restart,
         "request_proxy_restart": _tool_request_proxy_restart,
+        "check_inbox": _tool_check_inbox,
     }
 
     def dispatch(tool_name: str, args: dict, session_id: str) -> str:
