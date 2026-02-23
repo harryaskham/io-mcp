@@ -993,6 +993,208 @@ class IoMcpApp(App):
         status.update(f"[{self._cs['warning']}]⧗[/{self._cs['warning']}] [{session.name}] Waiting for agent...{msg_info} [dim](u=undo)[/dim]")
         status.display = True
 
+    def _enter_worktree_mode(self) -> None:
+        """Start worktree creation flow.
+
+        Shows options: create worktree (prompts for branch name),
+        or fork agent to worktree (spawns new agent in the worktree).
+        """
+        session = self._focused()
+        if not session:
+            self._tts.speak_async("No active session")
+            return
+
+        self._tts.stop()
+
+        # Enter settings-like modal for worktree options
+        self._in_settings = True
+        self._setting_edit_mode = False
+        self._spawn_options = None
+        self._quick_action_options = None
+        self._dashboard_mode = False
+        self._log_viewer_mode = False
+        self._help_mode = False
+        self._tab_picker_mode = False
+
+        s = self._cs
+
+        worktree_opts = [
+            {"label": "Branch and work here", "summary": "Create worktree, switch this agent to work in it",
+             "_action": "branch_here"},
+            {"label": "Fork agent to worktree", "summary": "Create worktree and spawn a new agent there (you stay on main)",
+             "_action": "fork_agent"},
+            {"label": "Cancel", "summary": "Go back",
+             "_action": "cancel"},
+        ]
+
+        # If agent is already in a worktree, show merge options instead
+        cwd = getattr(session, 'cwd', '')
+        worktree_dir = os.path.expanduser("~/.config/io-mcp/worktrees")
+        if cwd and worktree_dir in cwd:
+            worktree_opts = [
+                {"label": "Push and create PR", "summary": "Push branch and create a pull request",
+                 "_action": "push_pr"},
+                {"label": "Merge to main", "summary": "Merge worktree branch into default branch and clean up",
+                 "_action": "merge_main"},
+                {"label": "Cancel", "summary": "Go back",
+                 "_action": "cancel"},
+            ]
+
+        self._worktree_options = worktree_opts
+
+        preamble_widget = self.query_one("#preamble", Label)
+        preamble_widget.update(f"[bold {s['accent']}]Git Worktree[/bold {s['accent']}]")
+        preamble_widget.display = True
+
+        list_view = self.query_one("#choices", ListView)
+        list_view.clear()
+        for i, opt in enumerate(worktree_opts):
+            list_view.append(ChoiceItem(opt["label"], opt.get("summary", ""), index=i + 1, display_index=i))
+        list_view.display = True
+        list_view.index = 0
+        list_view.focus()
+
+        self._tts.speak_async("Git worktree options.")
+
+    def _handle_worktree_select(self, idx: int) -> None:
+        """Handle selection in worktree mode."""
+        opts = getattr(self, '_worktree_options', [])
+        if idx >= len(opts):
+            return
+
+        action = opts[idx].get("_action", "cancel")
+        self._worktree_options = None
+        self._in_settings = False
+
+        session = self._focused()
+        if not session:
+            return
+
+        if action == "cancel":
+            self._exit_settings()
+            return
+
+        if action == "branch_here":
+            # Ask for branch name via freeform input
+            self._worktree_action = "branch_here"
+            self._message_mode = False
+            session.input_mode = True
+            self._freeform_spoken_pos = 0
+
+            self.query_one("#choices").display = False
+            inp = self.query_one("#freeform-input", Input)
+            inp.placeholder = "Enter branch name (e.g. fix/auth-bug)"
+            inp.value = ""
+            inp.styles.display = "block"
+            inp.focus()
+
+            self._tts.speak_async("Type the branch name")
+
+        elif action == "fork_agent":
+            self._worktree_action = "fork_agent"
+            session.input_mode = True
+            self._freeform_spoken_pos = 0
+
+            self.query_one("#choices").display = False
+            inp = self.query_one("#freeform-input", Input)
+            inp.placeholder = "Enter branch name for new agent worktree"
+            inp.value = ""
+            inp.styles.display = "block"
+            inp.focus()
+
+            self._tts.speak_async("Type branch name for the new agent's worktree")
+
+        elif action == "push_pr":
+            # Queue message to agent to push and create PR
+            msgs = getattr(session, 'pending_messages', [])
+            if msgs is not None:
+                msgs.append(
+                    "Push all changes on this branch and create a pull request. "
+                    "Include a good title and description. Then present choices."
+                )
+            self._tts.speak_async("Queued: push and create PR")
+            if session.active:
+                self._show_choices()
+            else:
+                self._show_session_waiting(session)
+
+        elif action == "merge_main":
+            msgs = getattr(session, 'pending_messages', [])
+            if msgs is not None:
+                msgs.append(
+                    "Merge this branch into the default branch (main/master). "
+                    "First ensure all changes are committed and pushed. "
+                    "Then merge, clean up the worktree, and switch back to the main branch. "
+                    "Present choices when done."
+                )
+            self._tts.speak_async("Queued: merge to main and clean up worktree")
+            if session.active:
+                self._show_choices()
+            else:
+                self._show_session_waiting(session)
+
+    def _create_worktree(self, session: Session, branch_name: str, action: str) -> None:
+        """Create a git worktree and either switch to it or spawn an agent there."""
+        # Determine repo root from agent's cwd (or current dir)
+        cwd = getattr(session, 'cwd', '') or os.getcwd()
+
+        def _do_create():
+            try:
+                # Get repo name
+                result = subprocess.run(
+                    ["git", "rev-parse", "--show-toplevel"],
+                    cwd=cwd, capture_output=True, text=True, timeout=5,
+                )
+                if result.returncode != 0:
+                    self._tts.speak_async("Not in a git repository")
+                    self.call_from_thread(self._restore_choices)
+                    return
+
+                repo_root = result.stdout.strip()
+                repo_name = os.path.basename(repo_root)
+
+                # Create worktree directory
+                worktree_base = os.path.expanduser(f"~/.config/io-mcp/worktrees/{repo_name}")
+                worktree_path = os.path.join(worktree_base, branch_name)
+
+                # Create the worktree
+                result = subprocess.run(
+                    ["git", "worktree", "add", "-b", branch_name, worktree_path],
+                    cwd=repo_root, capture_output=True, text=True, timeout=30,
+                )
+                if result.returncode != 0:
+                    err = result.stderr.strip()[:80]
+                    self._tts.speak_async(f"Worktree creation failed: {err}")
+                    self.call_from_thread(self._restore_choices)
+                    return
+
+                if action == "branch_here":
+                    # Queue message telling agent to switch to worktree
+                    msgs = getattr(session, 'pending_messages', [])
+                    msgs.append(
+                        f"I've created a git worktree for branch '{branch_name}' at {worktree_path}. "
+                        f"Please cd to {worktree_path} and work there from now on. "
+                        f"When you're done, I'll help you push, create a PR, and merge back."
+                    )
+                    session.cwd = worktree_path
+                    self._tts.speak_async(f"Worktree created at {branch_name}. Agent will switch there.")
+                    if session.active:
+                        self.call_from_thread(self._show_choices)
+                    else:
+                        self.call_from_thread(self._show_session_waiting, session)
+
+                elif action == "fork_agent":
+                    # Spawn a new agent in the worktree
+                    self._tts.speak_async(f"Worktree created. Spawning agent in {branch_name}.")
+                    spawn_opt = {"type": "local", "workdir": worktree_path}
+                    self.call_from_thread(self._do_spawn, spawn_opt)
+
+            except Exception as e:
+                self._tts.speak_async(f"Error: {str(e)[:80]}")
+                self.call_from_thread(self._restore_choices)
+
+        threading.Thread(target=_do_create, daemon=True).start()
+
     def _enter_multi_select_mode(self) -> None:
         """Enter multi-select mode for the current choices.
 
@@ -2094,6 +2296,10 @@ class IoMcpApp(App):
                     if idx < len(sessions):
                         self._switch_to_session(sessions[idx])
                     return
+                # Check if we're in worktree mode
+                if getattr(self, '_worktree_options', None):
+                    self._handle_worktree_select(idx)
+                    return
                 # Check if we're in dashboard mode
                 if getattr(self, '_dashboard_mode', False):
                     self._dashboard_mode = False
@@ -2414,6 +2620,17 @@ class IoMcpApp(App):
 
         self._vibrate(100)  # Haptic feedback on submit
 
+        # Worktree branch name input
+        worktree_action = getattr(self, '_worktree_action', None)
+        if worktree_action:
+            self._worktree_action = None
+            session.input_mode = False
+            event.input.styles.display = "none"
+            event.input.placeholder = "Type your reply, press Enter to send, Escape to cancel"
+            self._freeform_tts.stop()
+            self._create_worktree(session, text, worktree_action)
+            return
+
         # Message queue mode — queue the message, don't select
         if self._message_mode:
             self._message_mode = False
@@ -2689,6 +2906,8 @@ class IoMcpApp(App):
             self.action_voice_input()
         elif label == "Multi select":
             self._enter_multi_select_mode()
+        elif label == "Branch to worktree":
+            self._enter_worktree_mode()
         elif label == "Switch tab":
             self._enter_tab_picker()
         elif label == "Fast toggle":
