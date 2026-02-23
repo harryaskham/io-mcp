@@ -1563,8 +1563,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
             threading.Thread(target=_play_inbox, daemon=True).start()
         else:
-            # No active choices — show speech log and waiting state
-            self._update_speech_log()
+            # No active choices — show idle state with activity feed
+            self._show_idle()
 
             # Play unplayed speech in bg thread
             def _play_inbox_only():

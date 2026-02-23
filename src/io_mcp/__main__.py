@@ -611,6 +611,34 @@ def _create_tool_dispatcher(app: IoMcpApp, append_options: list[str],
         hostname = session.hostname or ""
         is_local = (hostname == local_hostname) if hostname else True
 
+        # Remove placeholder sessions that match this agent (from TUI restart)
+        # Placeholder IDs start with "persisted-"
+        try:
+            for sid in list(frontend.manager.session_order):
+                if sid.startswith("persisted-") and sid != session.session_id:
+                    placeholder = frontend.manager.get(sid)
+                    if placeholder:
+                        # Match by name or cwd
+                        name_match = placeholder.name == session.name and session.name
+                        cwd_match = placeholder.cwd == session.cwd and session.cwd
+                        if name_match or cwd_match:
+                            # Transfer activity data from placeholder
+                            session.restore_activity({
+                                "speech_log": [{"text": s.text, "timestamp": s.timestamp}
+                                              for s in placeholder.speech_log],
+                                "history": [{"label": h.label, "summary": h.summary,
+                                            "preamble": h.preamble, "timestamp": h.timestamp}
+                                           for h in placeholder.history],
+                                "tool_call_count": placeholder.tool_call_count,
+                                "last_tool_name": placeholder.last_tool_name,
+                                "last_tool_call": placeholder.last_tool_call,
+                                "pending_messages": list(placeholder.pending_messages),
+                            })
+                            # Remove the placeholder
+                            frontend.manager.remove(sid)
+        except Exception:
+            pass
+
         try:
             frontend.update_tab_bar()
         except Exception:
