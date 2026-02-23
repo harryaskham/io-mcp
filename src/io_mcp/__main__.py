@@ -700,6 +700,7 @@ def _create_tool_dispatcher(app: IoMcpApp, append_options: list[str],
             except Exception:
                 pass
             try:
+                frontend.tts.play_chime("error")
                 frontend.tts.speak_async(f"Tool error: {tool_name}. {str(e)[:80]}")
             except Exception:
                 pass

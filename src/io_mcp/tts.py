@@ -465,6 +465,11 @@ class TTSEngine:
             record_stop: Falling tone (recording stopped)
             convo_on: Two ascending (conversation mode on)
             convo_off: Two descending (conversation mode off)
+            urgent: Sharp attention-grabbing discord (critical alert)
+            error: Low pulsing tone (something went wrong)
+            warning: Mid-frequency double pulse (caution)
+            success: Bright ascending arpeggio (task completed)
+            disconnect: Descending three-note (agent disconnected)
         """
         if self._muted:
             return
@@ -499,5 +504,43 @@ class TTSEngine:
                 self.play_tone(800, 50, 0.15)
                 _time.sleep(0.06)
                 self.play_tone(500, 70, 0.15)
+            elif style == "urgent":
+                # Sharp attention-grabber: high-frequency discord
+                self.play_tone(1200, 80, 0.35)
+                _time.sleep(0.06)
+                self.play_tone(800, 80, 0.35)
+                _time.sleep(0.06)
+                self.play_tone(1200, 80, 0.35)
+            elif style == "error":
+                # Low pulsing tone — something went wrong
+                self.play_tone(250, 120, 0.3)
+                _time.sleep(0.1)
+                self.play_tone(200, 150, 0.25)
+            elif style == "warning":
+                # Mid-frequency double pulse — caution
+                self.play_tone(600, 60, 0.25)
+                _time.sleep(0.12)
+                self.play_tone(600, 60, 0.25)
+            elif style == "success":
+                # Bright ascending arpeggio — task completed
+                self.play_tone(600, 50, 0.2)
+                _time.sleep(0.05)
+                self.play_tone(800, 50, 0.2)
+                _time.sleep(0.05)
+                self.play_tone(1000, 50, 0.2)
+                _time.sleep(0.05)
+                self.play_tone(1200, 80, 0.25)
+            elif style == "disconnect":
+                # Descending three-note — agent gone
+                self.play_tone(900, 50, 0.15)
+                _time.sleep(0.06)
+                self.play_tone(700, 50, 0.15)
+                _time.sleep(0.06)
+                self.play_tone(500, 70, 0.15)
+            elif style == "heartbeat":
+                # Gentle double-tap — ambient/status pulse
+                self.play_tone(400, 30, 0.1)
+                _time.sleep(0.15)
+                self.play_tone(400, 40, 0.12)
 
         threading.Thread(target=_play, daemon=True).start()

@@ -266,6 +266,39 @@ class IoMcpApp(App):
         except Exception:
             pass  # Don't let vibration errors affect UX
 
+    def _vibrate_pattern(self, pattern: str = "pulse") -> None:
+        """Play a vibration pattern for semantic haptic feedback.
+
+        Patterns:
+            pulse: Three quick buzzes (new choices)
+            heavy: Long-short-long (selection confirmed)
+            attention: Rapid SOS-like (urgent/error)
+            heartbeat: Gentle double-tap (ambient update)
+        """
+        if not self._haptic_enabled:
+            return
+
+        patterns = {
+            "pulse": [30, 80, 30, 80, 30],        # buzz-gap-buzz-gap-buzz
+            "heavy": [100, 60, 40, 60, 100],       # heavy-gap-light-gap-heavy
+            "attention": [50, 40, 50, 40, 50, 40, 120],  # rapid bursts + long
+            "heartbeat": [20, 100, 40],             # soft double-tap
+        }
+
+        durations = patterns.get(pattern, patterns["pulse"])
+
+        def _play_pattern():
+            import time as _t
+            for i, ms in enumerate(durations):
+                if i % 2 == 0:
+                    # Vibrate
+                    self._vibrate(ms)
+                else:
+                    # Pause
+                    _t.sleep(ms / 1000.0)
+
+        threading.Thread(target=_play_pattern, daemon=True).start()
+
     # ─── Widget composition ────────────────────────────────────────
 
     def compose(self) -> ComposeResult:
@@ -426,11 +459,24 @@ class IoMcpApp(App):
             # First ambient update: after initial delay
             if elapsed >= initial_delay:
                 session.ambient_count = 1
+                self._tts.play_chime("heartbeat") if hasattr(self._tts, 'play_chime') else None
+                self._vibrate_pattern("heartbeat")
                 self._tts.speak_async("Agent is still working...")
                 self._update_ambient_indicator(session, elapsed)
         else:
-            # Subsequent updates: after repeat interval from last update
-            next_time = initial_delay + (ambient_count * repeat_interval)
+            # Subsequent updates: exponential backoff after 4th update
+            # 1st repeat at initial + repeat
+            # 2nd at initial + 2*repeat
+            # 3rd at initial + 3*repeat
+            # 4th+ at initial + 3*repeat + (n-3)*repeat*2 (doubles spacing)
+            if ambient_count <= 3:
+                next_time = initial_delay + (ambient_count * repeat_interval)
+            else:
+                # Exponential backoff: each subsequent gap doubles
+                base = initial_delay + (3 * repeat_interval)
+                extra = sum(repeat_interval * (2 ** (i - 3)) for i in range(3, ambient_count))
+                next_time = base + extra
+
             if elapsed >= next_time:
                 session.ambient_count = ambient_count + 1
                 minutes = int(elapsed) // 60
@@ -672,8 +718,9 @@ class IoMcpApp(App):
         pregen_thread.start()
 
         if is_fg:
-            # Audio cue for new choices
+            # Audio + haptic cue for new choices
             self._tts.play_chime("choices")
+            self._vibrate_pattern("pulse")
 
             # Foreground: speak intro and read options
             self._fg_speaking = True
