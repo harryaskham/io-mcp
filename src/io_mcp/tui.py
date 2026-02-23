@@ -2731,9 +2731,15 @@ class IoMcpApp(App):
         # Add remote hosts from config
         if self._config:
             for host in self._config.agent_hosts:
-                name = host.get("name", host.get("host", "?"))
-                hostname = host.get("host", "")
-                workdir = host.get("workdir", "~")
+                # Support both string ("hostname") and dict ({name, host, workdir}) formats
+                if isinstance(host, str):
+                    name = host
+                    hostname = host
+                    workdir = "~"
+                else:
+                    name = host.get("name", host.get("host", "?"))
+                    hostname = host.get("host", "")
+                    workdir = host.get("workdir", "~")
                 options.append({
                     "label": f"Remote: {name}",
                     "summary": f"SSH to {hostname}, work in {workdir}",
