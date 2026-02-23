@@ -211,6 +211,25 @@ class TestConfigAccessors:
         # This test works because tmp_config is in a temp dir with no .io-mcp.yml
         assert isinstance(config_with_defaults.extra_options, list)
 
+    def test_ambient_defaults(self, config_with_defaults):
+        c = config_with_defaults
+        assert c.ambient_enabled == True
+        assert c.ambient_initial_delay == 30
+        assert c.ambient_repeat_interval == 45
+
+    def test_ambient_custom_values(self, tmp_config):
+        custom = {"config": {"ambient": {
+            "enabled": False,
+            "initialDelaySecs": 60,
+            "repeatIntervalSecs": 90,
+        }}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert c.ambient_enabled == False
+        assert c.ambient_initial_delay == 60
+        assert c.ambient_repeat_interval == 90
+
 
 # ---------------------------------------------------------------------------
 # Config mutation
@@ -328,3 +347,22 @@ class TestCLIArgs:
         args = c.stt_cli_args()
         # mai-ears-1 doesn't support realtime
         assert "--realtime" not in args
+
+
+# ---------------------------------------------------------------------------
+# Session ambient mode fields
+# ---------------------------------------------------------------------------
+
+class TestSessionAmbientFields:
+    def test_ambient_count_default(self):
+        from io_mcp.session import Session
+        s = Session(session_id="test", name="Test")
+        assert s.ambient_count == 0
+        assert s.heartbeat_spoken == False
+
+    def test_ambient_count_reset(self):
+        from io_mcp.session import Session
+        s = Session(session_id="test", name="Test")
+        s.ambient_count = 5
+        s.ambient_count = 0  # simulates tool call reset
+        assert s.ambient_count == 0

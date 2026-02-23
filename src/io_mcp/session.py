@@ -69,6 +69,7 @@ class Session:
     last_activity: float = field(default_factory=time.time)
     last_tool_call: float = field(default_factory=time.time)
     heartbeat_spoken: bool = False
+    ambient_count: int = 0                  # how many ambient updates spoken this silence period
 
     # ── Selection history ─────────────────────────────────────────
     history: list[HistoryEntry] = field(default_factory=list)

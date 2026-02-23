@@ -31,7 +31,7 @@ MCP server providing hands-free Claude Code interaction via scroll wheel (smart 
 - **TTS pipeline**: `tts` CLI → WAV → `paplay` via PulseAudio. Streaming mode for lower latency
 - **Config system**: `~/.config/io-mcp/config.yml` merged with local `.io-mcp.yml`
 - **Haptic feedback**: `termux-vibrate` on scroll (30ms) and selection (100ms)
-- **Progress heartbeat**: "Agent is still working..." after 30s of silence
+- **Ambient mode**: Escalating status updates during agent silence — configurable timing and messages
 
 ## Source Layout
 
@@ -104,6 +104,10 @@ config:
     realtime: false
   session:
     cleanupTimeoutSeconds: 300
+  ambient:                    # periodic status updates during agent silence
+    enabled: true
+    initialDelaySecs: 30      # first update after 30s of silence
+    repeatIntervalSecs: 45    # subsequent updates every 45s
   keyBindings:              # all keys are configurable
     cursorDown: j
     cursorUp: k
@@ -214,7 +218,7 @@ uv run pytest tests/ # Run tests (56 tests)
 - MCP server auto-restarts up to 5 times on crash (watchdog with exponential backoff)
 - All 15 MCP tools wrapped with error safety — single tool errors don't crash the server
 - Config validated on load with specific warnings for invalid references
-- Progress heartbeat speaks "Agent is still working..." after 30s of silence
+- Ambient mode: escalating TTS updates during silence (30s initial, then every 45s with context). Configurable in `config.ambient`
 - Agent activity indicator shows last speech in TUI
 - Streaming TTS used automatically for blocking speak calls — lower latency
 - Haptic feedback auto-detected via `termux-vibrate`; no-op on non-Android

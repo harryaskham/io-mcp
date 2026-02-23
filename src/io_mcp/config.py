@@ -110,6 +110,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "session": {
             "cleanupTimeoutSeconds": 300,
         },
+        "ambient": {
+            "enabled": True,
+            "initialDelaySecs": 30,
+            "repeatIntervalSecs": 45,
+        },
         "keyBindings": {
             "cursorDown": "j",
             "cursorUp": "k",
@@ -465,6 +470,35 @@ class IoMcpConfig:
             self.expanded.get("config", {})
             .get("session", {})
             .get("cleanupTimeoutSeconds", 300)
+        )
+
+    # ─── Ambient mode settings ────────────────────────────────────
+
+    @property
+    def ambient_enabled(self) -> bool:
+        """Whether ambient mode is enabled (periodic status updates during silence)."""
+        return bool(
+            self.expanded.get("config", {})
+            .get("ambient", {})
+            .get("enabled", True)
+        )
+
+    @property
+    def ambient_initial_delay(self) -> float:
+        """Seconds of agent silence before the first ambient update."""
+        return float(
+            self.expanded.get("config", {})
+            .get("ambient", {})
+            .get("initialDelaySecs", 30)
+        )
+
+    @property
+    def ambient_repeat_interval(self) -> float:
+        """Seconds between subsequent ambient updates after the first."""
+        return float(
+            self.expanded.get("config", {})
+            .get("ambient", {})
+            .get("repeatIntervalSecs", 45)
         )
 
     @property

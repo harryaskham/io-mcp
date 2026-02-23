@@ -170,9 +170,10 @@ def create_mcp_server(
                 frontend.on_session_created(session)
             except Exception:
                 pass
-        # Track tool call time for heartbeat
+        # Track tool call time for heartbeat/ambient mode
         session.last_tool_call = _time.time()
         session.heartbeat_spoken = False
+        session.ambient_count = 0
         return session
 
     def _safe_tool(fn):

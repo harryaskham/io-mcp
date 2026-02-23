@@ -402,29 +402,91 @@ class IoMcpApp(App):
             self._update_tab_bar()
 
     def _check_heartbeat(self) -> None:
-        """Speak a heartbeat if the agent has been silent for 30+ seconds.
+        """Ambient mode: speak escalating status updates during agent silence.
 
-        Only speaks for the focused session, and only once per silence period.
+        Tracks elapsed time since the last MCP tool call and speaks
+        progressively more informative updates:
+
+        1st: "Agent is still working..."
+        2nd+: "Still working, N minutes in. Last update: [text]"
+
+        Configurable via config.ambient.{enabled, initialDelaySecs, repeatIntervalSecs}.
         Resets when the agent makes its next MCP tool call.
         """
         import time as _time
+
+        # Check if ambient mode is enabled
+        if self._config and not self._config.ambient_enabled:
+            return
+
         session = self._focused()
         if not session:
             return
-        # Only heartbeat for connected sessions (has had at least one tool call)
+        # Only for connected sessions (has had at least one tool call)
         last_call = getattr(session, 'last_tool_call', 0)
         if last_call == 0:
             return
-        # Don't heartbeat during active choices (agent is waiting for user)
+        # Don't speak during active choices (agent is waiting for user)
         if session.active:
             return
-        # Don't heartbeat if already spoken
-        if getattr(session, 'heartbeat_spoken', False):
-            return
+
         elapsed = _time.time() - last_call
-        if elapsed >= 30:
-            session.heartbeat_spoken = True
-            self._tts.speak_async("Agent is still working...")
+        initial_delay = self._config.ambient_initial_delay if self._config else 30
+        repeat_interval = self._config.ambient_repeat_interval if self._config else 45
+        ambient_count = getattr(session, 'ambient_count', 0)
+
+        if ambient_count == 0:
+            # First ambient update: after initial delay
+            if elapsed >= initial_delay:
+                session.ambient_count = 1
+                self._tts.speak_async("Agent is still working...")
+                self._update_ambient_indicator(session, elapsed)
+        else:
+            # Subsequent updates: after repeat interval from last update
+            next_time = initial_delay + (ambient_count * repeat_interval)
+            if elapsed >= next_time:
+                session.ambient_count = ambient_count + 1
+                minutes = int(elapsed) // 60
+                last_text = ""
+                if session.speech_log:
+                    last_text = session.speech_log[-1].text
+                    if len(last_text) > 60:
+                        last_text = last_text[:60]
+
+                if minutes >= 1 and last_text:
+                    msg = f"Still working, {minutes} {'minute' if minutes == 1 else 'minutes'} in. Last update: {last_text}"
+                elif minutes >= 1:
+                    msg = f"Still working, {minutes} {'minute' if minutes == 1 else 'minutes'} in."
+                elif last_text:
+                    msg = f"Still working. Last update: {last_text}"
+                else:
+                    msg = "Agent is still working..."
+
+                self._tts.speak_async(msg)
+                self._update_ambient_indicator(session, elapsed)
+
+    def _update_ambient_indicator(self, session: Session, elapsed: float) -> None:
+        """Update the agent activity label with elapsed time."""
+        try:
+            activity = self.query_one("#agent-activity", Label)
+            minutes = int(elapsed) // 60
+            secs = int(elapsed) % 60
+            if minutes > 0:
+                time_str = f"{minutes}m{secs:02d}s"
+            else:
+                time_str = f"{secs}s"
+            last_text = ""
+            if session.speech_log:
+                last_text = session.speech_log[-1].text
+                if len(last_text) > 60:
+                    last_text = last_text[:60] + "..."
+            if last_text:
+                activity.update(f"⏳ Working ({time_str}) — {last_text}")
+            else:
+                activity.update(f"⏳ Working ({time_str})")
+            activity.display = True
+        except Exception:
+            pass
 
     # ─── Tab bar rendering ─────────────────────────────────────────
 
