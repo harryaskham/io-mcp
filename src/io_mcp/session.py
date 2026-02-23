@@ -224,10 +224,10 @@ class SessionManager:
             return self.sessions.get(session_id)
 
     def tab_bar_text(self) -> str:
-        """Render the tab bar string.
+        """Render the tab bar string with rich formatting.
 
-        Format: [Agent 1] Agent 2 Agent 3*
-        [] = focused, * = has active choices
+        Active tab is highlighted with brackets and bold.
+        Tabs with pending choices get a dot indicator.
         """
         with self._lock:
             if not self.session_order:
@@ -236,12 +236,12 @@ class SessionManager:
             for sid in self.session_order:
                 session = self.sessions[sid]
                 name = session.name
-                indicator = "●" if session.active else ""
+                indicator = " [bold #9ece6a]●[/bold #9ece6a]" if session.active else ""
                 if sid == self.active_session_id:
-                    parts.append(f"[bold][{name}]{indicator}[/bold]")
+                    parts.append(f"[bold #7aa2f7]▸ {name}[/bold #7aa2f7]{indicator}")
                 else:
-                    parts.append(f"{name}{indicator}")
-            return " │ ".join(parts)
+                    parts.append(f"[dim]  {name}[/dim]{indicator}")
+            return "  ".join(parts)
 
     def cleanup_stale(self, timeout_seconds: float = 300.0) -> list[str]:
         """Remove sessions that have been inactive for longer than timeout.

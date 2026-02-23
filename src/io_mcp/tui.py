@@ -67,10 +67,15 @@ class ChoiceItem(ListItem):
         self.display_index = display_index  # position in list widget
 
     def compose(self) -> ComposeResult:
-        prefix = str(self.choice_index) if self.choice_index <= 0 else str(self.choice_index)
-        yield Label(f"[bold]{prefix}. {self.choice_label}[/bold]", classes="choice-label")
+        if self.choice_index > 0:
+            # Real choice — numbered with dot
+            prefix = f"  {self.choice_index}"
+            yield Label(f"[bold]{prefix}.[/bold] {self.choice_label}", classes="choice-label")
+        else:
+            # Extra option — dim with arrow prefix
+            yield Label(f"  [dim]›[/dim] {self.choice_label}", classes="choice-label")
         if self.choice_summary:
-            yield Label(self.choice_summary, classes="choice-summary")
+            yield Label(f"     {self.choice_summary}", classes="choice-summary")
 
 
 # ─── Dwell Progress Bar ─────────────────────────────────────────────────────
@@ -88,7 +93,7 @@ class DwellBar(Static):
         filled = int(bar_width * self.progress)
         empty = bar_width - filled
         remaining = self.dwell_time * (1.0 - self.progress)
-        bar = "█" * filled + "░" * empty
+        bar = "━" * filled + "╌" * empty
         return f"  [{bar}] {remaining:.1f}s"
 
 
@@ -99,31 +104,37 @@ class IoMcpApp(App):
 
     CSS = """
     Screen {
-        background: $surface;
+        background: #1a1b26;
     }
 
     #tab-bar {
-        margin: 0 2;
+        margin: 0 1;
         height: 1;
-        color: $accent;
+        color: #7aa2f7;
+        background: #24283b;
+        padding: 0 1;
     }
 
     #preamble {
-        margin: 1 2;
-        color: $success;
+        margin: 1 2 0 2;
+        padding: 0 1;
+        color: #9ece6a;
         width: 1fr;
+        text-style: bold;
     }
 
     #status {
-        margin: 1 2;
-        color: $warning;
+        margin: 1 2 0 2;
+        padding: 0 1;
+        color: #e0af68;
         width: 1fr;
     }
 
     #agent-activity {
         margin: 0 2;
+        padding: 0 1;
         height: 1;
-        color: $accent;
+        color: #7dcfff;
         width: 1fr;
         display: none;
     }
@@ -131,12 +142,13 @@ class IoMcpApp(App):
     #speech-log {
         margin: 0 2;
         height: auto;
-        max-height: 6;
-        color: $text-muted;
+        max-height: 5;
+        padding: 0 1;
+        border-top: hkey #414868;
     }
 
     .speech-entry {
-        color: $text-muted;
+        color: #565f89;
         margin: 0;
         padding: 0;
     }
@@ -148,48 +160,65 @@ class IoMcpApp(App):
     }
 
     ChoiceItem {
-        padding: 0 1;
+        padding: 0 2;
         height: auto;
         width: 1fr;
+        margin: 0 0;
     }
 
     ChoiceItem > .choice-label {
-        color: $text;
+        color: #a9b1d6;
         width: 1fr;
     }
 
     ChoiceItem > .choice-summary {
-        color: $text-muted;
-        margin-left: 2;
+        color: #565f89;
+        margin-left: 4;
         width: 1fr;
     }
 
+    ChoiceItem.-highlight {
+        background: #292e42;
+    }
+
     ChoiceItem.-highlight > .choice-label {
-        color: $text;
+        color: #c0caf5;
         text-style: bold;
+    }
+
+    ChoiceItem.-highlight > .choice-summary {
+        color: #7aa2f7;
     }
 
     #dwell-bar {
         margin: 0 2;
-        color: $warning;
+        color: #e0af68;
         height: 1;
     }
 
     #footer-help {
         dock: bottom;
         height: 1;
-        color: $text-muted;
-        margin: 0 2;
+        background: #24283b;
+        color: #565f89;
+        padding: 0 1;
     }
 
     #freeform-input {
         margin: 1 2;
         display: none;
+        border: tall #7aa2f7;
     }
 
     #filter-input {
         margin: 0 2;
         display: none;
+        border: tall #bb9af7;
+    }
+
+    Header {
+        background: #1a1b26;
+        color: #7aa2f7;
     }
     """
 
@@ -370,7 +399,7 @@ class IoMcpApp(App):
     def compose(self) -> ComposeResult:
         yield Header(name="io-mcp", show_clock=False)
         yield Static("", id="tab-bar")
-        status_text = "Ready — demo mode" if self._demo else "Waiting for agent..."
+        status_text = "[dim]Ready — demo mode[/dim]" if self._demo else "[dim]Waiting for agent...[/dim]"
         yield Label(status_text, id="status")
         yield Label("", id="agent-activity")
         yield Label("", id="preamble")
@@ -379,7 +408,7 @@ class IoMcpApp(App):
         yield Input(placeholder="Type your reply, press Enter to send, Escape to cancel", id="freeform-input")
         yield Input(placeholder="Filter choices...", id="filter-input")
         yield DwellBar(id="dwell-bar")
-        yield Static("↕ Scroll  ⏎ Select  u Undo  i Type  m Msg  ␣ Voice  s Settings  h/l Tabs  q Quit", id="footer-help")
+        yield Static("[dim]↕[/dim] Scroll  [dim]⏎[/dim] Select  [dim]u[/dim] Undo  [dim]i[/dim] Type  [dim]m[/dim] Msg  [dim]␣[/dim] Voice  [dim]/[/dim] Filter  [dim]s[/dim] Settings  [dim]q[/dim] Quit", id="footer-help")
 
     def on_mount(self) -> None:
         self.title = "io-mcp"
@@ -496,9 +525,9 @@ class IoMcpApp(App):
                 if len(last_text) > 60:
                     last_text = last_text[:60] + "..."
             if last_text:
-                activity.update(f"⏳ Working ({time_str}) — {last_text}")
+                activity.update(f"[bold #e0af68]⧗[/bold #e0af68] Working ({time_str}) — {last_text}")
             else:
-                activity.update(f"⏳ Working ({time_str})")
+                activity.update(f"[bold #e0af68]⧗[/bold #e0af68] Working ({time_str})")
             activity.display = True
         except Exception:
             pass
@@ -539,7 +568,7 @@ class IoMcpApp(App):
         if activity and session.speech_log:
             last = session.speech_log[-1].text
             truncated = last[:80] + ("..." if len(last) > 80 else "")
-            activity.update(f"🔊 {truncated}")
+            activity.update(f"[bold #7dcfff]▸[/bold #7dcfff] {truncated}")
             activity.display = True
         elif activity:
             activity.display = False
@@ -551,7 +580,7 @@ class IoMcpApp(App):
             return
 
         for entry in recent:
-            label = Label(f"💬 {entry.text}", classes="speech-entry")
+            label = Label(f"[dim]  │[/dim] {entry.text}", classes="speech-entry")
             log_widget.mount(label)
         log_widget.display = True
 
@@ -802,7 +831,7 @@ class IoMcpApp(App):
         status = self.query_one("#status", Label)
         session = self._focused()
         session_name = session.name if session else ""
-        after_text = f"Selected: {label}" if self._demo else f"[{session_name}] Selected: {label} — waiting... (u=undo)"
+        after_text = f"Selected: {label}" if self._demo else f"[#9ece6a]✓[/#9ece6a] [{session_name}] {label} [dim](u=undo)[/dim]"
         status.update(after_text)
         status.display = True
 
@@ -813,7 +842,7 @@ class IoMcpApp(App):
         self.query_one("#dwell-bar").display = False
         self.query_one("#speech-log").display = False
         status = self.query_one("#status", Label)
-        status_text = "Ready — demo mode" if self._demo else "Waiting for agent..."
+        status_text = "[dim]Ready — demo mode[/dim]" if self._demo else "[dim]Waiting for agent...[/dim]"
         status.update(status_text)
         status.display = True
 
@@ -999,8 +1028,8 @@ class IoMcpApp(App):
         status = self.query_one("#status", Label)
         # Show pending message count if any
         msgs = getattr(session, 'pending_messages', [])
-        msg_info = f" · {len(msgs)} msg{'s' if len(msgs) != 1 else ''} queued" if msgs else ""
-        status.update(f"[{session.name}] Waiting for agent...{msg_info} (u=undo)")
+        msg_info = f" [dim]·[/dim] [#bb9af7]{len(msgs)} msg{'s' if len(msgs) != 1 else ''}[/#bb9af7]" if msgs else ""
+        status.update(f"[#e0af68]⧗[/#e0af68] [{session.name}] Waiting for agent...{msg_info} [dim](u=undo)[/dim]")
         status.display = True
 
     def action_next_tab(self) -> None:
@@ -1179,7 +1208,7 @@ class IoMcpApp(App):
         self.query_one("#choices").display = False
         self.query_one("#dwell-bar").display = False
         status = self.query_one("#status", Label)
-        status.update("🎙 Recording... (press space to stop)")
+        status.update("[bold #f7768e]● REC[/bold #f7768e] Recording... [dim](space to stop)[/dim]")
         status.display = True
 
         # Find binaries
@@ -1240,7 +1269,7 @@ class IoMcpApp(App):
             pass
 
         status = self.query_one("#status", Label)
-        status.update("⏳ Transcribing...")
+        status.update("[#7dcfff]⧗[/#7dcfff] Transcribing...")
 
         def _process():
             termux_exec_bin = _find_binary("termux-exec")
@@ -1413,7 +1442,7 @@ class IoMcpApp(App):
 
         # Show loading state
         status = self.query_one("#status", Label)
-        status.update("Checking notifications...")
+        status.update("[#7dcfff]⧗[/#7dcfff] Checking notifications...")
         status.display = True
         self.query_one("#choices").display = False
 
