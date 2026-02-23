@@ -176,6 +176,14 @@ def create_mcp_server(
         session.ambient_count = 0
         return session
 
+    def _registration_reminder(session) -> str:
+        """Return a reminder string if session is not registered."""
+        if not session.registered:
+            return ("\n\n[REMINDER: Call register_session() first with your cwd, "
+                    "hostname, tmux_session, and tmux_pane so io-mcp can manage "
+                    "your session properly.]")
+        return ""
+
     def _safe_tool(fn):
         import functools
         import traceback as tb
@@ -277,7 +285,7 @@ def create_mcp_server(
                 continue  # Re-present the same choices
             break
 
-        return _attach_messages(json.dumps(result), session)
+        return _attach_messages(json.dumps(result), session) + _registration_reminder(session)
 
     @server.tool()
     @_safe_tool
@@ -513,6 +521,89 @@ def create_mcp_server(
                 "stt_models": frontend.config.stt_model_names,
             })
         return json.dumps({"error": "No config available"})
+
+    @server.tool()
+    @_safe_tool
+    async def register_session(
+        ctx: Context,
+        cwd: str = "",
+        hostname: str = "",
+        tmux_session: str = "",
+        tmux_pane: str = "",
+        name: str = "",
+        voice: str = "",
+        emotion: str = "",
+        metadata: dict = {},
+    ) -> str:
+        """Register this agent session with io-mcp.
+
+        MUST be called before using any other io-mcp tools. Provides
+        metadata about the agent's environment so io-mcp can:
+        - Display agent info in the dashboard
+        - Control agents via tmux (send messages, restart)
+        - Reconnect agents after io-mcp restarts
+
+        Parameters
+        ----------
+        cwd:
+            The agent's current working directory.
+        hostname:
+            The machine the agent is running on.
+        tmux_session:
+            The tmux session name (if running in tmux).
+        tmux_pane:
+            The tmux pane ID (e.g. "%42").
+        name:
+            A descriptive name for this session tab.
+        voice:
+            Preferred TTS voice for this session.
+        emotion:
+            Preferred TTS emotion for this session.
+        metadata:
+            Any additional key-value metadata.
+
+        Returns
+        -------
+        str
+            JSON confirmation with assigned session info.
+        """
+        session = _safe_get_session(ctx)
+        session.registered = True
+        if cwd:
+            session.cwd = cwd
+        if hostname:
+            session.hostname = hostname
+        if tmux_session:
+            session.tmux_session = tmux_session
+        if tmux_pane:
+            session.tmux_pane = tmux_pane
+        if name:
+            session.name = name
+        if voice:
+            session.voice_override = voice
+        if emotion:
+            session.emotion_override = emotion
+        if metadata:
+            session.agent_metadata.update(metadata)
+
+        try:
+            frontend.update_tab_bar()
+        except Exception:
+            pass
+
+        return json.dumps({
+            "status": "registered",
+            "session_id": session.session_id,
+            "name": session.name,
+            "features": [
+                "present_choices", "present_multi_select",
+                "speak", "speak_async", "speak_urgent",
+                "set_speed", "set_voice", "set_emotion",
+                "set_tts_model", "set_stt_model",
+                "rename_session", "get_settings", "reload_config",
+                "pull_latest", "run_command",
+            ],
+        })
 
     @server.tool()
     @_safe_tool

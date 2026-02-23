@@ -81,6 +81,14 @@ class Session:
     # ── User message inbox (queued for next MCP response) ─────────
     pending_messages: list[str] = field(default_factory=list)
 
+    # ── Agent registration metadata ─────────────────────────────
+    registered: bool = False                 # has the agent called register_session?
+    cwd: str = ""                            # agent's working directory
+    hostname: str = ""                       # machine the agent is running on
+    tmux_session: str = ""                   # tmux session name (if any)
+    tmux_pane: str = ""                      # tmux pane ID (e.g. %42)
+    agent_metadata: dict = field(default_factory=dict)  # arbitrary extra metadata
+
     def touch(self) -> None:
         """Update the last_activity timestamp."""
         self.last_activity = time.time()

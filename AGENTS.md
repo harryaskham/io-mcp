@@ -56,6 +56,7 @@ android/
 
 | Tool | Description |
 |------|-------------|
+| `register_session(cwd, hostname, ...)` | Register agent with environment metadata (call first!) |
 | `present_choices(preamble, choices)` | Show scroll-wheel choices, block until selection |
 | `present_multi_select(preamble, choices)` | Checkable list — toggle items, submit with Done |
 | `speak(text)` | Blocking TTS narration |
@@ -219,6 +220,20 @@ echo "msg" | io-mcp-msg              # Pipe from stdin
 ```
 
 ## Important Notes for Agents
+
+### Register Your Session First
+
+**Call `register_session()` as your first MCP tool call.** Provide your `cwd`, `hostname`, `tmux_session`, `tmux_pane`, and optionally a `name`, `voice`, and `emotion`. This lets io-mcp display your info in the dashboard and control your session (restart, send messages via tmux).
+
+```
+register_session(
+  cwd="/path/to/project",
+  hostname="my-machine",
+  tmux_session="main",
+  tmux_pane="%42",
+  name="Code Review"
+)
+```
 
 ### NEVER Stop Without Presenting Choices
 
