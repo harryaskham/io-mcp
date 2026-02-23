@@ -90,6 +90,13 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
     return f"""
     Screen {{
         background: {s['bg']};
+        scrollbar-background: {s['bg_alt']};
+        scrollbar-background-hover: {s['bg_alt']};
+        scrollbar-background-active: {s['bg_alt']};
+        scrollbar-color: {s['border']};
+        scrollbar-color-hover: {s['fg_dim']};
+        scrollbar-color-active: {s['accent']};
+        scrollbar-corner-color: {s['bg_alt']};
     }}
 
     /* ─── Tab bar (replaces Header) ─────────────────────────── */
