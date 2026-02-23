@@ -631,6 +631,9 @@ class IoMcpApp(App):
             session.intro_speaking = False
             session.reading_options = False
 
+            # Audio cue
+            self._tts.play_chime("choices")
+
             # Show conversation UI
             def _show_convo():
                 self.query_one("#choices").display = False
@@ -704,6 +707,9 @@ class IoMcpApp(App):
         pregen_thread.start()
 
         if is_fg:
+            # Audio cue for new choices
+            self._tts.play_chime("choices")
+
             # Foreground: speak intro and read options
             self._fg_speaking = True
             self._tts.speak(full_intro)
@@ -1128,6 +1134,9 @@ class IoMcpApp(App):
 
         Assigns voice/emotion from rotation lists if configured.
         """
+        # Audio cue for new agent connection
+        self._tts.play_chime("connect")
+
         # Assign voice/emotion rotation
         if self._config:
             voice_rot = self._config.tts_voice_rotation
@@ -1243,6 +1252,9 @@ class IoMcpApp(App):
         session.voice_recording = True
         session.reading_options = False
 
+        # Audio cue for recording start
+        self._tts.play_chime("record_start")
+
         # Emit recording state for remote frontends
         try:
             frontend_api.emit_recording_state(session.session_id, True)
@@ -1313,6 +1325,9 @@ class IoMcpApp(App):
         if not session:
             return
         session.voice_recording = False
+
+        # Audio cue for recording stop
+        self._tts.play_chime("record_stop")
         proc = self._voice_process
         self._voice_process = None
 
@@ -2412,6 +2427,9 @@ class IoMcpApp(App):
         # Haptic feedback on selection (longer buzz)
         self._vibrate(100)
 
+        # Audio cue
+        self._tts.play_chime("select")
+
         self._tts.stop()
         self._tts.speak_async(f"Selected: {label}")
 
@@ -2676,8 +2694,10 @@ class IoMcpApp(App):
         self._tts.stop()
 
         if self._conversation_mode:
+            self._tts.play_chime("convo_on")
             self._tts.speak_async("Conversation mode on. I'll listen after each response.")
         else:
+            self._tts.play_chime("convo_off")
             self._tts.speak_async("Conversation mode off. Back to choices.")
             # If session is active, restore the choices UI
             if session and session.active:

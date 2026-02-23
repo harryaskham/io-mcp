@@ -378,3 +378,126 @@ class TTSEngine:
     def cleanup(self) -> None:
         self.stop()
         self.clear_cache()
+
+    # ─── Audio cues (tone generation) ─────────────────────────────
+
+    def play_tone(self, frequency: float = 800, duration_ms: int = 100,
+                  volume: float = 0.3, fade: bool = True) -> None:
+        """Play a simple sine wave tone (non-blocking).
+
+        Generates a WAV in memory and plays via paplay.
+        Used for UI audio cues (chimes, clicks, etc.).
+
+        Args:
+            frequency: Tone frequency in Hz (default 800)
+            duration_ms: Duration in milliseconds (default 100)
+            volume: Volume 0.0-1.0 (default 0.3)
+            fade: Apply fade-in/out to avoid clicks (default True)
+        """
+        if not self._paplay or self._muted:
+            return
+
+        import math
+        import struct
+        import io
+
+        sample_rate = 24000
+        num_samples = int(sample_rate * duration_ms / 1000)
+
+        # Generate sine wave
+        samples = []
+        for i in range(num_samples):
+            t = i / sample_rate
+            val = math.sin(2 * math.pi * frequency * t) * volume
+
+            # Fade in/out to avoid clicks
+            if fade:
+                fade_samples = min(num_samples // 5, 200)
+                if i < fade_samples:
+                    val *= i / fade_samples
+                elif i > num_samples - fade_samples:
+                    val *= (num_samples - i) / fade_samples
+
+            samples.append(int(val * 32767))
+
+        # Build WAV in memory
+        wav_data = struct.pack('<HHIIHHi' * 0, )  # placeholder
+        raw_audio = struct.pack(f'<{num_samples}h', *samples)
+
+        # WAV header
+        wav = io.BytesIO()
+        data_size = len(raw_audio)
+        wav.write(b'RIFF')
+        wav.write(struct.pack('<I', 36 + data_size))
+        wav.write(b'WAVE')
+        wav.write(b'fmt ')
+        wav.write(struct.pack('<IHHIIHH', 16, 1, 1, sample_rate,
+                              sample_rate * 2, 2, 16))
+        wav.write(b'data')
+        wav.write(struct.pack('<I', data_size))
+        wav.write(raw_audio)
+
+        # Write to temp file and play
+        tone_path = os.path.join(CACHE_DIR, f"tone-{int(frequency)}-{duration_ms}.wav")
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        with open(tone_path, 'wb') as f:
+            f.write(wav.getvalue())
+
+        # Play without stopping current speech
+        try:
+            subprocess.Popen(
+                [self._paplay, tone_path],
+                env=self._env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            pass
+
+    def play_chime(self, style: str = "choices") -> None:
+        """Play a predefined audio cue.
+
+        Styles:
+            choices: Two ascending tones (new choices arrived)
+            select: Short low click (selection made)
+            connect: Three-note ascending (agent connected)
+            record_start: Rising tone (recording started)
+            record_stop: Falling tone (recording stopped)
+            convo_on: Two ascending (conversation mode on)
+            convo_off: Two descending (conversation mode off)
+        """
+        if self._muted:
+            return
+
+        def _play():
+            import time as _time
+            if style == "choices":
+                self.play_tone(600, 60, 0.15)
+                _time.sleep(0.08)
+                self.play_tone(900, 80, 0.2)
+            elif style == "select":
+                self.play_tone(400, 40, 0.2)
+            elif style == "connect":
+                self.play_tone(500, 50, 0.15)
+                _time.sleep(0.06)
+                self.play_tone(700, 50, 0.15)
+                _time.sleep(0.06)
+                self.play_tone(900, 70, 0.2)
+            elif style == "record_start":
+                self.play_tone(400, 60, 0.2)
+                _time.sleep(0.05)
+                self.play_tone(800, 80, 0.25)
+            elif style == "record_stop":
+                self.play_tone(800, 60, 0.2)
+                _time.sleep(0.05)
+                self.play_tone(400, 80, 0.15)
+            elif style == "convo_on":
+                self.play_tone(500, 50, 0.15)
+                _time.sleep(0.06)
+                self.play_tone(800, 70, 0.2)
+            elif style == "convo_off":
+                self.play_tone(800, 50, 0.15)
+                _time.sleep(0.06)
+                self.play_tone(500, 70, 0.15)
+
+        threading.Thread(target=_play, daemon=True).start()
