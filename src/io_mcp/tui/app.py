@@ -2302,6 +2302,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                     session.registered = True
                     session.cwd = saved.get("cwd", "")
                     session.hostname = saved.get("hostname", "")
+                    session.username = saved.get("username", "")
                     session.tmux_session = saved.get("tmux_session", "")
                     session.tmux_pane = saved.get("tmux_pane", "")
                     session.voice_override = saved.get("voice_override")

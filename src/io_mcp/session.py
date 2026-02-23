@@ -93,6 +93,7 @@ class Session:
     registered: bool = False                 # has the agent called register_session?
     cwd: str = ""                            # agent's working directory
     hostname: str = ""                       # machine the agent is running on
+    username: str = ""                       # user running the agent
     tmux_session: str = ""                   # tmux session name (if any)
     tmux_pane: str = ""                      # tmux pane ID (e.g. %42)
     agent_metadata: dict = field(default_factory=dict)  # arbitrary extra metadata
@@ -513,6 +514,7 @@ class SessionManager:
                         "name": session.name,
                         "cwd": session.cwd,
                         "hostname": session.hostname,
+                        "username": session.username,
                         "tmux_session": session.tmux_session,
                         "tmux_pane": session.tmux_pane,
                         "voice_override": session.voice_override,

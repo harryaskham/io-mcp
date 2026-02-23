@@ -316,6 +316,47 @@ def _ensure_proxy_running(proxy_address: str, backend_port: int, dev: bool = Fal
     except Exception as e:
         print(f"  Proxy: failed to start — {e}", flush=True)
 
+def _detect_hostname() -> str:
+    """Detect the local hostname, preferring Tailscale hostname over .local names.
+
+    Checks tailscale status --json for the self node's hostname first,
+    falls back to socket.gethostname() with .local suffix stripped.
+    Result is cached after first call.
+    """
+    cached = getattr(_detect_hostname, '_cached', None)
+    if cached is not None:
+        return cached
+
+    import socket
+    hostname = ""
+
+    # Try Tailscale first
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["tailscale", "status", "--json"],
+            capture_output=True, text=True, timeout=3,
+        )
+        if result.returncode == 0:
+            import json as _json
+            ts = _json.loads(result.stdout)
+            self_node = ts.get("Self", {})
+            ts_hostname = self_node.get("HostName", "")
+            if ts_hostname:
+                hostname = ts_hostname
+    except Exception:
+        pass
+
+    # Fallback to socket hostname
+    if not hostname:
+        hostname = socket.gethostname()
+        # Strip .local suffix
+        if hostname.endswith(".local"):
+            hostname = hostname[:-6]
+
+    _detect_hostname._cached = hostname
+    return hostname
+
 
 # ─── Backend tool dispatcher ──────────────────────────────────────────
 
@@ -536,10 +577,26 @@ def _create_tool_dispatcher(app: IoMcpApp, append_options: list[str],
         session = _get_session(session_id)
         session.last_tool_name = "register_session"
         session.registered = True
-        for field in ("cwd", "hostname", "tmux_session", "tmux_pane"):
+        for field in ("cwd", "hostname", "tmux_session", "tmux_pane", "username"):
             val = args.get(field, "")
             if val:
                 setattr(session, field, val)
+
+        # Auto-detect hostname if not provided or if agent sent a .local name
+        agent_hostname = args.get("hostname", "")
+        if not agent_hostname or agent_hostname.endswith(".local"):
+            detected = _detect_hostname()
+            if detected:
+                session.hostname = detected
+
+        # Auto-detect username if not provided
+        if not args.get("username"):
+            import getpass
+            try:
+                session.username = getpass.getuser()
+            except Exception:
+                pass
+
         if args.get("name"):
             session.name = args["name"]
         if args.get("voice"):
@@ -550,8 +607,8 @@ def _create_tool_dispatcher(app: IoMcpApp, append_options: list[str],
             session.agent_metadata.update(args["metadata"])
 
         import socket
-        local_hostname = socket.gethostname()
-        hostname = args.get("hostname", "")
+        local_hostname = _detect_hostname() or socket.gethostname()
+        hostname = session.hostname or ""
         is_local = (hostname == local_hostname) if hostname else True
 
         try:
