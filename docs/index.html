@@ -89,6 +89,11 @@
       <p>Configurable macros: "commit and push", "run tests" — one key away.</p>
     </div>
     <div class="feature">
+      <span class="icon">📜</span>
+      <h3>Agent Log</h3>
+      <p>Press <code class="inline-code">g</code> for a scrollable transcript of everything the agent said.</p>
+    </div>
+    <div class="feature">
       <span class="icon">↩</span>
       <h3>Undo Selection</h3>
       <p>Press <code class="inline-code">u</code> to go back if you scrolled past the right option.</p>
@@ -144,6 +149,7 @@
     <div class="shortcut"><kbd>x</kbd> <span>Quick actions</span></div>
     <div class="shortcut"><kbd>c</kbd> <span>Conversation mode</span></div>
     <div class="shortcut"><kbd>d</kbd> <span>Dashboard</span></div>
+    <div class="shortcut"><kbd>g</kbd> <span>Agent log</span></div>
     <div class="shortcut"><kbd>h</kbd><kbd>l</kbd> <span>Switch tabs</span></div>
     <div class="shortcut"><kbd>␣</kbd> <span>Voice input</span></div>
     <div class="shortcut"><kbd>i</kbd> <span>Freeform text input</span></div>
@@ -205,10 +211,13 @@ io-mcp-msg "check this file"</pre>
 ├── __main__.py   <span style="color:#616e88"># CLI entry, server startup, watchdog</span>
 ├── api.py        <span style="color:#616e88"># Frontend API: SSE events, REST</span>
 ├── cli.py        <span style="color:#616e88"># io-mcp-msg CLI tool</span>
-├── config.py     <span style="color:#616e88"># YAML config, env expansion</span>
+├── config.py     <span style="color:#616e88"># YAML config, env expansion, djent</span>
 ├── server.py     <span style="color:#616e88"># 15 MCP tools, Frontend protocol</span>
 ├── session.py    <span style="color:#616e88"># Per-agent session state</span>
-├── tui.py        <span style="color:#616e88"># Textual TUI: choices, TTS, voice</span>
+├── tui/          <span style="color:#616e88"># Textual TUI package</span>
+│   ├── app.py    <span style="color:#616e88"># Main app, choices, TTS, actions</span>
+│   ├── themes.py <span style="color:#616e88"># Color schemes, CSS generation</span>
+│   └── widgets.py<span style="color:#616e88"># ChoiceItem, DwellBar, extras</span>
 └── tts.py        <span style="color:#616e88"># TTS engine: cache, stream, tones</span>
 android/          <span style="color:#616e88"># Jetpack Compose companion app</span></pre>
 </section>

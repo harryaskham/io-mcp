@@ -38,6 +38,7 @@ An MCP server that lets you control Claude Code using only a smart ring (scroll 
 - **Undo selection** (`u`) — go back and re-pick if you scrolled past the right option
 - **Choice filter** (`/`) — type to narrow choices by label or summary
 - **Dashboard** (`d`) — mission control overview of all agent sessions
+- **Agent log** (`g`) — scrollable transcript of everything the focused agent has said
 - **Agent spawner** (`t`) — launch new Claude Code instances (local or remote via SSH)
 - **Quick actions** (`x`) — configurable macros from `.io-mcp.yml`
 - **Tab navigation** (`h`/`l`) — switch between agent tabs
@@ -53,6 +54,7 @@ An MCP server that lets you control Claude Code using only a smart ring (scroll 
 - **Frontend API** — REST + SSE on port 8445 for remote clients
 - **Android app** — Jetpack Compose companion app (touch, keyboard, mic, notifications)
 - **Configurable** — YAML config with env var expansion, per-project overrides
+- **Djent integration** — optional swarm management via `--djent` flag
 - **Watchdog** — auto-restart on crash with exponential backoff
 
 ## Quick Start
@@ -146,11 +148,14 @@ src/io_mcp/
 ├── __main__.py   # CLI entry, server startup, watchdog
 ├── api.py        # Frontend API: SSE events, REST endpoints
 ├── cli.py        # io-mcp-msg CLI tool
-├── config.py     # YAML config with env expansion
+├── config.py     # YAML config with env expansion, djent integration
 ├── server.py     # MCP tools, Frontend protocol
 ├── session.py    # Per-agent session state
 ├── settings.py   # Runtime settings wrapper
-├── tui.py        # Textual TUI: choices, TTS, voice input
+├── tui/          # Textual TUI package
+│   ├── app.py    # Main app: choices, TTS, voice input, actions
+│   ├── themes.py # Color schemes and CSS generation
+│   └── widgets.py # ChoiceItem, DwellBar, extras
 └── tts.py        # TTS engine: caching, streaming, tones
 android/          # Jetpack Compose companion app
 ```
@@ -204,7 +209,7 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 nix develop          # Dev shell
 nix build            # Build package
 uv run io-mcp        # Run directly
-uv run pytest tests/ # Run tests (60 tests)
+uv run pytest tests/ # Run tests (106 tests)
 ```
 
 ## License
