@@ -2320,7 +2320,8 @@ class IoMcpApp(App):
     @on(Input.Changed, "#freeform-input")
     def on_freeform_changed(self, event: Input.Changed) -> None:
         session = self._focused()
-        if not session or not session.input_mode:
+        # Readback works for both freeform input and message queue mode
+        if not session or (not session.input_mode and not self._message_mode):
             return
         text = event.value
         if len(text) <= self._freeform_spoken_pos:
