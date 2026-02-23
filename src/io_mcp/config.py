@@ -503,6 +503,7 @@ class IoMcpConfig:
     @djent_enabled.setter
     def djent_enabled(self, value: bool) -> None:
         self.raw.setdefault("config", {}).setdefault("djent", {})["enabled"] = value
+        self.expanded = _expand_config(self.raw)
 
     # ─── Extra options ────────────────────────────────────────────
 
