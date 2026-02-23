@@ -740,6 +740,13 @@ class IoMcpApp(App):
         if session is None:
             return
 
+        # Don't overwrite the UI if user is composing a message or typing
+        if self._message_mode or (session and session.input_mode):
+            # Choices are stored on the session; they'll be shown after input is done
+            # Just play a subtle chime to indicate choices arrived
+            self._tts.play_chime("choices")
+            return
+
         preamble_widget = self.query_one("#preamble", Label)
         preamble_widget.update(session.preamble)
         preamble_widget.display = True
