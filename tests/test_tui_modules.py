@@ -107,7 +107,7 @@ class TestExtraOptions:
 
     def test_required_options_present(self):
         labels = {opt["label"] for opt in EXTRA_OPTIONS}
-        assert "Settings" in labels
+        assert "Quick settings" in labels
         assert "Record response" in labels
         assert "Queue message" in labels
         assert "Dashboard" in labels

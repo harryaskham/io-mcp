@@ -85,6 +85,7 @@ class SettingsMixin:
         self._help_mode = False
         self._history_mode = False
         self._tab_picker_mode = False
+        self._quick_settings_mode = False
 
         # Clean up pane viewer if active
         if getattr(self, '_pane_viewer_mode', False):

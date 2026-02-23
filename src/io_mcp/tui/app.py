@@ -354,6 +354,9 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         self.query_one("#speech-log").display = False
         self.query_one("#pane-view").display = False
 
+        # Restore persisted sessions so the tab bar shows previous agents
+        self._restore_persisted_sessions()
+
         # Start periodic session cleanup (every 60 seconds, 5 min timeout)
         self._cleanup_timer = self.set_interval(60, self._cleanup_stale_sessions)
         # Heartbeat: check every 15s if agent has been silent too long
@@ -2272,6 +2275,48 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
     # ─── Session lifecycle ─────────────────────────────────────────
 
+    def _restore_persisted_sessions(self) -> None:
+        """Load persisted sessions and create placeholder tabs for them.
+
+        On TUI restart, shows previous agent sessions in the tab bar so the
+        user can see which agents were connected. When agents reconnect and
+        call register_session(), they match to these placeholders and restore
+        their speech log, history, and tool stats.
+        """
+        try:
+            persisted = self.manager.load_registered()
+            if not persisted:
+                return
+
+            for saved in persisted:
+                name = saved.get("name", "")
+                if not name:
+                    continue
+
+                # Create a placeholder session with a synthetic ID
+                import hashlib
+                placeholder_id = f"persisted-{hashlib.md5(name.encode()).hexdigest()[:8]}"
+                session, created = self.manager.get_or_create(placeholder_id)
+                if created:
+                    session.name = name
+                    session.registered = True
+                    session.cwd = saved.get("cwd", "")
+                    session.hostname = saved.get("hostname", "")
+                    session.tmux_session = saved.get("tmux_session", "")
+                    session.tmux_pane = saved.get("tmux_pane", "")
+                    session.voice_override = saved.get("voice_override")
+                    session.emotion_override = saved.get("emotion_override")
+                    session.agent_metadata = saved.get("agent_metadata", {})
+                    session.restore_activity(saved)
+                    # Mark as unhealthy since agent hasn't reconnected yet
+                    session.health_status = "warning"
+
+            self._update_tab_bar()
+            # Show the first persisted session's activity feed
+            self._show_idle()
+        except Exception:
+            pass
+
     def on_session_created(self, session: Session) -> None:
         """Called when a new session is created (from MCP thread).
 
@@ -2633,6 +2678,12 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                     sessions = self.manager.all_sessions()
                     if idx < len(sessions):
                         self._switch_to_session(sessions[idx])
+                    return
+                # Check if we're in quick settings submenu
+                if getattr(self, '_quick_settings_mode', False):
+                    items = ["Fast toggle", "Voice toggle", "Notifications", "Settings", "Restart TUI", "Back"]
+                    if idx < len(items):
+                        self._handle_quick_settings_select(items[idx])
                     return
                 # Check if we're in quick action menu
                 qa_opts = getattr(self, '_quick_action_options', None)
@@ -3147,13 +3198,27 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 self._show_choices()
             return
 
-        # Top level: actually quit
-        for sess in self.manager.all_sessions():
-            if sess.active:
-                self._cancel_dwell()
-                sess.selection = {"selected": "quit", "summary": "User quit"}
-                sess.selection_event.set()
-        self.exit()
+        # Top level: confirm before quitting
+        def _on_quit_confirm(label: str):
+            if label.lower().startswith("quit"):
+                for sess in self.manager.all_sessions():
+                    if sess.active:
+                        self._cancel_dwell()
+                        sess.selection = {"selected": "quit", "summary": "User quit"}
+                        sess.selection_event.set()
+                self.exit()
+            else:
+                self._exit_settings()
+
+        self._show_dialog(
+            title="Quit io-mcp?",
+            message="This will stop the TUI. Agents will lose their connection.",
+            buttons=[
+                {"label": "Quit", "summary": "Exit io-mcp"},
+                {"label": "Cancel", "summary": "Go back"},
+            ],
+            callback=_on_quit_confirm,
+        )
 
     def action_hot_reload(self) -> None:
         """Hot-reload the tui module, monkey-patching methods onto this app.
@@ -3316,28 +3381,79 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             self.action_pane_view()
         elif label == "Switch tab":
             self._enter_tab_picker()
-        elif label == "Fast toggle":
-            msg = self.settings.toggle_fast()
-            self._tts.clear_cache()
-            self._tts.speak_async(msg)
-        elif label == "Voice toggle":
-            msg = self.settings.toggle_voice()
-            self._tts.clear_cache()
-            self._tts.speak_async(msg)
         elif label == "New agent":
             self.action_spawn_agent()
         elif label == "Dashboard":
             self.action_dashboard()
-        elif label == "Settings":
-            self._enter_settings()
-        elif label == "Restart TUI":
-            self._restart_tui()
-        elif label == "Notifications":
-            self._show_notifications()
+        elif label == "Quick settings":
+            self._enter_quick_settings()
         elif label == "History":
             self._show_history()
         elif label == "Queue message":
             self.action_queue_message()
+
+    def _enter_quick_settings(self) -> None:
+        """Show quick settings submenu with speed/voice toggles, settings, restart, etc."""
+        self._tts.stop()
+        self._speak_ui("Quick settings")
+        self._in_settings = True
+        self._setting_edit_mode = False
+        self._quick_settings_mode = True
+
+        s = self._cs
+        preamble_widget = self.query_one("#preamble", Label)
+        preamble_widget.update("Quick Settings")
+        preamble_widget.display = True
+        self.query_one("#status").display = False
+
+        items = [
+            {"label": "Fast toggle", "summary": f"Toggle speed (current: {self.settings.speed:.1f}x)"},
+            {"label": "Voice toggle", "summary": f"Quick-switch voice (current: {self.settings.voice})"},
+            {"label": "Notifications", "summary": "Check Android notifications"},
+            {"label": "Settings", "summary": "Open full settings menu"},
+            {"label": "Restart TUI", "summary": "Restart the TUI backend"},
+            {"label": "Back", "summary": "Return to choices"},
+        ]
+
+        list_view = self.query_one("#choices", ListView)
+        list_view.clear()
+        for i, item in enumerate(items):
+            list_view.append(ChoiceItem(
+                item["label"], item["summary"],
+                index=i + 1, display_index=i,
+            ))
+        list_view.display = True
+        list_view.index = 0
+        list_view.focus()
+
+    def _handle_quick_settings_select(self, label: str) -> None:
+        """Handle selection in the quick settings submenu."""
+        self._tts.stop()
+        self._vibrate(100)
+        self._quick_settings_mode = False
+
+        if label == "Fast toggle":
+            msg = self.settings.toggle_fast()
+            self._tts.clear_cache()
+            self._speak_ui(msg)
+            self._enter_quick_settings()  # Stay in submenu
+        elif label == "Voice toggle":
+            msg = self.settings.toggle_voice()
+            self._tts.clear_cache()
+            self._speak_ui(msg)
+            self._enter_quick_settings()  # Stay in submenu
+        elif label == "Notifications":
+            self._in_settings = False
+            self._show_notifications()
+        elif label == "Settings":
+            self._in_settings = False
+            self._enter_settings()
+        elif label == "Restart TUI":
+            self._in_settings = False
+            self._restart_tui()
+        else:
+            # "Back" or unknown
+            self._exit_settings()
 
     def _show_history(self) -> None:
         """Show selection history for the focused session in a scrollable list.

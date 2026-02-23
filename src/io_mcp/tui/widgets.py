@@ -44,19 +44,15 @@ def _safe_action(fn):
 
 EXTRA_OPTIONS = [
     {"label": "Queue message", "summary": "Type or speak a message to queue for the agent's next response"},
-    {"label": "Multi select", "summary": "Toggle multiple choices then confirm — do several things at once"},
+    {"label": "Multi select", "summary": "Toggle multiple choices then confirm -- do several things at once"},
     {"label": "Branch to worktree", "summary": "Create a git worktree for isolated work on a new branch"},
     {"label": "Compact context", "summary": "Compact the agent's context window to free up space"},
     {"label": "Pane view", "summary": "Show live tmux pane output for the focused agent"},
     {"label": "History", "summary": "Review past selections for this session"},
-    {"label": "Notifications", "summary": "Check Android notifications"},
     {"label": "Switch tab", "summary": "Scroll through agent tabs and select one"},
-    {"label": "Fast toggle", "summary": "Toggle speed between current and 1.8x"},
-    {"label": "Voice toggle", "summary": "Quick-switch between voices"},
     {"label": "New agent", "summary": "Spawn a new Claude Code agent (local or remote)"},
     {"label": "Dashboard", "summary": "Overview of all active agents"},
-    {"label": "Settings", "summary": "Open settings menu"},
-    {"label": "Restart TUI", "summary": "Restart the TUI backend — agents stay connected via proxy"},
+    {"label": "Quick settings", "summary": "Speed, voice, notifications, restart"},
     {"label": "Record response", "summary": "Speak your reply (voice input)"},
 ]
 
