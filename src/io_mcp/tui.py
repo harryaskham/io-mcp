@@ -331,6 +331,7 @@ class IoMcpApp(App):
         Binding("t", "spawn_agent", "New agent", show=False),
         Binding("x", "quick_actions", "Quick", show=False),
         Binding("c", "toggle_conversation", "Chat", show=False),
+        Binding("d", "dashboard", "Dashboard", show=False),
         Binding("r", "hot_reload", "Reload", show=False),
         Binding("1", "pick_1", "", show=False),
         Binding("2", "pick_2", "", show=False),
@@ -375,6 +376,7 @@ class IoMcpApp(App):
         spawn_key = kb.get("spawnAgent", "t")
         quick_key = kb.get("quickActions", "x")
         convo_key = kb.get("conversationMode", "c")
+        dashboard_key = kb.get("dashboard", "d")
         reload_key = kb.get("hotReload", "r")
         quit_key = kb.get("quit", "q")
 
@@ -396,6 +398,7 @@ class IoMcpApp(App):
             Binding(spawn_key, "spawn_agent", "New agent", show=False),
             Binding(quick_key, "quick_actions", "Quick", show=False),
             Binding(convo_key, "toggle_conversation", "Chat", show=False),
+            Binding(dashboard_key, "dashboard", "Dashboard", show=False),
             Binding(reload_key, "hot_reload", "Reload", show=False),
         ] + [Binding(str(i), f"pick_{i}", "", show=False) for i in range(1, 10)]
         if quit_key:
@@ -1826,6 +1829,7 @@ class IoMcpApp(App):
         self._setting_edit_mode = False
         self._spawn_options = None
         self._quick_action_options = None
+        self._dashboard_mode = False
 
         # UI first, then TTS
         if session and session.active:
@@ -2050,6 +2054,14 @@ class IoMcpApp(App):
                     self._in_settings = False
                     self._do_spawn(spawn_opts[idx])
                     self._spawn_options = None
+                    return
+                # Check if we're in dashboard mode
+                if getattr(self, '_dashboard_mode', False):
+                    self._dashboard_mode = False
+                    self._in_settings = False
+                    sessions = self.manager.all_sessions()
+                    if idx < len(sessions):
+                        self._switch_to_session(sessions[idx])
                     return
                 # Check if we're in quick action menu
                 qa_opts = getattr(self, '_quick_action_options', None)
@@ -2846,6 +2858,90 @@ class IoMcpApp(App):
             if session and session.active:
                 self.call_from_thread(self._show_choices)
 
+    def action_dashboard(self) -> None:
+        """Show a dashboard overview of all agent sessions.
+
+        Displays each agent's name, status, last speech, and elapsed
+        time since last activity. Narrates a summary via TTS.
+        Press d or Escape to return.
+        """
+        session = self._focused()
+        if session and (session.input_mode or session.voice_recording):
+            return
+        if self._in_settings or self._filter_mode:
+            return
+
+        self._tts.stop()
+        sessions = self.manager.all_sessions()
+
+        if not sessions:
+            self._tts.speak_async("No active agents")
+            return
+
+        # Build dashboard display
+        self._in_settings = True
+        self._setting_edit_mode = False
+        self._spawn_options = None
+        self._quick_action_options = None
+        self._dashboard_mode = False
+        self._dashboard_mode = True
+
+        s = getattr(self, '_cs', get_scheme(DEFAULT_SCHEME))
+
+        preamble_widget = self.query_one("#preamble", Label)
+        preamble_widget.update(f"[bold {s['accent']}]Dashboard[/bold {s['accent']}] — {len(sessions)} agent{'s' if len(sessions) != 1 else ''}")
+        preamble_widget.display = True
+
+        list_view = self.query_one("#choices", ListView)
+        list_view.clear()
+
+        import time as _time
+        now = _time.time()
+        narration_parts = [f"{len(sessions)} agent{'s' if len(sessions) != 1 else ''} active."]
+
+        for i, sess in enumerate(sessions):
+            # Determine status
+            if sess.active:
+                status_text = f"[{s['success']}]● choices[/{s['success']}]"
+                status_narr = "has choices"
+            elif sess.voice_recording:
+                status_text = f"[{s['error']}]● recording[/{s['error']}]"
+                status_narr = "recording"
+            else:
+                status_text = f"[{s['warning']}]◌ working[/{s['warning']}]"
+                status_narr = "working"
+
+            # Elapsed time
+            elapsed = now - getattr(sess, 'last_tool_call', now)
+            if elapsed < 60:
+                time_str = f"{int(elapsed)}s"
+            else:
+                time_str = f"{int(elapsed)//60}m{int(elapsed)%60:02d}s"
+
+            # Last speech
+            last_speech = ""
+            if sess.speech_log:
+                last_speech = sess.speech_log[-1].text
+                if len(last_speech) > 50:
+                    last_speech = last_speech[:50] + "..."
+
+            # Pending messages
+            msgs = getattr(sess, 'pending_messages', [])
+            msg_info = f" [{s['purple']}]{len(msgs)} msg[/{s['purple']}]" if msgs else ""
+
+            label = f"{sess.name}  {status_text}  [{s['fg_dim']}]{time_str}[/{s['fg_dim']}]{msg_info}"
+            summary = last_speech if last_speech else "[dim]no recent speech[/dim]"
+
+            list_view.append(ChoiceItem(label, summary, index=i + 1, display_index=i))
+            narration_parts.append(f"{sess.name}: {status_narr}, {time_str}.")
+
+        list_view.display = True
+        list_view.index = 0
+        list_view.focus()
+
+        # Narrate the dashboard
+        self._tts.speak_async(" ".join(narration_parts))
+
     def action_quick_actions(self) -> None:
         """Show quick action picker.
 
@@ -2891,7 +2987,8 @@ class IoMcpApp(App):
         self._in_settings = True
         self._setting_edit_mode = False
         self._spawn_options = None
-        self._quick_action_options = None  # clear any spawn state
+        self._quick_action_options = None
+        self._dashboard_mode = False  # clear any spawn state
         self._quick_action_options = options
 
         preamble_widget = self.query_one("#preamble", Label)

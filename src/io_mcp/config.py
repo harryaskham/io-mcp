@@ -138,6 +138,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "spawnAgent": "t",
             "quickActions": "x",
             "conversationMode": "c",
+            "dashboard": "d",
             "hotReload": "r",
             "quit": "q",
         },
