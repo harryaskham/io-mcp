@@ -239,6 +239,7 @@ class IoMcpApp(App):
         Binding("slash", "filter_choices", "Filter", show=False),
         Binding("t", "spawn_agent", "New agent", show=False),
         Binding("x", "quick_actions", "Quick", show=False),
+        Binding("c", "toggle_conversation", "Chat", show=False),
         Binding("r", "hot_reload", "Reload", show=False),
         Binding("1", "pick_1", "", show=False),
         Binding("2", "pick_2", "", show=False),
@@ -282,6 +283,7 @@ class IoMcpApp(App):
         filter_key = kb.get("filterChoices", "slash")
         spawn_key = kb.get("spawnAgent", "t")
         quick_key = kb.get("quickActions", "x")
+        convo_key = kb.get("conversationMode", "c")
         reload_key = kb.get("hotReload", "r")
         quit_key = kb.get("quit", "q")
 
@@ -302,6 +304,7 @@ class IoMcpApp(App):
             Binding(filter_key, "filter_choices", "Filter", show=False),
             Binding(spawn_key, "spawn_agent", "New agent", show=False),
             Binding(quick_key, "quick_actions", "Quick", show=False),
+            Binding(convo_key, "toggle_conversation", "Chat", show=False),
             Binding(reload_key, "hot_reload", "Reload", show=False),
         ] + [Binding(str(i), f"pick_{i}", "", show=False) for i in range(1, 10)]
         if quit_key:
@@ -358,6 +361,9 @@ class IoMcpApp(App):
 
         # Filter mode
         self._filter_mode = False
+
+        # Conversation mode — continuous voice back-and-forth
+        self._conversation_mode = False
 
     # ─── Helpers to get focused session ────────────────────────────
 
@@ -597,6 +603,9 @@ class IoMcpApp(App):
 
         Each session has its own selection_event so multiple sessions
         can block independently.
+
+        In conversation mode: speaks just the preamble, then auto-starts
+        voice recording. The transcription becomes the selection.
         """
         self._touch_session(session)
         session.preamble = preamble
@@ -615,6 +624,45 @@ class IoMcpApp(App):
         except Exception:
             pass
 
+        is_fg = self._is_focused(session.session_id)
+
+        # ── Conversation mode: speak preamble then auto-record ──
+        if self._conversation_mode and is_fg:
+            session.intro_speaking = False
+            session.reading_options = False
+
+            # Show conversation UI
+            def _show_convo():
+                self.query_one("#choices").display = False
+                self.query_one("#dwell-bar").display = False
+                preamble_widget = self.query_one("#preamble", Label)
+                preamble_widget.update(f"[bold #9ece6a]🗣[/bold #9ece6a] {preamble}")
+                preamble_widget.display = True
+                status = self.query_one("#status", Label)
+                status.update("[dim]Conversation mode[/dim] [#7dcfff](c to exit)[/#7dcfff]")
+                status.display = True
+            self.call_from_thread(_show_convo)
+
+            # Speak preamble only (no options readout)
+            self._fg_speaking = True
+            self._tts.speak(preamble)
+            self._fg_speaking = False
+
+            # Auto-start voice recording after a brief pause
+            import time as _time
+            _time.sleep(0.3)
+
+            # Check if conversation mode is still active (user might have pressed c)
+            if self._conversation_mode and session.active:
+                self.call_from_thread(self._start_voice_recording)
+
+            # Block until selection (voice recording will set it)
+            session.selection_event.wait()
+            session.active = False
+            self.call_from_thread(self._update_tab_bar)
+            return session.selection or {"selected": "timeout", "summary": ""}
+
+        # ── Normal mode: full choice presentation ──
         # Build the full list: extras + real choices
         session.extras_count = len(EXTRA_OPTIONS)
         session.all_items = list(EXTRA_OPTIONS) + session.choices
@@ -2610,6 +2658,30 @@ class IoMcpApp(App):
             self.call_from_thread(self._exit_settings)
 
         threading.Thread(target=_spawn, daemon=True).start()
+
+    def action_toggle_conversation(self) -> None:
+        """Toggle conversation mode on/off.
+
+        In conversation mode, the agent speaks and then the TUI
+        auto-starts voice recording for your reply. No choice menus.
+        Press again to exit and return to normal choice-based interaction.
+        """
+        session = self._focused()
+        if session and (session.input_mode or session.voice_recording):
+            return
+        if self._in_settings or self._filter_mode:
+            return
+
+        self._conversation_mode = not self._conversation_mode
+        self._tts.stop()
+
+        if self._conversation_mode:
+            self._tts.speak_async("Conversation mode on. I'll listen after each response.")
+        else:
+            self._tts.speak_async("Conversation mode off. Back to choices.")
+            # If session is active, restore the choices UI
+            if session and session.active:
+                self.call_from_thread(self._show_choices)
 
     def action_quick_actions(self) -> None:
         """Show quick action picker.

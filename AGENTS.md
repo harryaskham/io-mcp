@@ -163,6 +163,7 @@ quickActions:               # macros accessible via 'x' key
 | `/` | Filter choices by typing |
 | `t` | Spawn new Claude Code agent (local or remote) |
 | `x` | Quick actions (configurable macros) |
+| `c` | Toggle conversation mode (continuous voice chat) |
 | `i` | Freeform text input |
 | `m` | Queue message for agent |
 | `space` | Voice input (toggle recording) |

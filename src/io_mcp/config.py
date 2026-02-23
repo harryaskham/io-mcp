@@ -136,6 +136,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "filterChoices": "slash",
             "spawnAgent": "t",
             "quickActions": "x",
+            "conversationMode": "c",
             "hotReload": "r",
             "quit": "q",
         },
