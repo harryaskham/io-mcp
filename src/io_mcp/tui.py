@@ -476,6 +476,7 @@ class IoMcpApp(App):
 
         # Settings state (app-level, not per-session)
         self._in_settings = False
+        self._settings_just_closed = False
 
         # Dwell timer
         self._dwell_timer: Optional[Timer] = None
@@ -1873,6 +1874,11 @@ class IoMcpApp(App):
         self._quick_action_options = None
         self._dashboard_mode = False
 
+        # Guard: prevent the Enter keypress that triggered "close" from
+        # also firing _do_select on the freshly-restored choice list.
+        self._settings_just_closed = True
+        self.set_timer(0.1, self._clear_settings_guard)
+
         # UI first, then TTS
         if session and session.active:
             self._show_choices()
@@ -1882,6 +1888,10 @@ class IoMcpApp(App):
             self._show_idle()
             self._tts.stop()
             self._tts.speak_async("Settings closed")
+
+    def _clear_settings_guard(self) -> None:
+        """Clear the settings-just-closed guard after a frame."""
+        self._settings_just_closed = False
 
     def _enter_setting_edit(self, key: str) -> None:
         """Enter edit mode for a specific setting."""
@@ -2208,6 +2218,14 @@ class IoMcpApp(App):
                 self._in_settings = False
                 self._do_spawn(spawn_opts[idx])
                 self._spawn_options = None
+                return
+            # Check if we're in dashboard mode
+            if getattr(self, '_dashboard_mode', False):
+                self._dashboard_mode = False
+                self._in_settings = False
+                sessions = self.manager.all_sessions()
+                if idx < len(sessions):
+                    self._switch_to_session(sessions[idx])
                 return
             # Check if we're in quick action menu
             qa_opts = getattr(self, '_quick_action_options', None)
@@ -2594,6 +2612,8 @@ class IoMcpApp(App):
 
     def _do_select(self) -> None:
         """Finalize the current selection."""
+        if getattr(self, '_settings_just_closed', False):
+            return
         session = self._focused()
         if not session or not session.active or not session.choices:
             return
