@@ -463,6 +463,11 @@ class IoMcpApp(App):
                     f.write(f"\n--- present_choices ---\n{traceback.format_exc()}\n")
             except Exception:
                 pass
+            # Speak the error so the user hears it
+            try:
+                self._tts.speak_async(f"Choice presentation error: {str(exc)[:80]}")
+            except Exception:
+                pass
             # Return error to agent so it has context
             return {"selected": "error", "summary": f"TUI error: {err}"}
 

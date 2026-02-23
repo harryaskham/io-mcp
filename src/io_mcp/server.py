@@ -192,6 +192,12 @@ def create_mcp_server(
                         f.write(f"\n--- {fn.__name__} ---\n{tb.format_exc()}\n")
                 except Exception:
                     pass
+                # Speak the error to the user so they know something went wrong
+                try:
+                    short_err = f"Tool error: {fn.__name__}. {str(exc)[:80]}"
+                    frontend.tts.speak_async(short_err)
+                except Exception:
+                    pass
                 return json.dumps({"error": err_msg, "tool": fn.__name__})
         return wrapper
 
