@@ -214,6 +214,9 @@ class IoMcpApp(App):
         # Help screen mode
         self._help_mode = False
 
+        # Tab picker mode
+        self._tab_picker_mode = False
+
     # ─── Helpers to get focused session ────────────────────────────
 
     def _focused(self) -> Optional[Session]:
@@ -404,8 +407,7 @@ class IoMcpApp(App):
             return
         s = get_scheme(getattr(self, '_color_scheme', DEFAULT_SCHEME))
         tab_bar.update(self.manager.tab_bar_text(accent=s['accent'], success=s['success']))
-        # Only show tab bar when multiple sessions exist
-        tab_bar.display = self.manager.count() > 1
+        tab_bar.display = True
 
     # ─── Speech log rendering ──────────────────────────────────────
 
@@ -974,6 +976,60 @@ class IoMcpApp(App):
         msg_info = f" [dim]·[/dim] [{self._cs['purple']}]{len(msgs)} msg{'s' if len(msgs) != 1 else ''}[/{self._cs['purple']}]" if msgs else ""
         status.update(f"[{self._cs['warning']}]⧗[/{self._cs['warning']}] [{session.name}] Waiting for agent...{msg_info} [dim](u=undo)[/dim]")
         status.display = True
+
+    def _enter_tab_picker(self) -> None:
+        """Enter tab picking mode.
+
+        Shows all sessions in a list. Scrolling highlights each tab
+        (switching to it live). Enter confirms and exits.
+        """
+        sessions = self.manager.all_sessions()
+        if len(sessions) <= 1:
+            self._tts.speak_async("Only one tab open. Press t to spawn a new agent.")
+            return
+
+        self._tts.stop()
+
+        # Use settings infrastructure for modal
+        self._in_settings = True
+        self._setting_edit_mode = False
+        self._spawn_options = None
+        self._quick_action_options = None
+        self._dashboard_mode = False
+        self._log_viewer_mode = False
+        self._help_mode = False
+        self._tab_picker_mode = True
+
+        s = self._cs
+        preamble_widget = self.query_one("#preamble", Label)
+        preamble_widget.update(
+            f"[bold {s['accent']}]Switch Tab[/bold {s['accent']}] — "
+            f"{len(sessions)} tabs "
+            f"[dim](scroll to preview, enter to confirm)[/dim]"
+        )
+        preamble_widget.display = True
+
+        list_view = self.query_one("#choices", ListView)
+        list_view.clear()
+
+        current_idx = 0
+        for i, sess in enumerate(sessions):
+            indicator = f"[{s['success']}]●[/{s['success']}] " if sess.active else ""
+            focused = " ◂" if sess.session_id == self.manager.active_session_id else ""
+            label = f"{indicator}{sess.name}{focused}"
+            summary = ""
+            if sess.speech_log:
+                summary = sess.speech_log[-1].text[:60]
+            list_view.append(ChoiceItem(label, summary, index=i + 1, display_index=i))
+            if sess.session_id == self.manager.active_session_id:
+                current_idx = i
+
+        list_view.display = True
+        list_view.index = current_idx
+        list_view.focus()
+
+        self._tab_picker_sessions = sessions
+        self._tts.speak_async(f"Pick a tab. {len(sessions)} tabs. Scrolling switches live.")
 
     def action_next_tab(self) -> None:
         """Switch to next tab."""
@@ -1596,6 +1652,7 @@ class IoMcpApp(App):
         self._dashboard_mode = False
         self._log_viewer_mode = False
         self._help_mode = False
+        self._tab_picker_mode = False
 
         # Guard: prevent the Enter keypress that triggered "close" from
         # also firing _do_select on the freshly-restored choice list.
@@ -1791,6 +1848,14 @@ class IoMcpApp(App):
                         key, desc = shortcuts[idx]
                         self._tts.speak_async(f"{key}. {desc}")
                 return
+            # Tab picker: switch to the highlighted tab live
+            if getattr(self, '_tab_picker_mode', False):
+                if isinstance(event.item, ChoiceItem):
+                    idx = event.item.display_index
+                    sessions = getattr(self, '_tab_picker_sessions', [])
+                    if idx < len(sessions):
+                        self._tts.speak_async(sessions[idx].name)
+                return
             if isinstance(event.item, ChoiceItem):
                 s = self._settings_items[event.item.display_index] if event.item.display_index < len(self._settings_items) else None
                 if s:
@@ -1856,6 +1921,14 @@ class IoMcpApp(App):
                 if getattr(self, '_help_mode', False):
                     self._help_mode = False
                     self._exit_settings()
+                    return
+                # Check if we're in tab picker mode
+                if getattr(self, '_tab_picker_mode', False):
+                    self._tab_picker_mode = False
+                    self._in_settings = False
+                    sessions = getattr(self, '_tab_picker_sessions', [])
+                    if idx < len(sessions):
+                        self._switch_to_session(sessions[idx])
                     return
                 # Check if we're in dashboard mode
                 if getattr(self, '_dashboard_mode', False):
@@ -2436,10 +2509,8 @@ class IoMcpApp(App):
         label = EXTRA_OPTIONS[ei]["label"]
         if label == "Record response":
             self.action_voice_input()
-        elif label == "Next tab":
-            self.action_next_tab()
-        elif label == "Previous tab":
-            self.action_prev_tab()
+        elif label == "Switch tab":
+            self._enter_tab_picker()
         elif label == "Fast toggle":
             msg = self.settings.toggle_fast()
             self._tts.clear_cache()

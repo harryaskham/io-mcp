@@ -112,6 +112,7 @@ class TestExtraOptions:
         assert "Queue message" in labels
         assert "Dashboard" in labels
         assert "New agent" in labels
+        assert "Switch tab" in labels
 
 
 class TestSafeAction:
