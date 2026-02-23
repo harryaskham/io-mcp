@@ -261,6 +261,10 @@ def main() -> None:
         "--config-file", default=None, metavar="PATH",
         help="Path to config YAML file (default: ~/.config/io-mcp/config.yml)"
     )
+    parser.add_argument(
+        "--djent", action="store_true",
+        help="Enable djent integration (swarm management quick actions and options)"
+    )
     args = parser.parse_args()
 
     # Default append option: always offer to generate more options
@@ -269,9 +273,16 @@ def main() -> None:
 
     # Load config
     config = IoMcpConfig.load(args.config_file)
+
+    # Enable djent integration via CLI flag
+    if args.djent:
+        config.djent_enabled = True
+
     print(f"  Config: {config.config_path}", flush=True)
     print(f"  TTS: model={config.tts_model_name}, voice={config.tts_voice}, speed={config.tts_speed}", flush=True)
     print(f"  STT: model={config.stt_model_name}, realtime={config.stt_realtime}", flush=True)
+    if config.djent_enabled:
+        print(f"  Djent: enabled", flush=True)
 
     tts = TTSEngine(local=args.local, config=config)
 

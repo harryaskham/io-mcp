@@ -26,6 +26,31 @@ from typing import Any, Optional
 import yaml
 
 
+# ─── Djent integration constants ──────────────────────────────────────────
+
+_DJENT_EXTRA_OPTIONS: list[dict[str, Any]] = [
+    {"title": "Djent status", "description": "Show current djent project status", "silent": True},
+    {"title": "Djent dashboard", "description": "Open the djent TUI dashboard", "silent": True},
+    {"title": "New task", "description": "Create a new backlog task", "silent": True},
+    {"title": "Start dev loop", "description": "Run (loop/dev) to implement next bead", "silent": True},
+    {"title": "Stop swarm", "description": "Gracefully stop all djent agents", "silent": True},
+]
+
+_DJENT_QUICK_ACTIONS: list[dict[str, Any]] = [
+    {"key": "!", "label": "Djent status", "action": "command", "value": "djent status 2>&1 | head -40"},
+    {"key": "@", "label": "List agents", "action": "command", "value": "djent agents -n 10 2>&1"},
+    {"key": "#", "label": "Backlog", "action": "command", "value": "bd list 2>&1 | head -30"},
+    {"key": "$", "label": "Start dev loop", "action": "command",
+     "value": "tmux new-window -n djent 'djent -e \"(loop/dev)\"'"},
+    {"key": "%", "label": "Review PRs", "action": "command",
+     "value": "tmux new-window -n review 'djent -e \"(loop/review)\"'"},
+    {"key": "^", "label": "Stop swarm", "action": "command", "value": "djent down 2>&1"},
+    {"key": "&", "label": "Tail logs", "action": "command", "value": "djent log 2>&1 | tail -20"},
+    {"key": "*", "label": "Djent dashboard", "action": "command",
+     "value": "tmux new-window -n dash 'djent dash'"},
+]
+
+
 DEFAULT_CONFIG_DIR = os.path.join(
     os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")),
     "io-mcp",
@@ -139,8 +164,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "quickActions": "x",
             "conversationMode": "c",
             "dashboard": "d",
+            "agentLog": "g",
             "hotReload": "r",
             "quit": "q",
+        },
+        "djent": {
+            "enabled": False,
         },
     },
     "emotionPresets": {
@@ -460,6 +489,21 @@ class IoMcpConfig:
     def realtime_api_key(self) -> str:
         return self.realtime_provider.get("apiKey", "")
 
+    # ─── Djent integration ─────────────────────────────────────────
+
+    @property
+    def djent_enabled(self) -> bool:
+        """Whether djent integration is enabled."""
+        return bool(
+            self.expanded.get("config", {})
+            .get("djent", {})
+            .get("enabled", False)
+        )
+
+    @djent_enabled.setter
+    def djent_enabled(self, value: bool) -> None:
+        self.raw.setdefault("config", {}).setdefault("djent", {})["enabled"] = value
+
     # ─── Extra options ────────────────────────────────────────────
 
     @property
@@ -469,16 +513,32 @@ class IoMcpConfig:
         Each option has: title, description, silent (bool).
         Non-silent options are read aloud in the intro.
         Silent options are only read when scrolled to.
+        Includes djent options when djent integration is enabled.
         """
-        return self.expanded.get("extraOptions", [])
+        opts = list(self.expanded.get("extraOptions", []))
+        if self.djent_enabled:
+            # Add djent options that aren't already present
+            existing = {o.get("title", "").lower() for o in opts}
+            for djent_opt in _DJENT_EXTRA_OPTIONS:
+                if djent_opt["title"].lower() not in existing:
+                    opts.append(djent_opt)
+        return opts
 
     @property
     def quick_actions(self) -> list[dict[str, Any]]:
         """Get quick actions from config.
 
         Each action has: key (single character), label, action (message|command), value.
+        Includes djent quick actions when djent integration is enabled.
         """
-        return self.expanded.get("quickActions", [])
+        actions = list(self.expanded.get("quickActions", []))
+        if self.djent_enabled:
+            # Add djent actions that don't conflict with existing keys
+            existing_keys = {a.get("key", "") for a in actions}
+            for djent_action in _DJENT_QUICK_ACTIONS:
+                if djent_action["key"] not in existing_keys:
+                    actions.append(djent_action)
+        return actions
 
     # ─── Session settings ──────────────────────────────────────────
 
