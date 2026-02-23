@@ -217,6 +217,49 @@ class TestConfigAccessors:
         assert c.ambient_initial_delay == 30
         assert c.ambient_repeat_interval == 45
 
+    def test_health_monitor_defaults(self, config_with_defaults):
+        """Health monitor config defaults are set correctly."""
+        c = config_with_defaults
+        assert c.health_monitor_enabled == True
+        assert c.health_warning_threshold == 300.0
+        assert c.health_unresponsive_threshold == 600.0
+        assert c.health_check_interval == 30.0
+        assert c.health_check_tmux_pane == True
+
+    def test_health_monitor_custom_thresholds(self, tmp_config):
+        """Health monitor thresholds can be overridden in config."""
+        import yaml
+        custom = {
+            "config": {
+                "healthMonitor": {
+                    "enabled": False,
+                    "warningThresholdSecs": 120,
+                    "unresponsiveThresholdSecs": 300,
+                    "checkIntervalSecs": 15,
+                    "checkTmuxPane": False,
+                }
+            }
+        }
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert c.health_monitor_enabled == False
+        assert c.health_warning_threshold == 120.0
+        assert c.health_unresponsive_threshold == 300.0
+        assert c.health_check_interval == 15.0
+        assert c.health_check_tmux_pane == False
+
+    def test_health_monitor_in_default_config(self):
+        """DEFAULT_CONFIG includes healthMonitor section."""
+        health_cfg = DEFAULT_CONFIG.get("config", {}).get("healthMonitor", {})
+        assert "enabled" in health_cfg
+        assert "warningThresholdSecs" in health_cfg
+        assert "unresponsiveThresholdSecs" in health_cfg
+        assert "checkIntervalSecs" in health_cfg
+        assert "checkTmuxPane" in health_cfg
+        assert health_cfg["warningThresholdSecs"] < health_cfg["unresponsiveThresholdSecs"]
+
+
     def test_ambient_custom_values(self, tmp_config):
         custom = {"config": {"ambient": {
             "enabled": False,

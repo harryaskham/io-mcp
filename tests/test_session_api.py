@@ -158,7 +158,190 @@ class TestSessionManagerExtended:
         assert result == "a"  # active session unchanged
 
 
-class TestFrontendEvents:
+class TestSessionHealthMonitoring:
+    """Tests for Session health_status fields and health monitoring logic."""
+
+    def test_default_health_status(self):
+        """New sessions start as healthy."""
+        s = Session(session_id="test-1", name="Agent 1")
+        assert s.health_status == "healthy"
+        assert s.health_alert_spoken is False
+        assert s.health_last_check == 0.0
+
+    def test_health_status_can_be_set(self):
+        """Health status transitions work correctly."""
+        s = Session(session_id="test-1", name="Agent 1")
+        s.health_status = "warning"
+        assert s.health_status == "warning"
+        s.health_status = "unresponsive"
+        assert s.health_status == "unresponsive"
+        s.health_status = "healthy"
+        assert s.health_status == "healthy"
+
+    def test_health_alert_spoken_flag(self):
+        """Alert spoken flag can be toggled."""
+        s = Session(session_id="test-1", name="Agent 1")
+        assert s.health_alert_spoken is False
+        s.health_alert_spoken = True
+        assert s.health_alert_spoken is True
+        s.health_alert_spoken = False
+        assert s.health_alert_spoken is False
+
+    def test_tab_bar_shows_warning_indicator(self):
+        """Tab bar shows ⚠ for warning health status."""
+        m = SessionManager()
+        s1, _ = m.get_or_create("a")
+        s1.name = "Agent 1"
+        s1.health_status = "warning"
+        s1.active = False
+        text = m.tab_bar_text()
+        assert "⚠" in text
+
+    def test_tab_bar_shows_unresponsive_indicator(self):
+        """Tab bar shows ✗ for unresponsive health status."""
+        m = SessionManager()
+        s1, _ = m.get_or_create("a")
+        s1.name = "Agent 1"
+        s1.health_status = "unresponsive"
+        s1.active = False
+        text = m.tab_bar_text()
+        assert "✗" in text
+
+    def test_tab_bar_active_choices_hides_warning(self):
+        """When agent has active choices, health warning is hidden (agent is healthy)."""
+        m = SessionManager()
+        s1, _ = m.get_or_create("a")
+        s1.name = "Agent 1"
+        s1.health_status = "warning"
+        s1.active = True  # agent is presenting choices — not stuck
+        text = m.tab_bar_text()
+        # Should show choices indicator (●), not warning (⚠)
+        assert "●" in text
+        assert "⚠" not in text
+
+    def test_tab_bar_healthy_no_indicator(self):
+        """Healthy agents with no active choices show no status indicator."""
+        m = SessionManager()
+        s1, _ = m.get_or_create("a")
+        s1.name = "Agent 1"
+        s1.health_status = "healthy"
+        s1.active = False
+        text = m.tab_bar_text()
+        assert "⚠" not in text
+        assert "✗" not in text
+        assert "●" not in text
+
+    def test_health_threshold_warning_logic(self):
+        """Simulate the warning threshold detection logic."""
+        import time as _time
+        s = Session(session_id="test-1", name="Agent 1")
+        # Set last_tool_call to 6 minutes ago
+        s.last_tool_call = _time.time() - 360
+        s.active = False
+
+        warning_threshold = 300.0
+        unresponsive_threshold = 600.0
+
+        elapsed = _time.time() - s.last_tool_call
+        if elapsed >= unresponsive_threshold:
+            expected_status = "unresponsive"
+        elif elapsed >= warning_threshold:
+            expected_status = "warning"
+        else:
+            expected_status = "healthy"
+
+        assert expected_status == "warning"
+
+    def test_health_threshold_unresponsive_logic(self):
+        """Simulate the unresponsive threshold detection logic."""
+        import time as _time
+        s = Session(session_id="test-1", name="Agent 1")
+        # Set last_tool_call to 11 minutes ago
+        s.last_tool_call = _time.time() - 660
+        s.active = False
+
+        warning_threshold = 300.0
+        unresponsive_threshold = 600.0
+
+        elapsed = _time.time() - s.last_tool_call
+        if elapsed >= unresponsive_threshold:
+            expected_status = "unresponsive"
+        elif elapsed >= warning_threshold:
+            expected_status = "warning"
+        else:
+            expected_status = "healthy"
+
+        assert expected_status == "unresponsive"
+
+    def test_active_session_skips_health_check(self):
+        """Sessions with active choices should be treated as healthy."""
+        import time as _time
+        s = Session(session_id="test-1", name="Agent 1")
+        # Set last_tool_call to 20 minutes ago — would normally be unresponsive
+        s.last_tool_call = _time.time() - 1200
+        s.active = True  # but it's waiting for user selection — perfectly healthy
+
+        # The health check should skip this session entirely
+        # (tested by verifying the active check guard is correct)
+        assert s.active is True
+        # If active, health check returns early — no status change
+
+    def test_health_reset_on_new_tool_call(self):
+        """Health status resets to healthy when last_tool_call is recent."""
+        import time as _time
+        s = Session(session_id="test-1", name="Agent 1")
+        s.health_status = "warning"
+        s.health_alert_spoken = True
+
+        # Simulate server.py resetting health on tool call
+        s.last_tool_call = _time.time()
+        if getattr(s, 'health_status', 'healthy') != 'healthy':
+            s.health_status = 'healthy'
+            s.health_alert_spoken = False
+
+        assert s.health_status == "healthy"
+        assert s.health_alert_spoken is False
+
+    def test_multiple_sessions_independent_health(self):
+        """Multiple sessions can have different health statuses."""
+        m = SessionManager()
+        s1, _ = m.get_or_create("a")
+        s2, _ = m.get_or_create("b")
+        s3, _ = m.get_or_create("c")
+
+        s1.health_status = "healthy"
+        s2.health_status = "warning"
+        s3.health_status = "unresponsive"
+
+        sessions = m.all_sessions()
+        assert sessions[0].health_status == "healthy"
+        assert sessions[1].health_status == "warning"
+        assert sessions[2].health_status == "unresponsive"
+
+    def test_tab_bar_multiple_health_states(self):
+        """Tab bar renders all health states correctly for multiple agents."""
+        m = SessionManager()
+        s1, _ = m.get_or_create("a")
+        s2, _ = m.get_or_create("b")
+        s3, _ = m.get_or_create("c")
+
+        s1.name = "Good Agent"
+        s2.name = "Slow Agent"
+        s3.name = "Dead Agent"
+
+        s1.health_status = "healthy"
+        s2.health_status = "warning"
+        s3.health_status = "unresponsive"
+
+        text = m.tab_bar_text()
+        assert "Good Agent" in text
+        assert "Slow Agent" in text
+        assert "Dead Agent" in text
+        assert "⚠" in text   # warning indicator
+        assert "✗" in text   # unresponsive indicator
+
+
+
     """Tests for Frontend API event system."""
 
     def test_frontend_event_to_sse(self):

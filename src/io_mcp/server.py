@@ -174,6 +174,10 @@ def create_mcp_server(
         session.last_tool_call = _time.time()
         session.heartbeat_spoken = False
         session.ambient_count = 0
+        # Reset health status — agent is active again
+        if getattr(session, 'health_status', 'healthy') != 'healthy':
+            session.health_status = 'healthy'
+            session.health_alert_spoken = False
         return session
 
     def _registration_reminder(session) -> str:

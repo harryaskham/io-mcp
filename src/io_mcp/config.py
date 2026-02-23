@@ -141,6 +141,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "initialDelaySecs": 30,
             "repeatIntervalSecs": 45,
         },
+        "healthMonitor": {
+            "enabled": True,
+            "warningThresholdSecs": 300,      # 5 minutes with no tool call → warning
+            "unresponsiveThresholdSecs": 600,  # 10 minutes with no tool call → unresponsive
+            "checkIntervalSecs": 30,           # how often to run the health check
+            "checkTmuxPane": True,             # verify tmux pane is still alive
+        },
         "agents": {
             "defaultWorkdir": "~",
             "hosts": [],
@@ -579,6 +586,53 @@ class IoMcpConfig:
             self.expanded.get("config", {})
             .get("ambient", {})
             .get("repeatIntervalSecs", 45)
+        )
+
+    # ─── Health monitor settings ─────────────────────────────────
+
+    @property
+    def health_monitor_enabled(self) -> bool:
+        """Whether agent health monitoring is enabled."""
+        return bool(
+            self.expanded.get("config", {})
+            .get("healthMonitor", {})
+            .get("enabled", True)
+        )
+
+    @property
+    def health_warning_threshold(self) -> float:
+        """Seconds since last tool call before a session is flagged as warning."""
+        return float(
+            self.expanded.get("config", {})
+            .get("healthMonitor", {})
+            .get("warningThresholdSecs", 300)
+        )
+
+    @property
+    def health_unresponsive_threshold(self) -> float:
+        """Seconds since last tool call before a session is flagged as unresponsive."""
+        return float(
+            self.expanded.get("config", {})
+            .get("healthMonitor", {})
+            .get("unresponsiveThresholdSecs", 600)
+        )
+
+    @property
+    def health_check_interval(self) -> float:
+        """Seconds between each health check run."""
+        return float(
+            self.expanded.get("config", {})
+            .get("healthMonitor", {})
+            .get("checkIntervalSecs", 30)
+        )
+
+    @property
+    def health_check_tmux_pane(self) -> bool:
+        """Whether to verify the agent's tmux pane is still alive during health checks."""
+        return bool(
+            self.expanded.get("config", {})
+            .get("healthMonitor", {})
+            .get("checkTmuxPane", True)
         )
 
     # ─── Agent spawner settings ───────────────────────────────────

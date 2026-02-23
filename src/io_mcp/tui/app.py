@@ -333,6 +333,11 @@ class IoMcpApp(App):
         self._heartbeat_timer = self.set_interval(15, self._check_heartbeat)
         # Daemon health check: every 10s update status indicators
         self._daemon_health_timer = self.set_interval(10, self._update_daemon_status)
+        # Agent health monitor: check every 30s if agents are stuck/crashed
+        health_interval = 30.0
+        if self._config and hasattr(self._config, 'health_check_interval'):
+            health_interval = self._config.health_check_interval
+        self._agent_health_timer = self.set_interval(health_interval, self._check_agent_health)
         # Initial health check
         self._update_daemon_status()
 
@@ -421,7 +426,184 @@ class IoMcpApp(App):
         if removed:
             self._update_tab_bar()
 
-    def _check_heartbeat(self) -> None:
+    def _check_agent_health(self) -> None:
+        """Monitor agent health and alert when agents appear stuck or crashed.
+
+        For each session, checks:
+        1. Time since last tool call — if too old while NOT presenting choices,
+           the agent may be stuck (stuck in a loop, waiting on IO, etc.)
+        2. Whether the agent's tmux pane is still alive (if registered with pane info)
+
+        Health states:
+            healthy:      last tool call is recent, pane alive (or unknown)
+            warning:      no tool call for warningThresholdSecs (default 5 min)
+            unresponsive: no tool call for unresponsiveThresholdSecs (default 10 min)
+                          OR tmux pane is confirmed dead
+
+        On state transition to warning/unresponsive:
+            - Plays the "warning" or "error" chime
+            - Speaks an alert (once per escalation level)
+            - Triggers haptic "attention" feedback
+            - Updates the tab bar with a visual indicator
+
+        Health resets to "healthy" when the agent makes a new tool call
+        (tracked via session.last_tool_call timestamp reset in server.py).
+        """
+        if self._config and hasattr(self._config, 'health_monitor_enabled'):
+            if not self._config.health_monitor_enabled:
+                return
+
+        warning_threshold = 300.0
+        unresponsive_threshold = 600.0
+        check_tmux = True
+
+        if self._config:
+            if hasattr(self._config, 'health_warning_threshold'):
+                warning_threshold = self._config.health_warning_threshold
+            if hasattr(self._config, 'health_unresponsive_threshold'):
+                unresponsive_threshold = self._config.health_unresponsive_threshold
+            if hasattr(self._config, 'health_check_tmux_pane'):
+                check_tmux = self._config.health_check_tmux_pane
+
+        now = time.time()
+        tab_bar_dirty = False
+
+        for session in self.manager.all_sessions():
+            # Only monitor sessions that have actually registered/connected
+            last_call = getattr(session, 'last_tool_call', 0)
+            if last_call == 0:
+                continue
+
+            # If agent is actively waiting for user selection, it's healthy —
+            # it made a successful present_choices() call
+            if session.active:
+                if session.health_status != "healthy":
+                    session.health_status = "healthy"
+                    session.health_alert_spoken = False
+                    tab_bar_dirty = True
+                continue
+
+            elapsed = now - last_call
+            old_status = session.health_status
+
+            # ── Check tmux pane liveness ─────────────────────────
+            pane_dead = False
+            if check_tmux:
+                pane_dead = self._is_tmux_pane_dead(session)
+
+            # ── Determine new health status ───────────────────────
+            if pane_dead:
+                new_status = "unresponsive"
+            elif elapsed >= unresponsive_threshold:
+                new_status = "unresponsive"
+            elif elapsed >= warning_threshold:
+                new_status = "warning"
+            else:
+                new_status = "healthy"
+
+            # ── Reset alert flag when recovering to healthy ───────
+            if new_status == "healthy" and old_status != "healthy":
+                session.health_status = "healthy"
+                session.health_alert_spoken = False
+                tab_bar_dirty = True
+                continue
+
+            # ── Handle escalating alert on new bad status ─────────
+            if new_status != old_status or (new_status != "healthy" and not session.health_alert_spoken):
+                session.health_status = new_status
+                tab_bar_dirty = True
+
+                if new_status == "unresponsive" and not session.health_alert_spoken:
+                    session.health_alert_spoken = True
+                    self._fire_health_alert(session, "unresponsive", pane_dead, elapsed)
+                elif new_status == "warning" and not session.health_alert_spoken:
+                    session.health_alert_spoken = True
+                    self._fire_health_alert(session, "warning", pane_dead, elapsed)
+            elif new_status == old_status and new_status != "healthy":
+                # Status unchanged and still bad — ensure flag is set
+                session.health_alert_spoken = True
+
+        if tab_bar_dirty:
+            try:
+                self.call_from_thread(self._update_tab_bar)
+            except Exception:
+                pass
+
+    def _is_tmux_pane_dead(self, session: "Session") -> bool:
+        """Check if a session's registered tmux pane has exited.
+
+        Returns True if the pane is confirmed dead (process exited or doesn't exist).
+        Returns False if the pane is alive, not registered, or check fails.
+
+        Uses `tmux display-message -p -t <pane_id> "#{pane_dead}"` which outputs
+        "1" if the pane's shell has exited (pane is in a "dead" state), "0" otherwise.
+        """
+        pane = getattr(session, 'tmux_pane', '')
+        tmux_session = getattr(session, 'tmux_session', '')
+
+        if not pane and not tmux_session:
+            return False  # no tmux info, can't check
+
+        try:
+            # Use tmux display-message to check pane_dead status
+            # pane_dead is 1 if the pane's process has exited
+            target = pane if pane else tmux_session
+            result = subprocess.run(
+                ["tmux", "display-message", "-p", "-t", target, "#{pane_dead}"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+            if result.returncode != 0:
+                # tmux command failed — pane/session doesn't exist
+                return True
+            return result.stdout.strip() == "1"
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            return False  # tmux not available or timeout — don't flag as dead
+
+    def _fire_health_alert(self, session: "Session", status: str,
+                           pane_dead: bool, elapsed: float) -> None:
+        """Play chime + speak alert for a health status change.
+
+        Runs in the health check thread (background timer), so uses
+        non-blocking speak_async and fire-and-forget chime/haptic.
+        """
+        name = session.name
+        minutes = int(elapsed) // 60
+        secs = int(elapsed) % 60
+        if minutes > 0:
+            time_str = f"{minutes} minute{'s' if minutes != 1 else ''}"
+        else:
+            time_str = f"{secs} second{'s' if secs != 1 else ''}"
+
+        if pane_dead:
+            msg = f"{name} appears to have crashed. The tmux pane is no longer alive."
+            chime = "error"
+        elif status == "unresponsive":
+            msg = f"{name} is unresponsive. No activity for {time_str}."
+            chime = "error"
+        else:
+            msg = f"{name} may be stuck. No activity for {time_str}."
+            chime = "warning"
+
+        # Audio cue
+        try:
+            self._tts.play_chime(chime)
+        except Exception:
+            pass
+
+        # Haptic feedback
+        try:
+            self._vibrate_pattern("attention")
+        except Exception:
+            pass
+
+        # Voice alert
+        try:
+            self._tts.speak_async(msg)
+        except Exception:
+            pass
+
         """Ambient mode: speak escalating status updates during agent silence.
 
         Tracks elapsed time since the last MCP tool call and speaks
@@ -538,7 +720,12 @@ class IoMcpApp(App):
             tab_bar.display = False
             return
         s = get_scheme(getattr(self, '_color_scheme', DEFAULT_SCHEME))
-        tab_bar.update(self.manager.tab_bar_text(accent=s['accent'], success=s['success']))
+        tab_bar.update(self.manager.tab_bar_text(
+            accent=s['accent'],
+            success=s['success'],
+            warning=s['warning'],
+            error=s['error'],
+        ))
         tab_bar.display = True
 
     # ─── Speech log rendering ──────────────────────────────────────
@@ -3646,13 +3833,22 @@ class IoMcpApp(App):
         narration_parts = [f"{len(sessions)} agent{'s' if len(sessions) != 1 else ''} active."]
 
         for i, sess in enumerate(sessions):
-            # Determine status
+            # Determine health status for visual indicator
+            health = getattr(sess, 'health_status', 'healthy')
+
+            # Determine activity status
             if sess.active:
                 status_text = f"[{s['success']}]● choices[/{s['success']}]"
                 status_narr = "has choices"
             elif sess.voice_recording:
                 status_text = f"[{s['error']}]● recording[/{s['error']}]"
                 status_narr = "recording"
+            elif health == "unresponsive":
+                status_text = f"[{s['error']}]✗ unresponsive[/{s['error']}]"
+                status_narr = "unresponsive"
+            elif health == "warning":
+                status_text = f"[{s['warning']}]⚠ stuck?[/{s['warning']}]"
+                status_narr = "may be stuck"
             else:
                 status_text = f"[{s['warning']}]◌ working[/{s['warning']}]"
                 status_narr = "working"
@@ -3675,7 +3871,11 @@ class IoMcpApp(App):
             msgs = getattr(sess, 'pending_messages', [])
             msg_info = f" [{s['purple']}]{len(msgs)} msg[/{s['purple']}]" if msgs else ""
 
-            label = f"{sess.name}  {status_text}  [{s['fg_dim']}]{time_str}[/{s['fg_dim']}]{msg_info}"
+            # Tmux info
+            tmux_pane = getattr(sess, 'tmux_pane', '')
+            pane_info = f" [{s['fg_dim']}]{tmux_pane}[/{s['fg_dim']}]" if tmux_pane else ""
+
+            label = f"{sess.name}  {status_text}  [{s['fg_dim']}]{time_str}[/{s['fg_dim']}]{msg_info}{pane_info}"
             summary = last_speech if last_speech else "[dim]no recent speech[/dim]"
 
             list_view.append(ChoiceItem(label, summary, index=i + 1, display_index=i))

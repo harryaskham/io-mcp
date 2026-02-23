@@ -82,6 +82,11 @@ class Session:
     # ── User message inbox (queued for next MCP response) ─────────
     pending_messages: list[str] = field(default_factory=list)
 
+    # ── Agent health monitoring ───────────────────────────────────
+    health_status: str = "healthy"           # "healthy", "warning", "unresponsive"
+    health_alert_spoken: bool = False        # True once we've spoken the warning alert
+    health_last_check: float = 0.0          # timestamp of last health evaluation
+
     # ── Agent registration metadata ─────────────────────────────
     registered: bool = False                 # has the agent called register_session?
     cwd: str = ""                            # agent's working directory
@@ -232,11 +237,13 @@ class SessionManager:
         with self._lock:
             return self.sessions.get(session_id)
 
-    def tab_bar_text(self, accent: str = "#88c0d0", success: str = "#a3be8c") -> str:
+    def tab_bar_text(self, accent: str = "#88c0d0", success: str = "#a3be8c",
+                     warning: str = "#ebcb8b", error: str = "#bf616a") -> str:
         """Render the tab bar string with rich formatting.
 
         Active tab is highlighted with brackets and bold.
         Tabs with pending choices get a dot indicator.
+        Tabs with unhealthy agents get a health indicator (warning=yellow, unresponsive=red).
         Colors are passed from the TUI's active color scheme.
         """
         with self._lock:
@@ -246,7 +253,15 @@ class SessionManager:
             for sid in self.session_order:
                 session = self.sessions[sid]
                 name = session.name
+                # Choice indicator
                 indicator = f" [bold {success}]●[/bold {success}]" if session.active else ""
+                # Health indicator (only when not showing active choices)
+                health = getattr(session, 'health_status', 'healthy')
+                if not session.active:
+                    if health == "warning":
+                        indicator = f" [bold {warning}]⚠[/bold {warning}]"
+                    elif health == "unresponsive":
+                        indicator = f" [bold {error}]✗[/bold {error}]"
                 if sid == self.active_session_id:
                     parts.append(f"[bold {accent}]▸ {name}[/bold {accent}]{indicator}")
                 else:
