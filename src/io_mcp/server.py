@@ -586,8 +586,19 @@ def create_mcp_server(
         if metadata:
             session.agent_metadata.update(metadata)
 
+        # Detect if agent is on the same device as io-mcp
+        import socket
+        local_hostname = socket.gethostname()
+        is_local = (hostname == local_hostname) if hostname else True
+
         try:
             frontend.update_tab_bar()
+        except Exception:
+            pass
+
+        # Persist registered session metadata
+        try:
+            frontend.manager.save_registered()
         except Exception:
             pass
 
@@ -595,6 +606,8 @@ def create_mcp_server(
             "status": "registered",
             "session_id": session.session_id,
             "name": session.name,
+            "is_local": is_local,
+            "io_mcp_hostname": local_hostname,
             "features": [
                 "present_choices", "present_multi_select",
                 "speak", "speak_async", "speak_urgent",

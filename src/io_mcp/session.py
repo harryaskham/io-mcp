@@ -7,6 +7,7 @@ SessionManager handles routing between sessions and tab navigation.
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from dataclasses import dataclass, field
@@ -286,3 +287,58 @@ class SessionManager:
             self.remove(sid)
 
         return to_remove
+
+    # ─── Session persistence ──────────────────────────────────────
+
+    PERSIST_FILE = os.path.join(
+        os.environ.get("XDG_STATE_HOME", os.path.expanduser("~/.local/state")),
+        "io-mcp", "sessions.json",
+    )
+
+    def save_registered(self) -> None:
+        """Persist registered session metadata to disk.
+
+        Only saves sessions that have called register_session().
+        Saved data: name, cwd, hostname, tmux_session, tmux_pane,
+        voice_override, emotion_override, agent_metadata.
+        """
+        import json
+
+        registered = []
+        with self._lock:
+            for sid in self.session_order:
+                session = self.sessions.get(sid)
+                if session and session.registered:
+                    registered.append({
+                        "name": session.name,
+                        "cwd": session.cwd,
+                        "hostname": session.hostname,
+                        "tmux_session": session.tmux_session,
+                        "tmux_pane": session.tmux_pane,
+                        "voice_override": session.voice_override,
+                        "emotion_override": session.emotion_override,
+                        "agent_metadata": session.agent_metadata,
+                    })
+
+        try:
+            persist_dir = os.path.dirname(self.PERSIST_FILE)
+            os.makedirs(persist_dir, exist_ok=True)
+            with open(self.PERSIST_FILE, "w") as f:
+                json.dump({"sessions": registered}, f, indent=2)
+        except Exception:
+            pass
+
+    def load_registered(self) -> list[dict]:
+        """Load persisted session metadata from disk.
+
+        Returns list of session metadata dicts. Does NOT create sessions —
+        that happens when agents reconnect and re-register.
+        """
+        import json
+
+        try:
+            with open(self.PERSIST_FILE, "r") as f:
+                data = json.load(f)
+            return data.get("sessions", [])
+        except (FileNotFoundError, json.JSONDecodeError):
+            return []
