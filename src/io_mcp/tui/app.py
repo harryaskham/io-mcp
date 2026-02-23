@@ -112,6 +112,7 @@ class IoMcpApp(App):
         convo_key = kb.get("conversationMode", "c")
         dashboard_key = kb.get("dashboard", "d")
         log_key = kb.get("agentLog", "g")
+        help_key = kb.get("help", "question_mark")
         reload_key = kb.get("hotReload", "r")
         quit_key = kb.get("quit", "q")
 
@@ -135,6 +136,7 @@ class IoMcpApp(App):
             Binding(convo_key, "toggle_conversation", "Chat", show=False),
             Binding(dashboard_key, "dashboard", "Dashboard", show=False),
             Binding(log_key, "agent_log", "Log", show=False),
+            Binding(help_key, "show_help", "Help", show=False),
             Binding(reload_key, "hot_reload", "Reload", show=False),
         ] + [Binding(str(i), f"pick_{i}", "", show=False) for i in range(1, 10)]
         if quit_key:
@@ -208,6 +210,9 @@ class IoMcpApp(App):
 
         # Log viewer mode
         self._log_viewer_mode = False
+
+        # Help screen mode
+        self._help_mode = False
 
     # ─── Helpers to get focused session ────────────────────────────
 
@@ -1590,6 +1595,7 @@ class IoMcpApp(App):
         self._quick_action_options = None
         self._dashboard_mode = False
         self._log_viewer_mode = False
+        self._help_mode = False
 
         # Guard: prevent the Enter keypress that triggered "close" from
         # also firing _do_select on the freshly-restored choice list.
@@ -1776,6 +1782,15 @@ class IoMcpApp(App):
                     if idx < len(speech_log):
                         self._tts.speak_async(speech_log[idx].text)
                 return
+            # Help screen: read the shortcut description
+            if getattr(self, '_help_mode', False):
+                if isinstance(event.item, ChoiceItem):
+                    idx = event.item.display_index
+                    shortcuts = getattr(self, '_help_shortcuts', [])
+                    if idx < len(shortcuts):
+                        key, desc = shortcuts[idx]
+                        self._tts.speak_async(f"{key}. {desc}")
+                return
             if isinstance(event.item, ChoiceItem):
                 s = self._settings_items[event.item.display_index] if event.item.display_index < len(self._settings_items) else None
                 if s:
@@ -1835,6 +1850,11 @@ class IoMcpApp(App):
                 # Check if we're in log viewer mode (Enter closes it)
                 if getattr(self, '_log_viewer_mode', False):
                     self._log_viewer_mode = False
+                    self._exit_settings()
+                    return
+                # Check if we're in help mode (Enter closes it)
+                if getattr(self, '_help_mode', False):
+                    self._help_mode = False
                     self._exit_settings()
                     return
                 # Check if we're in dashboard mode
@@ -2828,6 +2848,86 @@ class IoMcpApp(App):
         list_view.focus()
 
         self._tts.speak_async(f"Agent log. {count} entries. Most recent shown.")
+
+    @_safe_action
+    def action_show_help(self) -> None:
+        """Show a help screen with all keyboard shortcuts.
+
+        Displays shortcuts in a scrollable list with descriptions.
+        Each shortcut is read aloud when highlighted.
+        Press ? or Escape to return.
+        """
+        # Toggle off if already showing
+        if getattr(self, '_help_mode', False):
+            self._help_mode = False
+            self._exit_settings()
+            return
+
+        session = self._focused()
+        if session and (session.input_mode or session.voice_recording):
+            return
+        if self._in_settings or self._filter_mode:
+            return
+
+        self._tts.stop()
+
+        # Enter help mode
+        self._in_settings = True
+        self._setting_edit_mode = False
+        self._spawn_options = None
+        self._quick_action_options = None
+        self._dashboard_mode = False
+        self._log_viewer_mode = False
+        self._help_mode = True
+
+        s = self._cs
+
+        # Get current key bindings
+        kb = self._config.key_bindings if self._config else {}
+
+        shortcuts = [
+            (kb.get("cursorDown", "j") + "/" + kb.get("cursorUp", "k"), "Navigate choices up and down"),
+            ("Enter", "Select the highlighted choice or stop recording"),
+            ("1-9", "Instantly select a choice by its number"),
+            (kb.get("undoSelection", "u"), "Undo the last selection and go back"),
+            (kb.get("filterChoices", "/"), "Filter choices by typing"),
+            (kb.get("voiceInput", "space"), "Toggle voice recording for speech input"),
+            (kb.get("freeformInput", "i"), "Type a freeform text reply"),
+            (kb.get("queueMessage", "m"), "Queue a message for the agent"),
+            (kb.get("settings", "s"), "Open the settings menu"),
+            (kb.get("nextTab", "l") + "/" + kb.get("prevTab", "h"), "Switch between agent tabs"),
+            (kb.get("nextChoicesTab", "n"), "Jump to next tab with active choices"),
+            (kb.get("spawnAgent", "t"), "Spawn a new Claude Code agent"),
+            (kb.get("quickActions", "x"), "Run a quick action macro"),
+            (kb.get("conversationMode", "c"), "Toggle continuous voice conversation mode"),
+            (kb.get("dashboard", "d"), "Show dashboard overview of all agents"),
+            (kb.get("agentLog", "g"), "View scrollable speech log for focused agent"),
+            ("?", "Show this help screen"),
+            (kb.get("replayPrompt", "p"), "Replay the preamble text"),
+            (kb.get("hotReload", "r"), "Hot reload code and config"),
+            (kb.get("quit", "q"), "Quit io-mcp"),
+        ]
+
+        preamble_widget = self.query_one("#preamble", Label)
+        preamble_widget.update(
+            f"[bold {s['accent']}]Keyboard Shortcuts[/bold {s['accent']}] "
+            f"[dim](?/esc to close)[/dim]"
+        )
+        preamble_widget.display = True
+
+        list_view = self.query_one("#choices", ListView)
+        list_view.clear()
+
+        for i, (key, desc) in enumerate(shortcuts):
+            label = f"[bold {s['accent']}]{key}[/bold {s['accent']}]  {desc}"
+            list_view.append(ChoiceItem(label, "", index=i + 1, display_index=i))
+
+        list_view.display = True
+        list_view.index = 0
+        list_view.focus()
+
+        self._help_shortcuts = shortcuts
+        self._tts.speak_async(f"Help. {len(shortcuts)} keyboard shortcuts. Scroll to hear each one.")
 
     @_safe_action
     def action_quick_actions(self) -> None:
