@@ -1320,86 +1320,92 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
             di = 0  # display_index counter
 
-            # Actionable options at the top
-            list_view.append(ChoiceItem(
-                f"[{s['accent']}]Queue message[/{s['accent']}]",
-                "Type or speak a message for the agent",
-                index=-1000, display_index=di,
-            ))
-            di += 1
-            list_view.append(ChoiceItem(
-                f"[{s['accent']}]Settings[/{s['accent']}]",
-                "Open settings menu",
-                index=-1001, display_index=di,
-            ))
-            di += 1
+            # ── Actionable options ─────────────────────────────────
+            actionable = [
+                (-1000, "Queue message", "m", "Send a message to this agent"),
+                (-1001, "Settings", "s", "Speed, voice, TTS model"),
+                (-1003, "Dashboard", "d", "All agent sessions"),
+            ]
             if session.tmux_pane:
+                actionable.insert(2, (-1002, "Pane view", "v", f"Live tmux output ({session.tmux_pane})"))
+
+            for idx, label, key, desc in actionable:
                 list_view.append(ChoiceItem(
-                    f"[{s['accent']}]Pane view[/{s['accent']}]",
-                    "Show live tmux output for this agent",
-                    index=-1002, display_index=di,
+                    f"[bold {s['accent']}]{label}[/bold {s['accent']}]  [{s['fg_dim']}]{key}[/{s['fg_dim']}]",
+                    f"[{s['fg_dim']}]{desc}[/{s['fg_dim']}]",
+                    index=idx, display_index=di,
                 ))
                 di += 1
-            list_view.append(ChoiceItem(
-                f"[{s['accent']}]Dashboard[/{s['accent']}]",
-                "Overview of all agent sessions",
-                index=-1003, display_index=di,
-            ))
-            di += 1
 
-            # Separator
-            list_view.append(ChoiceItem(
-                f"[dim]--- {session.name} ---[/dim]", session.summary(),
-                index=-996, display_index=di,
-            ))
-            di += 1
+            # ── Session info section ───────────────────────────────
+            # Summary line
+            summary = session.summary()
+            if summary:
+                list_view.append(ChoiceItem(
+                    f"[{s['blue']}]{session.name}[/{s['blue']}]",
+                    f"[{s['fg_dim']}]{summary}[/{s['fg_dim']}]",
+                    index=-996, display_index=di,
+                ))
+                di += 1
 
-            # Agent info (if registered)
+            # Agent metadata
             if session.registered:
-                info_parts = []
+                meta_parts = []
                 if session.cwd:
-                    info_parts.append(f"cwd: {session.cwd}")
+                    meta_parts.append(session.cwd)
                 if session.hostname:
-                    info_parts.append(f"host: {session.hostname}")
+                    meta_parts.append(session.hostname)
                 if session.tmux_pane:
-                    info_parts.append(f"pane: {session.tmux_pane}")
-                if info_parts:
+                    meta_parts.append(f"pane {session.tmux_pane}")
+                if meta_parts:
                     list_view.append(ChoiceItem(
-                        f"[dim]Agent info[/dim]",
-                        "  ".join(info_parts),
+                        f"[{s['fg_dim']}]{' | '.join(meta_parts)}[/{s['fg_dim']}]",
+                        "",
                         index=-998, display_index=di,
                     ))
                     di += 1
 
             # Tool stats
             if session.tool_call_count > 0:
-                import time
-                elapsed = time.time() - session.last_tool_call
+                import time as _time
+                elapsed = _time.time() - session.last_tool_call
                 if elapsed < 60:
                     ago = f"{int(elapsed)}s ago"
                 elif elapsed < 3600:
                     ago = f"{int(elapsed) // 60}m ago"
                 else:
                     ago = f"{int(elapsed) // 3600}h ago"
+                tool_text = f"[{s['fg_dim']}]{session.tool_call_count} calls[/{s['fg_dim']}]"
+                if session.last_tool_name:
+                    tool_text += f"  [{s['fg_dim']}]last: {session.last_tool_name} ({ago})[/{s['fg_dim']}]"
                 list_view.append(ChoiceItem(
-                    f"[dim]{session.tool_call_count} tool calls[/dim]",
-                    f"Last: {session.last_tool_name} ({ago})" if session.last_tool_name else "",
+                    tool_text, "",
                     index=-997, display_index=di,
                 ))
                 di += 1
 
-            # Separator
-            list_view.append(ChoiceItem(
-                f"[dim]--- Recent activity ---[/dim]", "",
-                index=-995, display_index=di,
-            ))
-            di += 1
+            # Pending messages indicator
+            if session.pending_messages:
+                count = len(session.pending_messages)
+                list_view.append(ChoiceItem(
+                    f"[{s['purple']}]{count} message{'s' if count != 1 else ''} queued[/{s['purple']}]",
+                    f"[{s['fg_dim']}]{session.pending_messages[-1][:60]}[/{s['fg_dim']}]",
+                    index=-994, display_index=di,
+                ))
+                di += 1
 
-            # Recent speech log entries (up to 20, most recent first)
+            # ── Recent speech log ──────────────────────────────────
             recent = list(reversed(session.speech_log[-20:]))
             if recent:
-                import time
-                now = time.time()
+                # Section header
+                list_view.append(ChoiceItem(
+                    f"[{s['fg_dim']}]--- recent speech ---[/{s['fg_dim']}]", "",
+                    index=-995, display_index=di,
+                ))
+                di += 1
+
+                import time as _time
+                now = _time.time()
                 for i, entry in enumerate(recent):
                     age = now - entry.timestamp
                     if age < 60:
@@ -1409,13 +1415,13 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                     else:
                         age_str = f"{int(age) // 3600}h"
                     list_view.append(ChoiceItem(
-                        f"[dim]{age_str}[/dim]  {entry.text}", "",
+                        f"[{s['fg_dim']}]{age_str:>4}[/{s['fg_dim']}]  {entry.text}", "",
                         index=-900 + i, display_index=di,
                     ))
                     di += 1
             else:
                 list_view.append(ChoiceItem(
-                    f"[dim]No activity yet[/dim]", "",
+                    f"[{s['fg_dim']}]No activity yet[/{s['fg_dim']}]", "",
                     index=-900, display_index=di,
                 ))
 
@@ -2839,6 +2845,10 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                     self._exit_settings()
                 else:
                     self._enter_setting_edit(key)
+            return
+        if session and not session.active and not self._in_settings:
+            # Activity feed — allow selecting actionable items even when agent is working
+            self._do_select()
             return
         if session and session.active and not session.input_mode and not session.voice_recording:
             self._do_select()
