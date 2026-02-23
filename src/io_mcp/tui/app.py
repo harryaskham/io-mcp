@@ -3122,9 +3122,37 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             event.stop()
 
     def _pick_by_number(self, n: int) -> None:
-        """Immediately select option by 1-based number."""
+        """Immediately select option by 1-based number.
+
+        Works in regular choices, activity feed, and quick settings submenu.
+        Blocked during text input, voice recording, and settings edit mode.
+        """
         session = self._focused()
-        if not session or not session.active or session.input_mode or session.voice_recording or self._in_settings:
+        if not session:
+            return
+        if session.input_mode or session.voice_recording:
+            return
+        if self._setting_edit_mode:
+            return
+
+        # Quick settings submenu — dispatch by number
+        if getattr(self, '_quick_settings_mode', False):
+            items = ["Fast toggle", "Voice toggle", "Notifications", "Settings", "Restart TUI", "Back"]
+            if 1 <= n <= len(items):
+                self._handle_quick_settings_select(items[n - 1])
+            return
+
+        # Activity feed — dispatch actionable items by number
+        if not session.active and not self._in_settings:
+            list_view = self.query_one("#choices", ListView)
+            if n - 1 < len(list_view.children):
+                list_view.index = n - 1
+                # Trigger _do_select which handles activity feed items
+                self._do_select()
+            return
+
+        # Regular choices mode
+        if not session.active or self._in_settings:
             return
         display_idx = session.extras_count + n - 1
         list_view = self.query_one("#choices", ListView)
