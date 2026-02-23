@@ -81,6 +81,8 @@ class SettingsMixin:
         self._spawn_options = None
         self._quick_action_options = None
         self._dashboard_mode = False
+        self._dashboard_action_mode = False
+        self._dashboard_action_target = None
         self._log_viewer_mode = False
         self._help_mode = False
         self._history_mode = False

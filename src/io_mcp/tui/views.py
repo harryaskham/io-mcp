@@ -134,6 +134,129 @@ class ViewsMixin:
         # Narrate the dashboard
         self._speak_ui(" ".join(narration_parts))
 
+    def _dashboard_session_actions(self: "IoMcpApp", session_idx: int) -> None:
+        """Show actions for a selected dashboard session.
+
+        Presents a sub-menu with options to switch to, close, or kill
+        the selected session's tmux pane.
+        """
+        sessions = self.manager.all_sessions()
+        if session_idx >= len(sessions):
+            self._exit_settings()
+            return
+
+        target = sessions[session_idx]
+        self._dashboard_action_target = target
+        self._dashboard_action_mode = True
+        self._dashboard_mode = False
+
+        s = getattr(self, '_cs', get_scheme(DEFAULT_SCHEME))
+
+        preamble_widget = self.query_one("#preamble", Label)
+        preamble_widget.update(
+            f"[bold {s['accent']}]{target.name}[/bold {s['accent']}]  "
+            f"[dim](select action)[/dim]"
+        )
+
+        actions = [
+            {"label": "Switch to", "summary": f"Focus on {target.name}"},
+            {"label": "Close tab", "summary": "Remove this session from the TUI"},
+        ]
+
+        # Only show kill tmux if the session has a tmux pane
+        pane = getattr(target, 'tmux_pane', '')
+        if pane:
+            actions.append({"label": "Kill tmux pane", "summary": f"Kill pane {pane} and close tab"})
+
+        actions.append({"label": "Back", "summary": "Return to dashboard"})
+
+        list_view = self.query_one("#choices", ListView)
+        list_view.clear()
+        for i, action in enumerate(actions):
+            list_view.append(ChoiceItem(
+                action["label"], action["summary"],
+                index=i + 1, display_index=i,
+            ))
+        list_view.display = True
+        list_view.index = 0
+        list_view.focus()
+
+        self._speak_ui(f"{target.name}. Switch, close, or kill.")
+
+    def _handle_dashboard_action(self: "IoMcpApp", action_idx: int) -> None:
+        """Handle a selection from the dashboard session actions menu."""
+        target = getattr(self, '_dashboard_action_target', None)
+        self._dashboard_action_mode = False
+        self._dashboard_action_target = None
+
+        if not target:
+            self._exit_settings()
+            return
+
+        pane = getattr(target, 'tmux_pane', '')
+        has_pane = bool(pane)
+
+        # Map index to action, accounting for optional "Kill tmux pane"
+        actions = ["switch", "close"]
+        if has_pane:
+            actions.append("kill")
+        actions.append("back")
+
+        if action_idx >= len(actions):
+            self._exit_settings()
+            return
+
+        action = actions[action_idx]
+
+        if action == "switch":
+            self._in_settings = False
+            self._switch_to_session(target)
+        elif action == "close":
+            self._close_session(target)
+        elif action == "kill":
+            self._kill_session(target)
+        else:
+            # Back — return to dashboard
+            self.action_dashboard()
+
+    def _close_session(self: "IoMcpApp", session) -> None:
+        """Close a session tab without killing the tmux pane."""
+        name = session.name
+        self.on_session_removed(session.session_id)
+        self._speak_ui(f"Closed {name}")
+        # Return to dashboard if sessions remain, otherwise exit
+        if self.manager.count() > 0:
+            self.action_dashboard()
+        else:
+            self._exit_settings()
+
+    def _kill_session(self: "IoMcpApp", session) -> None:
+        """Kill a session's tmux pane and close the tab."""
+        import subprocess as sp
+
+        name = session.name
+        pane = getattr(session, 'tmux_pane', '')
+        hostname = getattr(session, 'hostname', '')
+
+        if pane:
+            try:
+                is_remote = hostname and hostname not in ("", "localhost", os.uname().nodename)
+                if is_remote:
+                    cmd = ["ssh", "-o", "ConnectTimeout=2", hostname,
+                           f"tmux kill-pane -t {pane}"]
+                else:
+                    cmd = ["tmux", "kill-pane", "-t", pane]
+                sp.run(cmd, capture_output=True, timeout=5)
+            except Exception:
+                pass
+
+        self.on_session_removed(session.session_id)
+        self._speak_ui(f"Killed {name}")
+        if self.manager.count() > 0:
+            self.action_dashboard()
+        else:
+            self._exit_settings()
+
     @_safe_action
     def action_agent_log(self: "IoMcpApp") -> None:
         """Show a unified timeline of agent activity.

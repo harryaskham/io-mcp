@@ -591,6 +591,28 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 # Status unchanged and still bad — ensure flag is set
                 session.health_alert_spoken = True
 
+        # ── Auto-prune dead sessions ─────────────────────────────
+        # Sessions with dead tmux panes that have been unresponsive
+        # get removed automatically (more aggressive than stale cleanup)
+        dead_sessions = []
+        for session in self.manager.all_sessions():
+            if session.session_id == self.manager.active_session_id:
+                continue  # never auto-prune focused session
+            if session.active:
+                continue  # has pending choices
+            pane_dead = self._is_tmux_pane_dead(session)
+            if pane_dead and session.health_status == "unresponsive":
+                dead_sessions.append(session)
+
+        for session in dead_sessions:
+            name = session.name
+            self.on_session_removed(session.session_id)
+            tab_bar_dirty = True
+            try:
+                self._speak_ui(f"Removed dead session {name}")
+            except Exception:
+                pass
+
         if tab_bar_dirty:
             try:
                 self.call_from_thread(self._update_tab_bar)
@@ -2668,13 +2690,13 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 if getattr(self, '_worktree_options', None):
                     self._handle_worktree_select(idx)
                     return
+                # Check if we're in dashboard action menu
+                if getattr(self, '_dashboard_action_mode', False):
+                    self._handle_dashboard_action(idx)
+                    return
                 # Check if we're in dashboard mode
                 if getattr(self, '_dashboard_mode', False):
-                    self._dashboard_mode = False
-                    self._in_settings = False
-                    sessions = self.manager.all_sessions()
-                    if idx < len(sessions):
-                        self._switch_to_session(sessions[idx])
+                    self._dashboard_session_actions(idx)
                     return
                 # Check if we're in quick settings submenu
                 if getattr(self, '_quick_settings_mode', False):
@@ -2792,13 +2814,13 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 self._do_spawn(spawn_opts[idx])
                 self._spawn_options = None
                 return
+            # Check if we're in dashboard action menu
+            if getattr(self, '_dashboard_action_mode', False):
+                self._handle_dashboard_action(idx)
+                return
             # Check if we're in dashboard mode
             if getattr(self, '_dashboard_mode', False):
-                self._dashboard_mode = False
-                self._in_settings = False
-                sessions = self.manager.all_sessions()
-                if idx < len(sessions):
-                    self._switch_to_session(sessions[idx])
+                self._dashboard_session_actions(idx)
                 return
             # Check if we're in quick action menu
             qa_opts = getattr(self, '_quick_action_options', None)
@@ -3139,6 +3161,18 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 self._handle_quick_settings_select(items[n - 1])
             return
 
+        # Dashboard action menu — dispatch by number
+        if getattr(self, '_dashboard_action_mode', False):
+            self._handle_dashboard_action(n - 1)
+            return
+
+        # Dashboard — select session by number
+        if getattr(self, '_dashboard_mode', False):
+            sessions = self.manager.all_sessions()
+            if 1 <= n <= len(sessions):
+                self._dashboard_session_actions(n - 1)
+            return
+
         # Activity feed — dispatch actionable items by number
         if not session.active and not self._in_settings:
             list_view = self.query_one("#choices", ListView)
@@ -3199,6 +3233,12 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         # Settings / dashboard / log / help / any modal → back
         if self._in_settings:
+            # Dashboard action menu → go back to dashboard
+            if getattr(self, '_dashboard_action_mode', False):
+                self._dashboard_action_mode = False
+                self._dashboard_action_target = None
+                self.action_dashboard()
+                return
             self._exit_settings()
             return
 
@@ -3410,6 +3450,10 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             self.action_spawn_agent()
         elif label == "Dashboard":
             self.action_dashboard()
+        elif label == "Close tab":
+            session = self._focused()
+            if session:
+                self._close_session(session)
         elif label == "Quick settings":
             self._enter_quick_settings()
         elif label == "History":
