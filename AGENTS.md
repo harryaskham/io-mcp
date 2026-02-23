@@ -39,6 +39,7 @@ MCP server providing hands-free Claude Code interaction via scroll wheel (smart 
 src/io_mcp/
 ├── __main__.py   # CLI entry, server startup, Frontend adapter, watchdog
 ├── api.py        # Frontend API: EventBus, SSE, REST endpoints, HTTP server
+├── cli.py        # CLI tool: io-mcp-msg for sending messages to sessions
 ├── config.py     # IoMcpConfig: YAML loading, env expansion, validation, key bindings
 ├── server.py     # MCP tools, Frontend/TTSBackend protocols, create_mcp_server()
 ├── session.py    # Session/SpeechEntry/HistoryEntry dataclasses, SessionManager
@@ -85,6 +86,7 @@ All tool responses include any queued user messages.
 | `/api/sessions/:id/message` | POST | Queue a user message |
 | `/api/sessions/:id/highlight` | POST | Set highlight index |
 | `/api/sessions/:id/key` | POST | Send key event (j/k/enter/space) |
+| `/api/message` | POST | Broadcast message to all/active/specific session |
 
 SSE events: `choices_presented`, `speech_requested`, `selection_made`, `recording_state`, `session_created`, `session_removed`
 
@@ -179,7 +181,18 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 nix develop          # Dev shell
 nix build            # Build package
 uv run io-mcp        # Run directly
-uv run pytest tests/ # Run tests (56 tests)
+uv run pytest tests/ # Run tests (60 tests)
+```
+
+## CLI Tools
+
+```bash
+io-mcp-msg "check this"              # Broadcast to all agent sessions
+io-mcp-msg --active "look at this"   # Send to focused session only
+io-mcp-msg -s SESSION_ID "message"   # Send to specific session
+io-mcp-msg --list                    # List active sessions
+io-mcp-msg --health                  # Check io-mcp health
+echo "msg" | io-mcp-msg              # Pipe from stdin
 ```
 
 ## Important Notes for Agents

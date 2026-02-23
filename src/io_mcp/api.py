@@ -226,7 +226,9 @@ class FrontendAPIHandler(http.server.BaseHTTPRequestHandler):
         path = parsed.path
         body = self._read_body()
 
-        if path.startswith("/api/sessions/") and path.endswith("/select"):
+        if path == "/api/message":
+            self._handle_broadcast_message(body)
+        elif path.startswith("/api/sessions/") and path.endswith("/select"):
             session_id = path.split("/")[-2]
             self._handle_select(session_id, body)
         elif path.startswith("/api/sessions/") and path.endswith("/message"):
@@ -339,6 +341,57 @@ class FrontendAPIHandler(http.server.BaseHTTPRequestHandler):
         if msgs is not None:
             msgs.append(text)
         self._send_json({"status": "queued", "pending": len(msgs) if msgs else 0})
+
+    def _handle_broadcast_message(self, body: dict) -> None:
+        """Send a message to all sessions, or the most recent one.
+
+        POST /api/message
+        Body: {"text": "...", "target": "all"|"active"|"<session_id>"}
+        Default target is "all".
+        """
+        frontend = getattr(self.server, 'frontend', None)
+        if not frontend:
+            self._send_json({"error": "no frontend"}, 500)
+            return
+        text = body.get("text", "")
+        if not text:
+            self._send_json({"error": "no text"}, 400)
+            return
+        target = body.get("target", "all")
+        sessions = list(frontend.manager.all_sessions())
+        if not sessions:
+            self._send_json({"error": "no active sessions"}, 404)
+            return
+
+        queued_to: list[str] = []
+
+        if target == "active":
+            # Send to the focused/active session only
+            focused = frontend.manager.focused()
+            if focused:
+                sessions = [focused]
+            else:
+                sessions = [sessions[-1]]  # fallback to most recent
+
+        elif target not in ("all", ""):
+            # Specific session ID
+            session = frontend.manager.get(target)
+            if not session:
+                self._send_json({"error": f"session '{target}' not found"}, 404)
+                return
+            sessions = [session]
+
+        for session in sessions:
+            msgs = getattr(session, 'pending_messages', None)
+            if msgs is not None:
+                msgs.append(text)
+                queued_to.append(session.session_id)
+
+        self._send_json({
+            "status": "queued",
+            "sessions": queued_to,
+            "count": len(queued_to),
+        })
 
     def _handle_highlight(self, session_id: str, body: dict) -> None:
         """Handle a highlight/scroll event from a remote frontend.

@@ -14,6 +14,7 @@ test = ["pytest>=8.0", "pytest-asyncio>=0.24"]
 
 [project.scripts]
 io-mcp = "io_mcp.__main__:main"
+io-mcp-msg = "io_mcp.cli:main"
 
 [build-system]
 requires = ["hatchling"]
