@@ -555,9 +555,8 @@ class IoMcpApp(App):
         yield Static("[dim]↕[/dim] Scroll  [dim]⏎[/dim] Select  [dim]u[/dim] Undo  [dim]i[/dim] Type  [dim]m[/dim] Msg  [dim]␣[/dim] Voice  [dim]/[/dim] Filter  [dim]s[/dim] Settings  [dim]q[/dim] Quit", id="footer-help")
 
     def on_mount(self) -> None:
-        scheme = getattr(self, '_color_scheme', DEFAULT_SCHEME)
-        self.title = f"io-mcp [{scheme}]"
-        self.sub_title = "hands-free agent control"
+        self.title = "io-mcp"
+        self.sub_title = ""
         self.query_one("#tab-bar").display = False
         self.query_one("#preamble").display = False
         self.query_one("#choices").display = False
@@ -1985,7 +1984,7 @@ class IoMcpApp(App):
             if self._config:
                 self._config.raw.setdefault("config", {})["colorScheme"] = value
                 self._config.save()
-            self.title = f"io-mcp [{value}]"
+            self.title = "io-mcp"
 
         self._tts.clear_cache()
 

@@ -17,22 +17,27 @@ The user has a TUI running in another pane that shows choices. They scroll throu
 
 ### 1. Narrate Everything via `speak_async()` (preferred) or `speak()`
 
-Call `speak_async()` **before and after every significant action** — reading files, writing code, running commands, analyzing output. The user is listening with earphones and may have the screen off.
+**Call `speak_async()` BEFORE EVERY tool call** — reading files, writing code, running commands, analyzing output. The user is listening with earphones and may have the screen off. Long silences feel broken.
 
 **Use `speak_async()` for quick status updates** — it returns immediately so you can keep working. Use `speak()` (blocking) only when you need to ensure the user hears something before you proceed (e.g., before a long silent operation).
 
-**Pattern:** speak_async → do work → speak_async → do more work → speak_async → present_choices
+**CRITICAL: Call `speak_async()` at least every 15-20 seconds.** If you're doing multi-step work (reading files, making edits, running tests), speak before EACH step. Don't batch narration — narrate as you go.
+
+**Pattern:** speak_async → tool call → speak_async → tool call → speak_async → present_choices
 
 **Good narration examples:**
 - `speak_async("Reading the test file to understand the failures")`
 - `speak_async("Found the bug — a missing null check on line 42")`
 - `speak_async("Writing the fix now")`
-- `speak_async("Running tests. Three passed, one still failing.")`
-- `speak_async("Done. All tests pass. Ready for next steps.")`
+- `speak_async("Running tests.")`
+- `speak_async("Three passed, one still failing. Let me look at the error.")`
+- `speak_async("Fixed it. Running tests again.")`
+- `speak_async("All tests pass.")`
 
 **Bad narration:**
 - Too long: `speak_async("I am now going to read through the entire codebase...")` — break into short updates.
-- Too infrequent: Working for 2+ minutes without any `speak_async()` call.
+- Too infrequent: Working for 30+ seconds without any `speak_async()` call.
+- Batched: Doing 5 tool calls then one big `speak()` — narrate EACH step individually.
 - Missing entirely: A Stop hook will catch this and force you to narrate.
 
 ### 2. ALWAYS End with `present_choices()`
@@ -74,8 +79,8 @@ Labels are read aloud via TTS on **every scroll**. They must be:
 ### 4. Flow
 
 1. User invokes `/io-mcp` with a task description
-2. You `speak()` what you're about to do
-3. You work on the task, calling `speak()` for status updates every 20-30 seconds
+2. You `speak_async()` what you're about to do
+3. You work on the task, calling `speak_async()` **before EVERY tool call** — no exceptions
 4. When done or at a decision point, call `present_choices()`
 5. Wait for the result — the user's selection comes back as the tool response
 6. Continue based on their choice, narrating as you go
