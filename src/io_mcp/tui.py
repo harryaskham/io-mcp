@@ -36,6 +36,207 @@ if TYPE_CHECKING:
     from .config import IoMcpConfig
 
 
+# ─── Color Schemes ────────────────────────────────────────────────────────
+
+COLOR_SCHEMES: dict[str, dict[str, str]] = {
+    "nord": {
+        "bg": "#2e3440",
+        "bg_alt": "#3b4252",
+        "fg": "#d8dee9",
+        "fg_dim": "#4c566a",
+        "accent": "#88c0d0",
+        "success": "#a3be8c",
+        "warning": "#ebcb8b",
+        "error": "#bf616a",
+        "purple": "#b48ead",
+        "blue": "#81a1c1",
+        "highlight_bg": "#434c5e",
+        "highlight_fg": "#eceff4",
+        "highlight_accent": "#88c0d0",
+        "border": "#4c566a",
+    },
+    "tokyo-night": {
+        "bg": "#1a1b26",
+        "bg_alt": "#24283b",
+        "fg": "#a9b1d6",
+        "fg_dim": "#565f89",
+        "accent": "#7aa2f7",
+        "success": "#9ece6a",
+        "warning": "#e0af68",
+        "error": "#f7768e",
+        "purple": "#bb9af7",
+        "blue": "#7dcfff",
+        "highlight_bg": "#292e42",
+        "highlight_fg": "#c0caf5",
+        "highlight_accent": "#7aa2f7",
+        "border": "#414868",
+    },
+    "catppuccin": {
+        "bg": "#1e1e2e",
+        "bg_alt": "#313244",
+        "fg": "#cdd6f4",
+        "fg_dim": "#585b70",
+        "accent": "#89b4fa",
+        "success": "#a6e3a1",
+        "warning": "#f9e2af",
+        "error": "#f38ba8",
+        "purple": "#cba6f7",
+        "blue": "#74c7ec",
+        "highlight_bg": "#45475a",
+        "highlight_fg": "#cdd6f4",
+        "highlight_accent": "#89b4fa",
+        "border": "#585b70",
+    },
+    "dracula": {
+        "bg": "#282a36",
+        "bg_alt": "#44475a",
+        "fg": "#f8f8f2",
+        "fg_dim": "#6272a4",
+        "accent": "#8be9fd",
+        "success": "#50fa7b",
+        "warning": "#f1fa8c",
+        "error": "#ff5555",
+        "purple": "#bd93f9",
+        "blue": "#8be9fd",
+        "highlight_bg": "#44475a",
+        "highlight_fg": "#f8f8f2",
+        "highlight_accent": "#bd93f9",
+        "border": "#6272a4",
+    },
+}
+
+DEFAULT_SCHEME = "nord"
+
+
+def get_scheme(name: str = DEFAULT_SCHEME) -> dict[str, str]:
+    """Get a color scheme by name, with fallback to default."""
+    return COLOR_SCHEMES.get(name, COLOR_SCHEMES[DEFAULT_SCHEME])
+
+
+def _build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
+    """Build the Textual CSS using a named color scheme."""
+    s = COLOR_SCHEMES.get(scheme_name, COLOR_SCHEMES[DEFAULT_SCHEME])
+    return f"""
+    Screen {{
+        background: {s['bg']};
+    }}
+
+    #tab-bar {{
+        margin: 0 1;
+        height: 1;
+        color: {s['accent']};
+        background: {s['bg_alt']};
+        padding: 0 1;
+    }}
+
+    #preamble {{
+        margin: 1 2 0 2;
+        padding: 0 1;
+        color: {s['success']};
+        width: 1fr;
+        text-style: bold;
+    }}
+
+    #status {{
+        margin: 1 2 0 2;
+        padding: 0 1;
+        color: {s['warning']};
+        width: 1fr;
+    }}
+
+    #agent-activity {{
+        margin: 0 2;
+        padding: 0 1;
+        height: 1;
+        color: {s['blue']};
+        width: 1fr;
+        display: none;
+    }}
+
+    #speech-log {{
+        margin: 0 2;
+        height: auto;
+        max-height: 5;
+        padding: 0 1;
+        border-top: hkey {s['border']};
+    }}
+
+    .speech-entry {{
+        color: {s['fg_dim']};
+        margin: 0;
+        padding: 0;
+    }}
+
+    #choices {{
+        margin: 0 1;
+        height: 1fr;
+        overflow-x: hidden;
+    }}
+
+    ChoiceItem {{
+        padding: 0 2;
+        height: auto;
+        width: 1fr;
+        margin: 0 0;
+    }}
+
+    ChoiceItem > .choice-label {{
+        color: {s['fg']};
+        width: 1fr;
+    }}
+
+    ChoiceItem > .choice-summary {{
+        color: {s['fg_dim']};
+        margin-left: 4;
+        width: 1fr;
+    }}
+
+    ChoiceItem.-highlight {{
+        background: {s['highlight_bg']};
+    }}
+
+    ChoiceItem.-highlight > .choice-label {{
+        color: {s['highlight_fg']};
+        text-style: bold;
+    }}
+
+    ChoiceItem.-highlight > .choice-summary {{
+        color: {s['highlight_accent']};
+    }}
+
+    #dwell-bar {{
+        margin: 0 2;
+        color: {s['warning']};
+        height: 1;
+    }}
+
+    #footer-help {{
+        dock: bottom;
+        height: 1;
+        background: {s['bg_alt']};
+        color: {s['fg_dim']};
+        padding: 0 1;
+    }}
+
+    #freeform-input {{
+        margin: 1 2;
+        display: none;
+        border: tall {s['accent']};
+    }}
+
+    #filter-input {{
+        margin: 0 2;
+        display: none;
+        border: tall {s['purple']};
+    }}
+
+    Header {{
+        background: {s['bg']};
+        color: {s['accent']};
+    }}
+    """
+
+
 # ─── Extra options (negative indices) ──────────────────────────────────────
 EXTRA_OPTIONS = [
     {"label": "Queue message", "summary": "Type or speak a message to queue for the agent's next response"},
@@ -102,125 +303,7 @@ class DwellBar(Static):
 class IoMcpApp(App):
     """Textual app for io-mcp choice presentation with multi-session support."""
 
-    CSS = """
-    Screen {
-        background: #1a1b26;
-    }
-
-    #tab-bar {
-        margin: 0 1;
-        height: 1;
-        color: #7aa2f7;
-        background: #24283b;
-        padding: 0 1;
-    }
-
-    #preamble {
-        margin: 1 2 0 2;
-        padding: 0 1;
-        color: #9ece6a;
-        width: 1fr;
-        text-style: bold;
-    }
-
-    #status {
-        margin: 1 2 0 2;
-        padding: 0 1;
-        color: #e0af68;
-        width: 1fr;
-    }
-
-    #agent-activity {
-        margin: 0 2;
-        padding: 0 1;
-        height: 1;
-        color: #7dcfff;
-        width: 1fr;
-        display: none;
-    }
-
-    #speech-log {
-        margin: 0 2;
-        height: auto;
-        max-height: 5;
-        padding: 0 1;
-        border-top: hkey #414868;
-    }
-
-    .speech-entry {
-        color: #565f89;
-        margin: 0;
-        padding: 0;
-    }
-
-    #choices {
-        margin: 0 1;
-        height: 1fr;
-        overflow-x: hidden;
-    }
-
-    ChoiceItem {
-        padding: 0 2;
-        height: auto;
-        width: 1fr;
-        margin: 0 0;
-    }
-
-    ChoiceItem > .choice-label {
-        color: #a9b1d6;
-        width: 1fr;
-    }
-
-    ChoiceItem > .choice-summary {
-        color: #565f89;
-        margin-left: 4;
-        width: 1fr;
-    }
-
-    ChoiceItem.-highlight {
-        background: #292e42;
-    }
-
-    ChoiceItem.-highlight > .choice-label {
-        color: #c0caf5;
-        text-style: bold;
-    }
-
-    ChoiceItem.-highlight > .choice-summary {
-        color: #7aa2f7;
-    }
-
-    #dwell-bar {
-        margin: 0 2;
-        color: #e0af68;
-        height: 1;
-    }
-
-    #footer-help {
-        dock: bottom;
-        height: 1;
-        background: #24283b;
-        color: #565f89;
-        padding: 0 1;
-    }
-
-    #freeform-input {
-        margin: 1 2;
-        display: none;
-        border: tall #7aa2f7;
-    }
-
-    #filter-input {
-        margin: 0 2;
-        display: none;
-        border: tall #bb9af7;
-    }
-
-    Header {
-        background: #1a1b26;
-        color: #7aa2f7;
-    }
-    """
+    CSS = _build_css(DEFAULT_SCHEME)
 
     BINDINGS = [
         Binding("j,down", "cursor_down", "Down", show=False),
@@ -309,6 +392,16 @@ class IoMcpApp(App):
         ] + [Binding(str(i), f"pick_{i}", "", show=False) for i in range(1, 10)]
         if quit_key:
             self._bindings.append(Binding(quit_key, "quit", "Quit", show=False))
+
+        # Apply color scheme from config
+        scheme_name = DEFAULT_SCHEME
+        if config:
+            scheme_name = config.expanded.get("config", {}).get("colorScheme", DEFAULT_SCHEME)
+        if scheme_name not in COLOR_SCHEMES:
+            scheme_name = DEFAULT_SCHEME
+        self.__class__.CSS = _build_css(scheme_name)
+        self._color_scheme = scheme_name
+        self._cs = get_scheme(scheme_name)  # shortcut for inline Rich markup
 
         super().__init__(**kwargs)
         self._tts = tts
@@ -537,9 +630,9 @@ class IoMcpApp(App):
                 if len(last_text) > 60:
                     last_text = last_text[:60] + "..."
             if last_text:
-                activity.update(f"[bold #e0af68]⧗[/bold #e0af68] Working ({time_str}) — {last_text}")
+                activity.update(f"[bold {self._cs['warning']}]⧗[/bold {self._cs['warning']}] Working ({time_str}) — {last_text}")
             else:
-                activity.update(f"[bold #e0af68]⧗[/bold #e0af68] Working ({time_str})")
+                activity.update(f"[bold {self._cs['warning']}]⧗[/bold {self._cs['warning']}] Working ({time_str})")
             activity.display = True
         except Exception:
             pass
@@ -552,7 +645,8 @@ class IoMcpApp(App):
         if self.manager.count() <= 0:
             tab_bar.display = False
             return
-        tab_bar.update(self.manager.tab_bar_text())
+        s = get_scheme(getattr(self, '_color_scheme', DEFAULT_SCHEME))
+        tab_bar.update(self.manager.tab_bar_text(accent=s['accent'], success=s['success']))
         # Only show tab bar when multiple sessions exist
         tab_bar.display = self.manager.count() > 1
 
@@ -580,7 +674,7 @@ class IoMcpApp(App):
         if activity and session.speech_log:
             last = session.speech_log[-1].text
             truncated = last[:80] + ("..." if len(last) > 80 else "")
-            activity.update(f"[bold #7dcfff]▸[/bold #7dcfff] {truncated}")
+            activity.update(f"[bold {self._cs['blue']}]▸[/bold {self._cs['blue']}] {truncated}")
             activity.display = True
         elif activity:
             activity.display = False
@@ -639,10 +733,10 @@ class IoMcpApp(App):
                 self.query_one("#choices").display = False
                 self.query_one("#dwell-bar").display = False
                 preamble_widget = self.query_one("#preamble", Label)
-                preamble_widget.update(f"[bold #9ece6a]🗣[/bold #9ece6a] {preamble}")
+                preamble_widget.update(f"[bold {self._cs['success']}]🗣[/bold {self._cs['success']}] {preamble}")
                 preamble_widget.display = True
                 status = self.query_one("#status", Label)
-                status.update("[dim]Conversation mode[/dim] [#7dcfff](c to exit)[/#7dcfff]")
+                status.update(f"[dim]Conversation mode[/dim] [{self._cs['blue']}](c to exit)[/{self._cs['blue']}]")
                 status.display = True
             self.call_from_thread(_show_convo)
 
@@ -903,7 +997,7 @@ class IoMcpApp(App):
         status = self.query_one("#status", Label)
         session = self._focused()
         session_name = session.name if session else ""
-        after_text = f"Selected: {label}" if self._demo else f"[#9ece6a]✓[/#9ece6a] [{session_name}] {label} [dim](u=undo)[/dim]"
+        after_text = f"Selected: {label}" if self._demo else f"[{self._cs['success']}]✓[/{self._cs['success']}] [{session_name}] {label} [dim](u=undo)[/dim]"
         status.update(after_text)
         status.display = True
 
@@ -1100,8 +1194,8 @@ class IoMcpApp(App):
         status = self.query_one("#status", Label)
         # Show pending message count if any
         msgs = getattr(session, 'pending_messages', [])
-        msg_info = f" [dim]·[/dim] [#bb9af7]{len(msgs)} msg{'s' if len(msgs) != 1 else ''}[/#bb9af7]" if msgs else ""
-        status.update(f"[#e0af68]⧗[/#e0af68] [{session.name}] Waiting for agent...{msg_info} [dim](u=undo)[/dim]")
+        msg_info = f" [dim]·[/dim] [{self._cs['purple']}]{len(msgs)} msg{'s' if len(msgs) != 1 else ''}[/{self._cs['purple']}]" if msgs else ""
+        status.update(f"[{self._cs['warning']}]⧗[/{self._cs['warning']}] [{session.name}] Waiting for agent...{msg_info} [dim](u=undo)[/dim]")
         status.display = True
 
     def action_next_tab(self) -> None:
@@ -1286,7 +1380,7 @@ class IoMcpApp(App):
         self.query_one("#choices").display = False
         self.query_one("#dwell-bar").display = False
         status = self.query_one("#status", Label)
-        status.update("[bold #f7768e]● REC[/bold #f7768e] Recording... [dim](space to stop)[/dim]")
+        status.update(f"[bold {self._cs['error']}]● REC[/bold {self._cs['error']}] Recording... [dim](space to stop)[/dim]")
         status.display = True
 
         # Find binaries
@@ -1350,7 +1444,7 @@ class IoMcpApp(App):
             pass
 
         status = self.query_one("#status", Label)
-        status.update("[#7dcfff]⧗[/#7dcfff] Transcribing...")
+        status.update(f"[{self._cs['blue']}]⧗[/{self._cs['blue']}] Transcribing...")
 
         def _process():
             termux_exec_bin = _find_binary("termux-exec")
@@ -1526,7 +1620,7 @@ class IoMcpApp(App):
 
         # Show loading state
         status = self.query_one("#status", Label)
-        status.update("[#7dcfff]⧗[/#7dcfff] Checking notifications...")
+        status.update(f"[{self._cs['blue']}]⧗[/{self._cs['blue']}] Checking notifications...")
         status.display = True
         self.query_one("#choices").display = False
 
@@ -2608,7 +2702,7 @@ class IoMcpApp(App):
         self._spawn_options = options
 
         preamble_widget = self.query_one("#preamble", Label)
-        preamble_widget.update("[bold #7aa2f7]Spawn New Agent[/bold #7aa2f7]")
+        preamble_widget.update(f"[bold {self._cs['accent']}]Spawn New Agent[/bold {self._cs['accent']}]")
         preamble_widget.display = True
 
         list_view = self.query_one("#choices", ListView)
@@ -2770,7 +2864,7 @@ class IoMcpApp(App):
         self._quick_action_options = options
 
         preamble_widget = self.query_one("#preamble", Label)
-        preamble_widget.update("[bold #bb9af7]Quick Actions[/bold #bb9af7]")
+        preamble_widget.update(f"[bold {self._cs['purple']}]Quick Actions[/bold {self._cs['purple']}]")
         preamble_widget.display = True
 
         list_view = self.query_one("#choices", ListView)

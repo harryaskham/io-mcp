@@ -223,11 +223,12 @@ class SessionManager:
         with self._lock:
             return self.sessions.get(session_id)
 
-    def tab_bar_text(self) -> str:
+    def tab_bar_text(self, accent: str = "#88c0d0", success: str = "#a3be8c") -> str:
         """Render the tab bar string with rich formatting.
 
         Active tab is highlighted with brackets and bold.
         Tabs with pending choices get a dot indicator.
+        Colors are passed from the TUI's active color scheme.
         """
         with self._lock:
             if not self.session_order:
@@ -236,9 +237,9 @@ class SessionManager:
             for sid in self.session_order:
                 session = self.sessions[sid]
                 name = session.name
-                indicator = " [bold #9ece6a]●[/bold #9ece6a]" if session.active else ""
+                indicator = f" [bold {success}]●[/bold {success}]" if session.active else ""
                 if sid == self.active_session_id:
-                    parts.append(f"[bold #7aa2f7]▸ {name}[/bold #7aa2f7]{indicator}")
+                    parts.append(f"[bold {accent}]▸ {name}[/bold {accent}]{indicator}")
                 else:
                     parts.append(f"[dim]  {name}[/dim]{indicator}")
             return "  ".join(parts)

@@ -92,6 +92,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         },
     },
     "config": {
+        "colorScheme": "nord",
         "realtime": {
             "model": "gpt-realtime",
         },

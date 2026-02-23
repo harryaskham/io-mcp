@@ -94,6 +94,7 @@ SSE events: `choices_presented`, `speech_requested`, `selection_made`, `recordin
 
 ```yaml
 config:
+  colorScheme: nord         # nord, tokyo-night, catppuccin, dracula
   tts:
     model: mai-voice-1
     voice: en-US-Noa:MAI-Voice-1
