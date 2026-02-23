@@ -146,20 +146,33 @@ def _ensure_proxy_running(proxy_address: str, backend_port: int) -> None:
         except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError):
             pass
 
-        # Find the project directory (for uv run)
-        project_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        # Start proxy as a detached subprocess
+        # Try 'io-mcp' script first, fall back to 'python -m io_mcp'
+        import shutil
+        io_mcp_bin = shutil.which("io-mcp")
+        if io_mcp_bin:
+            cmd = [io_mcp_bin, "server",
+                   "--host", proxy_host,
+                   "--port", str(proxy_port),
+                   "--io-mcp-address", f"localhost:{backend_port}",
+                   "--foreground"]
+            cwd = None
+        else:
+            # Fallback: use python -m (for dev mode / uv run)
+            project_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            cmd = [sys.executable, "-m", "io_mcp", "server",
+                   "--host", proxy_host,
+                   "--port", str(proxy_port),
+                   "--io-mcp-address", f"localhost:{backend_port}",
+                   "--foreground"]
+            cwd = project_dir
 
-        # Start proxy as a detached subprocess using uv run
         log_file = open("/tmp/io-mcp-server.log", "w")
         proc = subprocess.Popen(
-            ["uv", "run", "python3", "-m", "io_mcp", "server",
-             "--host", proxy_host,
-             "--port", str(proxy_port),
-             "--io-mcp-address", f"localhost:{backend_port}",
-             "--foreground"],
+            cmd,
             stdout=log_file,
             stderr=log_file,
-            cwd=project_dir,
+            cwd=cwd,
             start_new_session=True,  # Detach from parent process group
         )
         # Write PID file ourselves since the child runs in foreground mode
