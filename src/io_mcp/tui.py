@@ -269,14 +269,18 @@ class ChoiceItem(ListItem):
 
     def compose(self) -> ComposeResult:
         if self.choice_index > 0:
-            # Real choice — numbered with dot
-            prefix = f"  {self.choice_index}"
-            yield Label(f"[bold]{prefix}.[/bold] {self.choice_label}", classes="choice-label")
+            # Real choice — right-aligned number
+            num = str(self.choice_index)
+            pad = " " * (3 - len(num))
+            yield Label(f"{pad}[bold]{num}[/bold]  {self.choice_label}", classes="choice-label")
+        elif self.choice_index == -(len(EXTRA_OPTIONS) - 1):
+            # First extra option — add a dim separator above
+            yield Label(f"    [dim]›[/dim] {self.choice_label}", classes="choice-label")
         else:
-            # Extra option — dim with arrow prefix
-            yield Label(f"  [dim]›[/dim] {self.choice_label}", classes="choice-label")
+            # Extra option — dim arrow prefix
+            yield Label(f"    [dim]›[/dim] {self.choice_label}", classes="choice-label")
         if self.choice_summary:
-            yield Label(f"     {self.choice_summary}", classes="choice-summary")
+            yield Label(f"       {self.choice_summary}", classes="choice-summary")
 
 
 # ─── Dwell Progress Bar ─────────────────────────────────────────────────────
@@ -516,7 +520,9 @@ class IoMcpApp(App):
         yield Static("[dim]↕[/dim] Scroll  [dim]⏎[/dim] Select  [dim]u[/dim] Undo  [dim]i[/dim] Type  [dim]m[/dim] Msg  [dim]␣[/dim] Voice  [dim]/[/dim] Filter  [dim]s[/dim] Settings  [dim]q[/dim] Quit", id="footer-help")
 
     def on_mount(self) -> None:
-        self.title = "io-mcp"
+        scheme = getattr(self, '_color_scheme', DEFAULT_SCHEME)
+        self.title = f"io-mcp [{scheme}]"
+        self.sub_title = "hands-free agent control"
         self.query_one("#tab-bar").display = False
         self.query_one("#preamble").display = False
         self.query_one("#choices").display = False
@@ -1773,6 +1779,7 @@ class IoMcpApp(App):
         self._in_settings = True
         self._setting_edit_mode = False
 
+        scheme = getattr(self, '_color_scheme', DEFAULT_SCHEME)
         self._settings_items = [
             {"label": "Speed", "key": "speed",
              "summary": f"Current: {self.settings.speed:.1f}"},
@@ -1784,6 +1791,8 @@ class IoMcpApp(App):
              "summary": f"Current: {self.settings.tts_model}"},
             {"label": "STT model", "key": "stt_model",
              "summary": f"Current: {self.settings.stt_model}"},
+            {"label": "Color scheme", "key": "color_scheme",
+             "summary": f"Current: {scheme}"},
             {"label": "Close settings", "key": "close", "summary": ""},
         ]
 
@@ -1869,6 +1878,14 @@ class IoMcpApp(App):
                 if current in self._setting_edit_values else 0
             )
 
+        elif key == "color_scheme":
+            self._setting_edit_values = list(COLOR_SCHEMES.keys())
+            current = getattr(self, '_color_scheme', DEFAULT_SCHEME)
+            self._setting_edit_index = (
+                self._setting_edit_values.index(current)
+                if current in self._setting_edit_values else 0
+            )
+
         # UI first
         list_view = self.query_one("#choices", ListView)
         list_view.clear()
@@ -1909,6 +1926,15 @@ class IoMcpApp(App):
             self.settings.emotion = value
         elif key == "stt_model":
             self.settings.stt_model = value
+        elif key == "color_scheme":
+            self._color_scheme = value
+            self._cs = get_scheme(value)
+            self.__class__.CSS = _build_css(value)
+            # Save to config
+            if self._config:
+                self._config.raw.setdefault("config", {})["colorScheme"] = value
+                self._config.save()
+            self.title = f"io-mcp [{value}]"
 
         self._tts.clear_cache()
 
