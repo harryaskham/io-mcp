@@ -171,7 +171,7 @@ class SettingsMixin:
         list_view = self.query_one("#choices", ListView)
         list_view.clear()
         for i, val in enumerate(self._setting_edit_values):
-            marker = " ✓" if i == self._setting_edit_index else ""
+            marker = " *" if i == self._setting_edit_index else ""
             list_view.append(ChoiceItem(f"{val}{marker}", "", index=i+1, display_index=i))
         list_view.index = self._setting_edit_index
         list_view.focus()

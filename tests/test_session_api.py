@@ -139,7 +139,7 @@ class TestSessionManagerExtended:
         s1.name = "Agent 1"
         s1.active = True
         text = m.tab_bar_text()
-        assert "●" in text
+        assert "o" in text  # active indicator (was ●)
 
     def test_focus_nonexistent(self):
         m = SessionManager()
@@ -188,24 +188,24 @@ class TestSessionHealthMonitoring:
         assert s.health_alert_spoken is False
 
     def test_tab_bar_shows_warning_indicator(self):
-        """Tab bar shows ⚠ for warning health status."""
+        """Tab bar shows ! for warning health status."""
         m = SessionManager()
         s1, _ = m.get_or_create("a")
         s1.name = "Agent 1"
         s1.health_status = "warning"
         s1.active = False
         text = m.tab_bar_text()
-        assert "⚠" in text
+        assert "!" in text
 
     def test_tab_bar_shows_unresponsive_indicator(self):
-        """Tab bar shows ✗ for unresponsive health status."""
+        """Tab bar shows x for unresponsive health status."""
         m = SessionManager()
         s1, _ = m.get_or_create("a")
         s1.name = "Agent 1"
         s1.health_status = "unresponsive"
         s1.active = False
         text = m.tab_bar_text()
-        assert "✗" in text
+        assert "[bold #bf616a]x[/bold #bf616a]" in text
 
     def test_tab_bar_active_choices_hides_warning(self):
         """When agent has active choices, health warning is hidden (agent is healthy)."""
@@ -215,9 +215,9 @@ class TestSessionHealthMonitoring:
         s1.health_status = "warning"
         s1.active = True  # agent is presenting choices — not stuck
         text = m.tab_bar_text()
-        # Should show choices indicator (●), not warning (⚠)
-        assert "●" in text
-        assert "⚠" not in text
+        # Should show choices indicator (o), not warning (!)
+        assert "[bold #a3be8c]o[/bold #a3be8c]" in text
+        assert "!" not in text
 
     def test_tab_bar_healthy_no_indicator(self):
         """Healthy agents with no active choices show no status indicator."""
@@ -227,9 +227,9 @@ class TestSessionHealthMonitoring:
         s1.health_status = "healthy"
         s1.active = False
         text = m.tab_bar_text()
-        assert "⚠" not in text
-        assert "✗" not in text
-        assert "●" not in text
+        assert "[bold #ebcb8b]![/bold #ebcb8b]" not in text
+        assert "[bold #bf616a]x[/bold #bf616a]" not in text
+        assert "[bold #a3be8c]o[/bold #a3be8c]" not in text
 
     def test_health_threshold_warning_logic(self):
         """Simulate the warning threshold detection logic."""
@@ -337,8 +337,8 @@ class TestSessionHealthMonitoring:
         assert "Good Agent" in text
         assert "Slow Agent" in text
         assert "Dead Agent" in text
-        assert "⚠" in text   # warning indicator
-        assert "✗" in text   # unresponsive indicator
+        assert "!" in text   # warning indicator
+        assert "[bold #bf616a]x[/bold #bf616a]" in text   # unresponsive indicator
 
 
 class TestSessionSummaryAndTimeline:

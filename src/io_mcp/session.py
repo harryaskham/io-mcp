@@ -414,16 +414,16 @@ class SessionManager:
                 session = self.sessions[sid]
                 name = session.name
                 # Choice indicator
-                indicator = f" [bold {success}]●[/bold {success}]" if session.active else ""
+                indicator = f" [bold {success}]o[/bold {success}]" if session.active else ""
                 # Health indicator (only when not showing active choices)
                 health = getattr(session, 'health_status', 'healthy')
                 if not session.active:
                     if health == "warning":
-                        indicator = f" [bold {warning}]⚠[/bold {warning}]"
+                        indicator = f" [bold {warning}]![/bold {warning}]"
                     elif health == "unresponsive":
-                        indicator = f" [bold {error}]✗[/bold {error}]"
+                        indicator = f" [bold {error}]x[/bold {error}]"
                 if sid == self.active_session_id:
-                    parts.append(f"[bold {accent}]▸ {name}[/bold {accent}]{indicator}")
+                    parts.append(f"[bold {accent}]> {name}[/bold {accent}]{indicator}")
                 else:
                     parts.append(f"[dim]  {name}[/dim]{indicator}")
             return "  ".join(parts)

@@ -380,23 +380,29 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError):
                 pass
 
-            # Check backend /health
+            # Check backend /health — try both 127.0.0.1 and localhost
             backend_ok = False
-            try:
-                req = urllib.request.Request("http://localhost:8446/health", method="GET")
-                with urllib.request.urlopen(req, timeout=1) as resp:
-                    backend_ok = resp.status == 200
-            except Exception:
-                pass
+            for host in ("127.0.0.1", "localhost"):
+                if backend_ok:
+                    break
+                try:
+                    req = urllib.request.Request(f"http://{host}:8446/health", method="GET")
+                    with urllib.request.urlopen(req, timeout=2) as resp:
+                        backend_ok = resp.status == 200
+                except Exception:
+                    pass
 
-            # Check Android API /health
+            # Check Android API /health — try both 127.0.0.1 and localhost
             api_ok = False
-            try:
-                req = urllib.request.Request("http://localhost:8445/api/health", method="GET")
-                with urllib.request.urlopen(req, timeout=1) as resp:
-                    api_ok = resp.status == 200
-            except Exception:
-                pass
+            for host in ("127.0.0.1", "localhost"):
+                if api_ok:
+                    break
+                try:
+                    req = urllib.request.Request(f"http://{host}:8445/api/health", method="GET")
+                    with urllib.request.urlopen(req, timeout=2) as resp:
+                        api_ok = resp.status == 200
+                except Exception:
+                    pass
 
             # Session count and health summary
             sessions = self.manager.all_sessions() if hasattr(self.manager, 'all_sessions') else []
@@ -419,7 +425,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
             def _dot(ok: bool) -> str:
                 color = s['success'] if ok else s['error']
-                return f"[{color}]●[/{color}]"
+                return f"[{color}]o[/{color}]"
 
             parts = [
                 f"{_dot(proxy_ok)} proxy",
@@ -436,11 +442,11 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             if unresponsive_count > 0:
                 session_parts.append(f"[{s['error']}]{unresponsive_count} dead[/{s['error']}]")
 
-            parts.append("[dim]│[/dim] [dim]" + " ".join(session_parts) + "[/dim]")
+            parts.append("[dim]|[/dim] [dim]" + " ".join(session_parts) + "[/dim]")
 
             # Notification channels
             if notif_enabled and notif_channels > 0:
-                parts.append(f"[dim]│[/dim] [{s['purple']}]{notif_channels} notif[/{s['purple']}]")
+                parts.append(f"[dim]|[/dim] [{s['purple']}]{notif_channels} notif[/{s['purple']}]")
 
             status_text = "  ".join(parts)
 
@@ -762,9 +768,9 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 if len(last_text) > 60:
                     last_text = last_text[:60] + "..."
             if last_text:
-                activity.update(f"[bold {self._cs['warning']}]⧗[/bold {self._cs['warning']}] Working ({time_str}){tool_info} — {last_text}")
+                activity.update(f"[bold {self._cs['warning']}]~[/bold {self._cs['warning']}] Working ({time_str}){tool_info} -- {last_text}")
             else:
-                activity.update(f"[bold {self._cs['warning']}]⧗[/bold {self._cs['warning']}] Working ({time_str}){tool_info}")
+                activity.update(f"[bold {self._cs['warning']}]~[/bold {self._cs['warning']}] Working ({time_str}){tool_info}")
             activity.display = True
         except Exception:
             pass
@@ -795,15 +801,15 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 health = getattr(session, 'health_status', 'healthy')
                 health_icon = ""
                 if session.active:
-                    health_icon = f" [{s['success']}]●[/{s['success']}]"
+                    health_icon = f" [{s['success']}]o[/{s['success']}]"
                 elif health == "warning":
-                    health_icon = f" [{s['warning']}]⚠[/{s['warning']}]"
+                    health_icon = f" [{s['warning']}]![/{s['warning']}]"
                 elif health == "unresponsive":
-                    health_icon = f" [{s['error']}]✗[/{s['error']}]"
+                    health_icon = f" [{s['error']}]x[/{s['error']}]"
 
                 tab_bar.update(
                     f"[bold {s['accent']}]{name}[/bold {s['accent']}]{health_icon}"
-                    f"  [{s['fg_dim']}]│[/{s['fg_dim']}]  "
+                    f"  [{s['fg_dim']}]|[/{s['fg_dim']}]  "
                     f"[dim]io-mcp[/dim]"
                 )
             else:
@@ -822,7 +828,11 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
     # ─── Speech log rendering ──────────────────────────────────────
 
     def _update_speech_log(self) -> None:
-        """Update the speech log display and agent activity indicator."""
+        """Update the speech log display and agent activity indicator.
+
+        When the agent is working (no active choices), also refreshes the
+        activity feed in the choices ListView to keep it current.
+        """
         log_widget = self.query_one("#speech-log", Vertical)
         log_widget.remove_children()
 
@@ -843,19 +853,32 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         if activity and session.speech_log:
             last = session.speech_log[-1].text
             truncated = last[:80] + ("..." if len(last) > 80 else "")
-            activity.update(f"[bold {self._cs['blue']}]▸[/bold {self._cs['blue']}] {truncated}")
+            activity.update(f"[bold {self._cs['blue']}]>[/bold {self._cs['blue']}] {truncated}")
             activity.display = True
         elif activity:
             activity.display = False
 
-        # Show last 5 speech entries
+        # If agent is NOT presenting choices, refresh the activity feed
+        # Rate limit: only update if enough time has passed (avoid flooding UI)
+        if not session.active and not self._in_settings:
+            import time as _time
+            now = _time.time()
+            last_feed = getattr(self, '_last_feed_update', 0)
+            if now - last_feed > 1.0:  # At most once per second
+                self._last_feed_update = now
+                self._show_activity_feed(session)
+            # Hide the small speech log — activity feed covers it
+            log_widget.display = False
+            return
+
+        # Show last 5 speech entries (when choices ARE displayed)
         recent = session.speech_log[-5:]
         if not recent:
             log_widget.display = False
             return
 
         for entry in recent:
-            label = Label(f"[dim]  │[/dim] {entry.text}", classes="speech-entry")
+            label = Label(f"[dim]  |[/dim] {entry.text}", classes="speech-entry")
             log_widget.mount(label)
         log_widget.display = True
 
@@ -1065,7 +1088,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         """Show choices with toggleable checkboxes. Returns list of selected items.
 
         Uses the same UI as present_choices but:
-        - Labels are prefixed with [ ] or [✓] to show checked state
+        - Labels are prefixed with [ ] or [x] to show checked state
         - Enter toggles the current item instead of selecting
         - A "Done" item at the end submits all checked items
         """
@@ -1073,14 +1096,14 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         checked = [False] * len(choices)
 
         # Add "Done" as the last choice
-        done_label = "✅ Done — submit selections"
+        done_label = ">> Done -- submit selections"
         augmented = list(choices) + [{"label": done_label, "summary": "Submit all checked items"}]
 
         def _make_labels():
             """Build choice labels with checkbox state."""
             result = []
             for i, c in enumerate(choices):
-                prefix = "✓" if checked[i] else "○"
+                prefix = "x" if checked[i] else " "
                 result.append({
                     "label": f"[{prefix}] {c.get('label', '')}",
                     "summary": c.get("summary", ""),
@@ -1098,8 +1121,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
             # Find which item was toggled
             for i, c in enumerate(choices):
-                check_label = f"[✓] {c.get('label', '')}"
-                uncheck_label = f"[○] {c.get('label', '')}"
+                check_label = f"[x] {c.get('label', '')}"
+                uncheck_label = f"[ ] {c.get('label', '')}"
                 if selected in (check_label, uncheck_label):
                     checked[i] = not checked[i]
                     state = "checked" if checked[i] else "unchecked"
@@ -1202,27 +1225,134 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         self._update_speech_log()
 
     def _show_waiting(self, label: str) -> None:
-        """Show waiting state after selection."""
-        self.query_one("#choices").display = False
+        """Show waiting state after selection, with activity feed filling the space."""
         self.query_one("#preamble").display = False
         self.query_one("#dwell-bar").display = False
         status = self.query_one("#status", Label)
         session = self._focused()
         session_name = session.name if session else ""
-        after_text = f"Selected: {label}" if self._demo else f"[{self._cs['success']}]✓[/{self._cs['success']}] [{session_name}] {label} [dim](u=undo)[/dim]"
+        after_text = f"Selected: {label}" if self._demo else f"[{self._cs['success']}]*[/{self._cs['success']}] [{session_name}] {label} [dim](u=undo)[/dim]"
         status.update(after_text)
         status.display = True
 
+        # Fill the choices area with activity feed
+        self._show_activity_feed(session)
+
     def _show_idle(self) -> None:
-        """Show idle state (no active choices, no agent connected)."""
-        self.query_one("#choices").display = False
+        """Show idle state with activity feed filling the space."""
         self.query_one("#preamble").display = False
         self.query_one("#dwell-bar").display = False
         self.query_one("#speech-log").display = False
         status = self.query_one("#status", Label)
-        status_text = "[dim]Ready — demo mode[/dim]" if self._demo else "[dim]Waiting for agent...[/dim]"
+        session = self._focused()
+
+        if session is None:
+            status_text = "[dim]Ready -- demo mode[/dim]" if self._demo else "[dim]Waiting for agent...[/dim]"
+            status.update(status_text)
+            status.display = True
+            self.query_one("#choices").display = False
+            return
+
+        if session.tool_call_count > 0:
+            status_text = f"[dim]{session.name} -- working...[/dim]"
+        else:
+            status_text = f"[{self._cs['accent']}]{session.name} connected[/{self._cs['accent']}]"
         status.update(status_text)
         status.display = True
+
+        # Fill the choices area with activity feed
+        self._show_activity_feed(session)
+
+    def _show_activity_feed(self, session) -> None:
+        """Populate the choices ListView with an activity feed for the session.
+
+        Shows recent speech log entries and session summary to fill empty space
+        when the agent is working without presenting choices.
+        """
+        try:
+            s = self._cs
+            list_view = self.query_one("#choices", ListView)
+            list_view.clear()
+
+            if session is None:
+                list_view.display = False
+                return
+
+            # Session summary header
+            summary = session.summary()
+            list_view.append(ChoiceItem(
+                f"[{s['accent']}]{session.name}[/{s['accent']}]",
+                summary,
+                index=-999, display_index=0,
+            ))
+
+            # Agent info (if registered)
+            if session.registered:
+                info_parts = []
+                if session.cwd:
+                    info_parts.append(f"cwd: {session.cwd}")
+                if session.hostname:
+                    info_parts.append(f"host: {session.hostname}")
+                if session.tmux_pane:
+                    info_parts.append(f"pane: {session.tmux_pane}")
+                if info_parts:
+                    list_view.append(ChoiceItem(
+                        f"[dim]Agent info[/dim]",
+                        "  ".join(info_parts),
+                        index=-998, display_index=1,
+                    ))
+
+            # Tool stats
+            if session.tool_call_count > 0:
+                import time
+                elapsed = time.time() - session.last_tool_call
+                if elapsed < 60:
+                    ago = f"{int(elapsed)}s ago"
+                elif elapsed < 3600:
+                    ago = f"{int(elapsed) // 60}m ago"
+                else:
+                    ago = f"{int(elapsed) // 3600}h ago"
+                list_view.append(ChoiceItem(
+                    f"[dim]{session.tool_call_count} tool calls[/dim]",
+                    f"Last: {session.last_tool_name} ({ago})" if session.last_tool_name else "",
+                    index=-997, display_index=2,
+                ))
+
+            # Separator
+            list_view.append(ChoiceItem(
+                f"[dim]--- Recent activity ---[/dim]", "",
+                index=-996, display_index=3,
+            ))
+
+            # Recent speech log entries (up to 20, most recent first)
+            recent = list(reversed(session.speech_log[-20:]))
+            if recent:
+                import time
+                now = time.time()
+                for i, entry in enumerate(recent):
+                    age = now - entry.timestamp
+                    if age < 60:
+                        age_str = f"{int(age)}s"
+                    elif age < 3600:
+                        age_str = f"{int(age) // 60}m"
+                    else:
+                        age_str = f"{int(age) // 3600}h"
+                    text = entry.text[:120] + ("..." if len(entry.text) > 120 else "")
+                    list_view.append(ChoiceItem(
+                        f"[dim]{age_str}[/dim]  {text}", "",
+                        index=-900 + i, display_index=4 + i,
+                    ))
+            else:
+                list_view.append(ChoiceItem(
+                    f"[dim]No activity yet[/dim]", "",
+                    index=-900, display_index=4,
+                ))
+
+            list_view.display = True
+            list_view.index = 0
+        except Exception:
+            # Guard against app not running or widget errors during shutdown
+            pass
 
     # ─── Speech with priority ─────────────────────────────────────
 
@@ -1508,29 +1638,46 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             self._exit_settings()
 
     def _request_compact(self) -> None:
-        """Request context compaction by returning instructions to the agent."""
+        """Request context compaction by sending /compact directly to the agent's tmux pane."""
         session = self._focused()
-        if not session or not session.active:
+        if not session:
             self._tts.speak_async("No active session to compact")
             return
 
+        # Need tmux pane to send the command
+        pane = session.tmux_pane
+        if not pane:
+            self._tts.speak_async("No tmux pane registered for this agent. Cannot send compact command.")
+            return
+
         self._tts.play_chime("select")
-        self._tts.speak_async("Compacting context")
+        self._tts.speak_async("Sending compact command to agent")
 
-        compact_instructions = (
-            "The user wants you to compact your context window. "
-            "To do this, you need to send /compact to your own Claude Code pane via tmux. "
-            "Steps:\n"
-            "1. Find your own tmux pane: run `tmux-cli list_panes` and find the pane with your Claude Code process\n"
-            "2. Send the compact command: `tmux send-keys -t %<your-pane-id> '/compact' Enter`\n"
-            "3. Wait a few seconds for compaction to complete\n"
-            "4. Then continue with present_choices() as normal\n\n"
-            "If tmux-cli is not available, tell the user to type /compact manually."
-        )
+        # Send /compact directly to the agent's tmux pane
+        import subprocess as _sp
+        try:
+            # Determine if remote or local
+            import socket
+            local_hostname = socket.gethostname()
+            is_remote = session.hostname and session.hostname != local_hostname
 
-        session.selection = {"selected": compact_instructions, "summary": "(compact context)"}
-        session.selection_event.set()
-        self._show_waiting("Compact context")
+            if is_remote:
+                cmd = ["ssh", "-o", "ConnectTimeout=3", session.hostname,
+                       "tmux", "send-keys", "-t", pane, "/compact", "Enter"]
+            else:
+                cmd = ["tmux", "send-keys", "-t", pane, "/compact", "Enter"]
+
+            _sp.Popen(cmd, stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+
+            # If the agent had active choices, cancel them so it can process /compact
+            if session.active:
+                session.selection = {"selected": "Context compaction requested — /compact sent to your pane.", "summary": "(compact context)"}
+                session.selection_event.set()
+                self._show_waiting("Compact context")
+            else:
+                self._tts.speak_async("Compact command sent. Agent will process it when ready.")
+        except Exception as e:
+            self._tts.speak_async(f"Failed to send compact command: {e}")
 
     def _restart_tui(self) -> None:
         """Restart the TUI backend process.
@@ -1834,7 +1981,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         # Select all / Deselect all toggle at top
         all_selected = all(self._multi_select_checked) if self._multi_select_checked else False
-        toggle_label = f"[{s['accent']}]□ Deselect all[/{s['accent']}]" if all_selected else f"[{s['accent']}]■ Select all[/{s['accent']}]"
+        toggle_label = f"[{s['accent']}][ ] Deselect all[/{s['accent']}]" if all_selected else f"[{s['accent']}][*] Select all[/{s['accent']}]"
         list_view.append(ChoiceItem(
             toggle_label, f"{'Deselect' if all_selected else 'Select'} all {total} items",
             index=-99, display_index=0,
@@ -1844,9 +1991,9 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         for i, c in enumerate(session.choices):
             is_checked = i < len(self._multi_select_checked) and self._multi_select_checked[i]
             if is_checked:
-                check = f"[{s['success']}]☑[/{s['success']}]"
+                check = f"[{s['success']}][x][/{s['success']}]"
             else:
-                check = f"[{s['fg_dim']}]☐[/{s['fg_dim']}]"
+                check = f"[{s['fg_dim']}][ ][/{s['fg_dim']}]"
             num = str(i + 1)
             pad = " " * (2 - len(num))
             label = f"{pad}{num}. {check}  {c.get('label', '')}"
@@ -2018,7 +2165,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         current_idx = 0
         for i, sess in enumerate(sessions):
-            indicator = f"[{s['success']}]●[/{s['success']}] " if sess.active else ""
+            indicator = f"[{s['success']}]o[/{s['success']}] " if sess.active else ""
             focused = " ◂" if sess.session_id == self.manager.active_session_id else ""
             label = f"{indicator}{sess.name}{focused}"
             summary = ""
@@ -2093,6 +2240,18 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         try:
             self.call_from_thread(self._update_tab_bar)
+        except Exception:
+            pass
+
+        # Update UI to show agent connected (replaces "Waiting for agent...")
+        try:
+            self.call_from_thread(self._show_idle)
+        except Exception:
+            pass
+
+        # Speak the connection
+        try:
+            self._tts.speak_async(f"{session.name} connected")
         except Exception:
             pass
 

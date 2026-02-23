@@ -77,7 +77,7 @@ class VoiceMixin:
         self.query_one("#choices").display = False
         self.query_one("#dwell-bar").display = False
         status = self.query_one("#status", Label)
-        status.update(f"[bold {self._cs['error']}]● REC[/bold {self._cs['error']}] Recording... [dim](space to stop)[/dim]")
+        status.update(f"[bold {self._cs['error']}]o REC[/bold {self._cs['error']}] Recording... [dim](space to stop)[/dim]")
         status.display = True
 
         # Find binaries

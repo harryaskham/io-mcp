@@ -71,19 +71,19 @@ class ViewsMixin:
 
             # Determine activity status
             if sess.active:
-                status_text = f"[{s['success']}]● choices[/{s['success']}]"
+                status_text = f"[{s['success']}]o choices[/{s['success']}]"
                 status_narr = "has choices"
             elif sess.voice_recording:
-                status_text = f"[{s['error']}]● recording[/{s['error']}]"
+                status_text = f"[{s['error']}]o recording[/{s['error']}]"
                 status_narr = "recording"
             elif health == "unresponsive":
-                status_text = f"[{s['error']}]✗ unresponsive[/{s['error']}]"
+                status_text = f"[{s['error']}]x unresponsive[/{s['error']}]"
                 status_narr = "unresponsive"
             elif health == "warning":
-                status_text = f"[{s['warning']}]⚠ stuck?[/{s['warning']}]"
+                status_text = f"[{s['warning']}]! stuck?[/{s['warning']}]"
                 status_narr = "may be stuck"
             else:
-                status_text = f"[{s['warning']}]◌ working[/{s['warning']}]"
+                status_text = f"[{s['warning']}]- working[/{s['warning']}]"
                 status_narr = "working"
 
             # Elapsed time
@@ -214,9 +214,9 @@ class ViewsMixin:
 
             # Type indicator
             if entry_type == "selection":
-                type_mark = f"[{s['success']}]✓[/{s['success']}]"
+                type_mark = f"[{s['success']}]*[/{s['success']}]"
             else:
-                type_mark = f"[{s['blue']}]▸[/{s['blue']}]"
+                type_mark = f"[{s['blue']}]>[/{s['blue']}]"
 
             label = f"{type_mark} [{s['fg_dim']}]{age}[/{s['fg_dim']}]  {display_text}"
             summary = detail if detail else ""
