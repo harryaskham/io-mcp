@@ -126,7 +126,7 @@ def _ensure_proxy_running(proxy_address: str, backend_port: int, dev: bool = Fal
         sys.exit(1)
 
     parts = proxy_address.split(":")
-    proxy_host = parts[0] if parts[0] else "0.0.0.0"
+    proxy_host = "0.0.0.0"  # Always bind all interfaces so remote agents can connect
     proxy_port = int(parts[1]) if len(parts) > 1 else DEFAULT_PROXY_PORT
 
     print(f"  Proxy: starting daemon on {proxy_host}:{proxy_port}...", flush=True)
