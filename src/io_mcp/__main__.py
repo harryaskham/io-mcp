@@ -68,6 +68,61 @@ def _kill_existing_backend() -> None:
                 os.kill(old_pid, signal.SIGKILL)
             except (ProcessLookupError, PermissionError):
                 pass
+
+
+def _force_kill_all() -> None:
+    """Force kill ALL io-mcp processes and free ports 8444/8446.
+
+    Used by --restart to ensure a clean slate.
+    """
+    import time
+
+    # Kill by PID files
+    for pidfile in [PID_FILE, PROXY_PID_FILE]:
+        try:
+            with open(pidfile, "r") as f:
+                pid = int(f.read().strip())
+            os.kill(pid, signal.SIGTERM)
+            time.sleep(0.2)
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+        except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError):
+            pass
+
+    # Kill by process name pattern
+    try:
+        subprocess.run(["pkill", "-f", "io_mcp.server"], timeout=3,
+                       capture_output=True)
+        subprocess.run(["pkill", "-f", "io_mcp server"], timeout=3,
+                       capture_output=True)
+    except Exception:
+        pass
+
+    # Kill anything on our ports
+    for port in [DEFAULT_PROXY_PORT, DEFAULT_BACKEND_PORT]:
+        try:
+            result = subprocess.run(["fuser", f"{port}/tcp"], timeout=3,
+                                    capture_output=True, text=True)
+            pids = result.stdout.strip().split()
+            for pid_str in pids:
+                try:
+                    os.kill(int(pid_str.strip()), signal.SIGKILL)
+                except (ValueError, ProcessLookupError, PermissionError):
+                    pass
+        except Exception:
+            pass
+
+    # Clean up PID files
+    for pidfile in [PID_FILE, PROXY_PID_FILE]:
+        try:
+            os.unlink(pidfile)
+        except OSError:
+            pass
+
+    time.sleep(0.5)
+    print("  Restart: killed all io-mcp processes", flush=True)
     except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError):
         pass
 
@@ -621,6 +676,8 @@ def main() -> None:
     parser.add_argument("--demo", action="store_true", help="Demo mode")
     parser.add_argument("--dev", action="store_true",
                         help="Dev mode: use 'uv run python -m io_mcp' for proxy subprocess")
+    parser.add_argument("--restart", action="store_true",
+                        help="Force kill all io-mcp processes before starting (cleans up stale ports)")
     parser.add_argument("--freeform-tts", choices=["api", "local"], default="local")
     parser.add_argument("--freeform-tts-speed", type=float, default=1.6, metavar="SPEED")
     parser.add_argument("--freeform-tts-delimiters", default=" .,;:!?")
@@ -682,6 +739,10 @@ def main() -> None:
                 time.sleep(0.3)
         threading.Thread(target=_demo_loop, daemon=True).start()
     else:
+        # --restart: force kill everything first
+        if args.restart:
+            _force_kill_all()
+
         _kill_existing_backend()
         _write_pid_file()
         atexit.register(_remove_pid_file)
