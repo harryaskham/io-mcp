@@ -68,6 +68,8 @@ def _kill_existing_backend() -> None:
                 os.kill(old_pid, signal.SIGKILL)
             except (ProcessLookupError, PermissionError):
                 pass
+    except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError):
+        pass
 
 
 def _force_kill_all() -> None:
