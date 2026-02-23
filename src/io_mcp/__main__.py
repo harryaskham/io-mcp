@@ -125,8 +125,6 @@ def _force_kill_all() -> None:
 
     time.sleep(0.5)
     print("  Restart: killed all io-mcp processes", flush=True)
-    except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError):
-        pass
 
 
 def _acquire_wake_lock() -> None:
