@@ -55,6 +55,7 @@ EXTRA_OPTIONS = [
     {"label": "New agent", "summary": "Spawn a new Claude Code agent (local or remote)"},
     {"label": "Dashboard", "summary": "Overview of all active agents"},
     {"label": "Settings", "summary": "Open settings menu"},
+    {"label": "Restart TUI", "summary": "Restart the TUI backend — agents stay connected via proxy"},
     {"label": "Record response", "summary": "Speak your reply (voice input)"},
 ]
 

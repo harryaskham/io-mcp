@@ -9,6 +9,7 @@ import asyncio
 import os
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from typing import Optional
@@ -1024,6 +1025,25 @@ class IoMcpApp(App):
         session.selection = {"selected": compact_instructions, "summary": "(compact context)"}
         session.selection_event.set()
         self._show_waiting("Compact context")
+
+    def _restart_tui(self) -> None:
+        """Restart the TUI backend process.
+
+        Uses os.execv to replace the current process with a fresh one.
+        The proxy stays alive so agent MCP connections are preserved.
+        Strips --restart from argv since it's a one-time cleanup flag.
+        """
+        self._tts.speak_async("Restarting TUI in 2 seconds")
+
+        import time as _time
+
+        def _do_restart():
+            _time.sleep(2.0)
+            # Strip one-time flags that shouldn't persist across restarts
+            argv = [a for a in sys.argv if a != "--restart"]
+            os.execv(sys.executable, [sys.executable] + argv)
+
+        threading.Thread(target=_do_restart, daemon=True).start()
 
     def _enter_worktree_mode(self) -> None:
         """Start worktree creation flow.
@@ -2979,6 +2999,8 @@ class IoMcpApp(App):
             self.action_dashboard()
         elif label == "Settings":
             self._enter_settings()
+        elif label == "Restart TUI":
+            self._restart_tui()
         elif label == "Notifications":
             self._show_notifications()
         elif label == "History":
