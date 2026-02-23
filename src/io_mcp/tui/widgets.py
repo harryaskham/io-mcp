@@ -47,6 +47,7 @@ EXTRA_OPTIONS = [
     {"label": "Multi select", "summary": "Toggle multiple choices then confirm — do several things at once"},
     {"label": "Branch to worktree", "summary": "Create a git worktree for isolated work on a new branch"},
     {"label": "Compact context", "summary": "Compact the agent's context window to free up space"},
+    {"label": "Pane view", "summary": "Show live tmux pane output for the focused agent"},
     {"label": "History", "summary": "Review past selections for this session"},
     {"label": "Notifications", "summary": "Check Android notifications"},
     {"label": "Switch tab", "summary": "Scroll through agent tabs and select one"},

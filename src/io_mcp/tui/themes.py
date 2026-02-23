@@ -159,6 +159,15 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
         padding: 1 0;
     }}
 
+    #pane-view {{
+        margin: 0 1;
+        height: 1fr;
+        border: solid {s['border']};
+        background: {s['bg_alt']};
+        color: {s['fg']};
+        display: none;
+    }}
+
     ChoiceItem {{
         padding: 0 2;
         height: auto;

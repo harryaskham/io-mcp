@@ -22,7 +22,7 @@ from textual.events import MouseScrollDown, MouseScrollUp
 from textual.reactive import reactive
 from textual.timer import Timer
 from textual.widget import Widget
-from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, Static
+from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, RichLog, Static
 
 from ..session import Session, SessionManager, SpeechEntry, HistoryEntry
 from ..settings import Settings
@@ -67,6 +67,7 @@ class IoMcpApp(App):
         Binding("x", "quick_actions", "Quick", show=False),
         Binding("c", "toggle_conversation", "Chat", show=False),
         Binding("d", "dashboard", "Dashboard", show=False),
+        Binding("v", "pane_view", "Pane", show=False),
         Binding("r", "hot_reload", "Reload", show=False),
         Binding("1", "pick_1", "", show=False),
         Binding("2", "pick_2", "", show=False),
@@ -112,6 +113,7 @@ class IoMcpApp(App):
         quick_key = kb.get("quickActions", "x")
         convo_key = kb.get("conversationMode", "c")
         dashboard_key = kb.get("dashboard", "d")
+        pane_key = kb.get("paneView", "v")
         log_key = kb.get("agentLog", "g")
         help_key = kb.get("help", "question_mark")
         reload_key = kb.get("hotReload", "r")
@@ -136,6 +138,7 @@ class IoMcpApp(App):
             Binding(quick_key, "quick_actions", "Quick", show=False),
             Binding(convo_key, "toggle_conversation", "Chat", show=False),
             Binding(dashboard_key, "dashboard", "Dashboard", show=False),
+            Binding(pane_key, "pane_view", "Pane", show=False),
             Binding(log_key, "agent_log", "Log", show=False),
             Binding(help_key, "show_help", "Help", show=False),
             Binding(reload_key, "hot_reload", "Reload", show=False),
@@ -275,6 +278,7 @@ class IoMcpApp(App):
         yield Label("", id="preamble")
         yield Vertical(id="speech-log")
         yield ListView(id="choices")
+        yield RichLog(id="pane-view", markup=False, highlight=False, auto_scroll=True, max_lines=200)
         yield Input(placeholder="Type your reply, press Enter to send, Escape to cancel", id="freeform-input")
         yield Input(placeholder="Filter choices...", id="filter-input")
         yield DwellBar(id="dwell-bar")
@@ -288,6 +292,7 @@ class IoMcpApp(App):
         self.query_one("#choices").display = False
         self.query_one("#dwell-bar").display = False
         self.query_one("#speech-log").display = False
+        self.query_one("#pane-view").display = False
 
         # Start periodic session cleanup (every 60 seconds, 5 min timeout)
         self._cleanup_timer = self.set_interval(60, self._cleanup_stale_sessions)
@@ -2292,6 +2297,15 @@ class IoMcpApp(App):
         self._help_mode = False
         self._tab_picker_mode = False
 
+        # Clean up pane viewer if active
+        if getattr(self, '_pane_viewer_mode', False):
+            self._pane_viewer_mode = False
+            self._stop_pane_refresh()
+            try:
+                self.query_one("#pane-view", RichLog).display = False
+            except Exception:
+                pass
+
         # Guard: prevent the Enter keypress that triggered "close" from
         # also firing _do_select on the freshly-restored choice list.
         self._settings_just_closed = True
@@ -3232,6 +3246,8 @@ class IoMcpApp(App):
             self._enter_worktree_mode()
         elif label == "Compact context":
             self._request_compact()
+        elif label == "Pane view":
+            self.action_pane_view()
         elif label == "Switch tab":
             self._enter_tab_picker()
         elif label == "Fast toggle":
@@ -3644,6 +3660,147 @@ class IoMcpApp(App):
         list_view.focus()
 
         self._tts.speak_async(f"Agent log. {count} entries. Most recent shown.")
+
+    # ─── Pane viewer ──────────────────────────────────────────────
+
+    @_safe_action
+    def action_pane_view(self) -> None:
+        """Show live tmux pane output for the focused agent.
+
+        Uses tmux capture-pane locally, or ssh+tmux for remote agents.
+        Auto-refreshes every 2 seconds. Press v or Escape to close.
+        """
+        # Toggle off
+        if getattr(self, '_pane_viewer_mode', False):
+            self._exit_pane_viewer()
+            return
+
+        session = self._focused()
+        if session and (session.input_mode or session.voice_recording):
+            return
+        if self._in_settings or self._filter_mode:
+            return
+
+        if not session or not session.tmux_pane:
+            self._tts.speak_async("No tmux pane registered for this agent")
+            return
+
+        self._tts.stop()
+        self._in_settings = True
+        self._pane_viewer_mode = True
+        self._setting_edit_mode = False
+        self._spawn_options = None
+        self._quick_action_options = None
+        self._dashboard_mode = False
+        self._log_viewer_mode = False
+
+        s = self._cs
+        location = session.hostname if session.hostname else "local"
+        preamble_widget = self.query_one("#preamble", Label)
+        preamble_widget.update(
+            f"[bold {s['accent']}]Pane View[/bold {s['accent']}] — "
+            f"[{s['fg_dim']}]{session.name} · {location} · {session.tmux_pane}[/{s['fg_dim']}] "
+            f"[dim](v/esc to close)[/dim]"
+        )
+        preamble_widget.display = True
+
+        # Hide choices, show pane view
+        self.query_one("#choices").display = False
+        pane_log = self.query_one("#pane-view", RichLog)
+        pane_log.clear()
+        pane_log.display = True
+
+        # Initial capture + start polling
+        self._refresh_pane_view()
+        self._pane_refresh_timer = self.set_interval(2.0, self._refresh_pane_view)
+
+        self._tts.speak_async(f"Pane view for {session.name}")
+
+    def _capture_tmux_pane(self, session: Session) -> str | None:
+        """Capture tmux pane content. Returns text or None on failure."""
+        import socket
+
+        pane = session.tmux_pane
+        if not pane:
+            return None
+
+        # Determine if local or remote
+        local_hostname = socket.gethostname()
+        is_remote = (
+            session.hostname
+            and session.hostname != local_hostname
+            and session.hostname != "localhost"
+            and session.hostname != "127.0.0.1"
+        )
+
+        tmux_args = ["tmux", "capture-pane", "-p", "-t", pane, "-S", "-100"]
+
+        if is_remote:
+            cmd = ["ssh", "-o", "ConnectTimeout=3", session.hostname] + tmux_args
+        else:
+            cmd = tmux_args
+
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                return result.stdout
+            return None
+        except Exception:
+            return None
+
+    def _refresh_pane_view(self) -> None:
+        """Refresh the pane view with current tmux capture-pane output."""
+        if not getattr(self, '_pane_viewer_mode', False):
+            return
+
+        session = self._focused()
+        if not session:
+            return
+
+        def _capture_and_update():
+            content = self._capture_tmux_pane(session)
+            if content is not None:
+                import re
+                # Strip ANSI escape codes
+                clean = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', content)
+                clean = re.sub(r'\x1b\].*?\x07', '', clean)  # OSC sequences
+                clean = re.sub(r'\x1b\[[\?0-9;]*[a-zA-Z]', '', clean)  # CSI sequences
+            else:
+                clean = "[dim]Could not capture pane — tmux may not be running[/dim]"
+
+            def _update():
+                if not getattr(self, '_pane_viewer_mode', False):
+                    return
+                try:
+                    pane_log = self.query_one("#pane-view", RichLog)
+                    pane_log.clear()
+                    pane_log.write(clean)
+                except Exception:
+                    pass
+
+            try:
+                self.call_from_thread(_update)
+            except Exception:
+                pass
+
+        threading.Thread(target=_capture_and_update, daemon=True).start()
+
+    def _stop_pane_refresh(self) -> None:
+        """Stop the pane refresh timer."""
+        timer = getattr(self, '_pane_refresh_timer', None)
+        if timer is not None:
+            timer.stop()
+            self._pane_refresh_timer = None
+
+    def _exit_pane_viewer(self) -> None:
+        """Exit pane viewer and restore normal view."""
+        self._pane_viewer_mode = False
+        self._stop_pane_refresh()
+        try:
+            self.query_one("#pane-view", RichLog).display = False
+        except Exception:
+            pass
+        self._exit_settings()
 
     @_safe_action
     def action_show_help(self) -> None:
