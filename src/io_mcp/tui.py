@@ -42,8 +42,8 @@ COLOR_SCHEMES: dict[str, dict[str, str]] = {
     "nord": {
         "bg": "#2e3440",
         "bg_alt": "#3b4252",
-        "fg": "#d8dee9",
-        "fg_dim": "#4c566a",
+        "fg": "#eceff4",
+        "fg_dim": "#616e88",
         "accent": "#88c0d0",
         "success": "#a3be8c",
         "warning": "#ebcb8b",
@@ -127,19 +127,21 @@ def _build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
         color: {s['accent']};
         background: {s['bg_alt']};
         padding: 0 1;
+        border-bottom: solid {s['border']};
     }}
 
     #preamble {{
         margin: 1 2 0 2;
-        padding: 0 1;
+        padding: 1 1;
         color: {s['success']};
         width: 1fr;
         text-style: bold;
+        border-bottom: solid {s['border']};
     }}
 
     #status {{
-        margin: 1 2 0 2;
-        padding: 0 1;
+        margin: 0 2 0 2;
+        padding: 1 1;
         color: {s['warning']};
         width: 1fr;
     }}
@@ -158,7 +160,8 @@ def _build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
         height: auto;
         max-height: 5;
         padding: 0 1;
-        border-top: hkey {s['border']};
+        border-top: solid {s['border']};
+        border-bottom: solid {s['border']};
     }}
 
     .speech-entry {{
@@ -171,6 +174,7 @@ def _build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
         margin: 0 1;
         height: 1fr;
         overflow-x: hidden;
+        padding: 1 0;
     }}
 
     ChoiceItem {{
