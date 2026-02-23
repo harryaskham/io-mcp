@@ -474,6 +474,170 @@ class TestSessionSummaryAndTimeline:
         assert s.last_tool_name == ""
 
 
+class TestSessionPersistence:
+    """Tests for session save/load and activity restoration."""
+
+    def test_restore_activity_speech_log(self):
+        """Restoring activity brings back speech log."""
+        s = Session(session_id="test-1", name="Agent 1")
+        data = {
+            "speech_log": [
+                {"text": "Hello", "timestamp": 1000.0},
+                {"text": "World", "timestamp": 1001.0},
+            ],
+        }
+        s.restore_activity(data)
+        assert len(s.speech_log) == 2
+        assert s.speech_log[0].text == "Hello"
+        assert s.speech_log[0].timestamp == 1000.0
+        assert s.speech_log[0].played is True  # old speech marked as played
+        assert s.speech_log[1].text == "World"
+
+    def test_restore_activity_history(self):
+        """Restoring activity brings back selection history."""
+        s = Session(session_id="test-1", name="Agent 1")
+        data = {
+            "history": [
+                {"label": "Fix bug", "summary": "Fixed it", "preamble": "Choose", "timestamp": 2000.0},
+            ],
+        }
+        s.restore_activity(data)
+        assert len(s.history) == 1
+        assert s.history[0].label == "Fix bug"
+        assert s.history[0].summary == "Fixed it"
+        assert s.history[0].timestamp == 2000.0
+
+    def test_restore_activity_tool_stats(self):
+        """Restoring activity brings back tool call stats."""
+        s = Session(session_id="test-1", name="Agent 1")
+        data = {
+            "tool_call_count": 42,
+            "last_tool_name": "speak_async",
+            "last_tool_call": 3000.0,
+        }
+        s.restore_activity(data)
+        assert s.tool_call_count == 42
+        assert s.last_tool_name == "speak_async"
+        assert s.last_tool_call == 3000.0
+
+    def test_restore_activity_empty_data(self):
+        """Restoring with empty data doesn't crash."""
+        s = Session(session_id="test-1", name="Agent 1")
+        s.restore_activity({})
+        assert s.tool_call_count == 0
+        assert s.last_tool_name == ""
+        assert len(s.speech_log) == 0
+        assert len(s.history) == 0
+
+    def test_restore_activity_additive(self):
+        """Restoring activity is additive to existing data."""
+        s = Session(session_id="test-1", name="Agent 1")
+        s.speech_log.append(SpeechEntry(text="Existing"))
+        s.tool_call_count = 5
+
+        data = {
+            "speech_log": [{"text": "Restored", "timestamp": 1000.0}],
+            "tool_call_count": 10,
+        }
+        s.restore_activity(data)
+        # Speech log is additive
+        assert len(s.speech_log) == 2
+        assert s.speech_log[0].text == "Existing"
+        assert s.speech_log[1].text == "Restored"
+        # Tool count is overwritten (not added)
+        assert s.tool_call_count == 10
+
+    def test_save_includes_activity(self, tmp_path):
+        """save_registered persists speech log, history, and tool stats."""
+        m = SessionManager()
+        # Override persist file
+        m.PERSIST_FILE = str(tmp_path / "sessions.json")
+
+        s, _ = m.get_or_create("test-1")
+        s.registered = True
+        s.name = "Test Agent"
+        s.cwd = "/tmp/test"
+        s.speech_log.append(SpeechEntry(text="Hello"))
+        s.history.append(HistoryEntry(label="Fix", summary="Fixed", preamble="Choose"))
+        s.tool_call_count = 7
+        s.last_tool_name = "speak"
+
+        m.save_registered()
+
+        # Load and verify
+        loaded = m.load_registered()
+        assert len(loaded) == 1
+        data = loaded[0]
+        assert data["name"] == "Test Agent"
+        assert len(data["speech_log"]) == 1
+        assert data["speech_log"][0]["text"] == "Hello"
+        assert len(data["history"]) == 1
+        assert data["history"][0]["label"] == "Fix"
+        assert data["tool_call_count"] == 7
+        assert data["last_tool_name"] == "speak"
+
+    def test_save_limits_speech_log(self, tmp_path):
+        """save_registered only saves last 100 speech entries."""
+        m = SessionManager()
+        m.PERSIST_FILE = str(tmp_path / "sessions.json")
+
+        s, _ = m.get_or_create("test-1")
+        s.registered = True
+        s.name = "Verbose Agent"
+        # Add 200 speech entries
+        for i in range(200):
+            s.speech_log.append(SpeechEntry(text=f"Speech {i}"))
+
+        m.save_registered()
+        loaded = m.load_registered()
+        assert len(loaded[0]["speech_log"]) == 100
+        # Should be the last 100
+        assert loaded[0]["speech_log"][0]["text"] == "Speech 100"
+
+    def test_roundtrip_save_restore(self, tmp_path):
+        """Full roundtrip: save → load → restore preserves data."""
+        m = SessionManager()
+        m.PERSIST_FILE = str(tmp_path / "sessions.json")
+
+        # Create and populate a session
+        s, _ = m.get_or_create("test-1")
+        s.registered = True
+        s.name = "My Agent"
+        s.cwd = "/home/user/project"
+        s.speech_log.append(SpeechEntry(text="Working on it", timestamp=5000.0))
+        s.history.append(HistoryEntry(
+            label="Build", summary="Built the app", preamble="What next?",
+            timestamp=5001.0,
+        ))
+        s.tool_call_count = 15
+        s.last_tool_name = "present_choices"
+
+        # Save
+        m.save_registered()
+
+        # Create a new session (simulates agent reconnecting)
+        m2 = SessionManager()
+        m2.PERSIST_FILE = str(tmp_path / "sessions.json")
+        s2, _ = m2.get_or_create("new-session-id")
+        s2.name = "My Agent"
+        s2.cwd = "/home/user/project"
+
+        # Load and restore
+        persisted = m2.load_registered()
+        for saved in persisted:
+            if saved.get("name") == s2.name:
+                s2.restore_activity(saved)
+                break
+
+        # Verify restoration
+        assert len(s2.speech_log) == 1
+        assert s2.speech_log[0].text == "Working on it"
+        assert len(s2.history) == 1
+        assert s2.history[0].label == "Build"
+        assert s2.tool_call_count == 15
+        assert s2.last_tool_name == "present_choices"
+
+
 class TestFrontendEvents:
     """Tests for Frontend API event system."""
 

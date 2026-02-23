@@ -561,6 +561,20 @@ def _create_tool_dispatcher(app: IoMcpApp, append_options: list[str],
         except Exception:
             pass
 
+        # Restore persisted activity data (speech log, history, tool stats)
+        # Match by name or cwd to find the right persisted session
+        try:
+            persisted = frontend.manager.load_registered()
+            for saved in persisted:
+                # Match by name (primary) or cwd (fallback)
+                name_match = saved.get("name") == session.name and session.name
+                cwd_match = saved.get("cwd") == session.cwd and session.cwd
+                if name_match or cwd_match:
+                    session.restore_activity(saved)
+                    break
+        except Exception:
+            pass
+
         return json.dumps({
             "status": "registered",
             "session_id": session.session_id,

@@ -115,6 +115,45 @@ class Session:
         lines = "\n".join(f"- {m}" for m in drained)
         return f"\n\n--- Queued User Messages ---\n{lines}"
 
+    def restore_activity(self, data: dict) -> None:
+        """Restore persisted activity data onto this session.
+
+        Called when an agent re-registers after a restart. Restores
+        speech log, history, and tool stats from the persisted data
+        so dashboard/timeline show continuous history.
+
+        Args:
+            data: Dict from load_registered() with speech_log, history,
+                  tool_call_count, last_tool_name, last_tool_call keys.
+        """
+        # Restore speech log
+        saved_speech = data.get("speech_log", [])
+        if saved_speech:
+            for entry in saved_speech:
+                self.speech_log.append(SpeechEntry(
+                    text=entry.get("text", ""),
+                    timestamp=entry.get("timestamp", time.time()),
+                    played=True,  # don't replay old speech
+                ))
+
+        # Restore history
+        saved_history = data.get("history", [])
+        if saved_history:
+            for entry in saved_history:
+                self.history.append(HistoryEntry(
+                    label=entry.get("label", ""),
+                    summary=entry.get("summary", ""),
+                    preamble=entry.get("preamble", ""),
+                    timestamp=entry.get("timestamp", time.time()),
+                ))
+
+        # Restore tool stats
+        self.tool_call_count = data.get("tool_call_count", 0)
+        self.last_tool_name = data.get("last_tool_name", "")
+        saved_last_call = data.get("last_tool_call", 0)
+        if saved_last_call > 0:
+            self.last_tool_call = saved_last_call
+
     def summary(self) -> str:
         """Build a concise activity summary for this session.
 
@@ -432,11 +471,14 @@ class SessionManager:
     )
 
     def save_registered(self) -> None:
-        """Persist registered session metadata to disk.
+        """Persist registered session metadata and activity to disk.
 
-        Only saves sessions that have called register_session().
-        Saved data: name, cwd, hostname, tmux_session, tmux_pane,
-        voice_override, emotion_override, agent_metadata.
+        Saves sessions that have called register_session(), including:
+        - Registration metadata (name, cwd, hostname, tmux info)
+        - Speech log (last 100 entries: text + timestamp)
+        - Selection history (all entries: label, summary, preamble, timestamp)
+        - Tool call stats (count, last tool name)
+        - TTS overrides (voice, emotion)
         """
         import json
 
@@ -445,6 +487,23 @@ class SessionManager:
             for sid in self.session_order:
                 session = self.sessions.get(sid)
                 if session and session.registered:
+                    # Speech log: save last 100 entries (text + timestamp only)
+                    speech = [
+                        {"text": s.text, "timestamp": s.timestamp}
+                        for s in (session.speech_log or [])[-100:]
+                    ]
+
+                    # History: save all entries
+                    history = [
+                        {
+                            "label": h.label,
+                            "summary": h.summary,
+                            "preamble": h.preamble,
+                            "timestamp": h.timestamp,
+                        }
+                        for h in (session.history or [])
+                    ]
+
                     registered.append({
                         "name": session.name,
                         "cwd": session.cwd,
@@ -454,6 +513,12 @@ class SessionManager:
                         "voice_override": session.voice_override,
                         "emotion_override": session.emotion_override,
                         "agent_metadata": session.agent_metadata,
+                        # Activity data
+                        "speech_log": speech,
+                        "history": history,
+                        "tool_call_count": session.tool_call_count,
+                        "last_tool_name": session.last_tool_name,
+                        "last_tool_call": session.last_tool_call,
                     })
 
         try:
@@ -465,10 +530,18 @@ class SessionManager:
             pass
 
     def load_registered(self) -> list[dict]:
-        """Load persisted session metadata from disk.
+        """Load persisted session metadata and activity from disk.
 
-        Returns list of session metadata dicts. Does NOT create sessions —
-        that happens when agents reconnect and re-register.
+        Returns list of session metadata dicts including speech log,
+        history, and tool stats. Does NOT create sessions — that happens
+        when agents reconnect and re-register.
+
+        Each dict contains:
+            name, cwd, hostname, tmux_session, tmux_pane,
+            voice_override, emotion_override, agent_metadata,
+            speech_log (list of {text, timestamp}),
+            history (list of {label, summary, preamble, timestamp}),
+            tool_call_count, last_tool_name, last_tool_call
         """
         import json
 
