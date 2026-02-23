@@ -785,8 +785,6 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             last_text = ""
             if session.speech_log:
                 last_text = session.speech_log[-1].text
-                if len(last_text) > 60:
-                    last_text = last_text[:60] + "..."
             if last_text:
                 activity.update(f"[bold {self._cs['warning']}]~[/bold {self._cs['warning']}] Working ({time_str}){tool_info} -- {last_text}")
             else:
@@ -872,8 +870,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         # Update agent activity line (most recent speech, truncated)
         if activity and session.speech_log:
             last = session.speech_log[-1].text
-            truncated = last[:80] + ("..." if len(last) > 80 else "")
-            activity.update(f"[bold {self._cs['blue']}]>[/bold {self._cs['blue']}] {truncated}")
+            activity.update(f"[bold {self._cs['blue']}]>[/bold {self._cs['blue']}] {last}")
             activity.display = True
         elif activity:
             activity.display = False
@@ -1389,9 +1386,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                         age_str = f"{int(age) // 60}m"
                     else:
                         age_str = f"{int(age) // 3600}h"
-                    text = entry.text[:120] + ("..." if len(entry.text) > 120 else "")
                     list_view.append(ChoiceItem(
-                        f"[dim]{age_str}[/dim]  {text}", "",
+                        f"[dim]{age_str}[/dim]  {entry.text}", "",
                         index=-900 + i, display_index=di,
                     ))
                     di += 1

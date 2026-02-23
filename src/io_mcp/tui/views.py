@@ -116,15 +116,11 @@ class ViewsMixin:
             # Smart summary
             try:
                 summary_text = sess.summary()
-                if len(summary_text) > 80:
-                    summary_text = summary_text[:80] + "..."
             except Exception:
                 summary_text = ""
             if not summary_text:
                 if sess.speech_log:
                     summary_text = sess.speech_log[-1].text
-                    if len(summary_text) > 50:
-                        summary_text = summary_text[:50] + "..."
                 else:
                     summary_text = "[dim]no activity[/dim]"
 
@@ -209,8 +205,7 @@ class ViewsMixin:
             text = entry.get("text", "")
             detail = entry.get("detail", "")
 
-            # Truncate text for display
-            display_text = text[:120] + ("..." if len(text) > 120 else "")
+            display_text = text
 
             # Type indicator
             if entry_type == "selection":

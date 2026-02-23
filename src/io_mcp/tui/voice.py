@@ -12,7 +12,7 @@ import threading
 import time
 from typing import Optional, TYPE_CHECKING
 
-from textual.widgets import Input, Label
+from textual.widgets import Input, Label, ListView
 
 from .widgets import _safe_action
 
