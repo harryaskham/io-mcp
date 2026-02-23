@@ -358,6 +358,9 @@ class IoMcpApp(App):
     def _update_daemon_status(self) -> None:
         """Check proxy/backend/API health and update the status bar.
 
+        Shows: proxy/backend/api status dots, session count, health
+        summary, notification channel count, and TTS queue info.
+
         Runs health checks in a background thread to avoid blocking the TUI.
         """
         def _check():
@@ -392,22 +395,51 @@ class IoMcpApp(App):
             except Exception:
                 pass
 
-            # Session count
-            session_count = len(self.manager.sessions) if hasattr(self.manager, 'sessions') else 0
+            # Session count and health summary
+            sessions = self.manager.all_sessions() if hasattr(self.manager, 'all_sessions') else []
+            session_count = len(sessions)
+            warning_count = sum(1 for s in sessions if getattr(s, 'health_status', 'healthy') == 'warning')
+            unresponsive_count = sum(1 for s in sessions if getattr(s, 'health_status', 'healthy') == 'unresponsive')
+            choices_count = sum(1 for s in sessions if s.active)
 
-            # Update UI from main thread
+            # Notification info
+            notif_channels = 0
+            notif_enabled = False
+            try:
+                notif_channels = self._notifier.channel_count
+                notif_enabled = self._notifier.enabled
+            except Exception:
+                pass
+
+            # Build status text
             s = self._cs
 
             def _dot(ok: bool) -> str:
                 color = s['success'] if ok else s['error']
                 return f"[{color}]●[/{color}]"
 
-            status_text = (
-                f"{_dot(proxy_ok)} proxy  "
-                f"{_dot(backend_ok)} backend  "
-                f"{_dot(api_ok)} api  "
-                f"[dim]│[/dim] [dim]{session_count} session{'s' if session_count != 1 else ''}[/dim]"
-            )
+            parts = [
+                f"{_dot(proxy_ok)} proxy",
+                f"{_dot(backend_ok)} backend",
+                f"{_dot(api_ok)} api",
+            ]
+
+            # Session info
+            session_parts = [f"{session_count} session{'s' if session_count != 1 else ''}"]
+            if choices_count > 0:
+                session_parts.append(f"[{s['success']}]{choices_count} waiting[/{s['success']}]")
+            if warning_count > 0:
+                session_parts.append(f"[{s['warning']}]{warning_count} warn[/{s['warning']}]")
+            if unresponsive_count > 0:
+                session_parts.append(f"[{s['error']}]{unresponsive_count} dead[/{s['error']}]")
+
+            parts.append("[dim]│[/dim] [dim]" + " ".join(session_parts) + "[/dim]")
+
+            # Notification channels
+            if notif_enabled and notif_channels > 0:
+                parts.append(f"[dim]│[/dim] [{s['purple']}]{notif_channels} notif[/{s['purple']}]")
+
+            status_text = "  ".join(parts)
 
             try:
                 self.call_from_thread(

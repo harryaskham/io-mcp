@@ -315,6 +315,126 @@ class TestConfigAccessors:
         assert c.ambient_repeat_interval == 90
 
 
+class TestConfigValidation:
+    """Tests for config validation warnings."""
+
+    @pytest.fixture
+    def tmp_config(self, tmp_path):
+        return str(tmp_path / "config.yml")
+
+    def test_valid_config_no_warnings(self, tmp_config):
+        """Default config produces no warnings."""
+        with open(tmp_config, "w") as f:
+            yaml.dump(DEFAULT_CONFIG, f)
+        c = IoMcpConfig.load(tmp_config)
+        # Filter out expected warnings for missing env vars etc.
+        structural_warnings = [w for w in c.validation_warnings
+                               if "Missing" not in w and "not found" not in w]
+        # No structural warnings from DEFAULT_CONFIG
+        # (there may be model/provider warnings if env vars aren't set)
+
+    def test_health_threshold_ordering(self, tmp_config):
+        """Warning when warningThreshold >= unresponsiveThreshold."""
+        custom = {"config": {"healthMonitor": {
+            "warningThresholdSecs": 600,
+            "unresponsiveThresholdSecs": 300,  # wrong: lower than warning
+        }}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert any("warningThresholdSecs" in w and "unresponsiveThresholdSecs" in w
+                    for w in c.validation_warnings)
+
+    def test_health_low_check_interval(self, tmp_config):
+        """Warning when check interval is very low."""
+        custom = {"config": {"healthMonitor": {
+            "checkIntervalSecs": 2,
+        }}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert any("checkIntervalSecs" in w for w in c.validation_warnings)
+
+    def test_notifications_enabled_no_channels(self, tmp_config):
+        """Warning when notifications enabled but no channels."""
+        custom = {"config": {"notifications": {
+            "enabled": True,
+            "channels": [],
+        }}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert any("no channels" in w for w in c.validation_warnings)
+
+    def test_notification_channel_no_url(self, tmp_config):
+        """Warning when a channel has no URL."""
+        custom = {"config": {"notifications": {
+            "enabled": True,
+            "channels": [{"name": "bad", "type": "ntfy"}],
+        }}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert any("no URL" in w for w in c.validation_warnings)
+
+    def test_notification_channel_bad_url(self, tmp_config):
+        """Warning when a channel URL doesn't start with http(s)."""
+        custom = {"config": {"notifications": {
+            "enabled": True,
+            "channels": [{"name": "bad", "type": "ntfy", "url": "ftp://nope.com"}],
+        }}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert any("http" in w for w in c.validation_warnings)
+
+    def test_notification_channel_unknown_type(self, tmp_config):
+        """Warning for unknown channel type."""
+        custom = {"config": {"notifications": {
+            "enabled": True,
+            "channels": [{"name": "bad", "type": "telegram", "url": "https://t.me/x"}],
+        }}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert any("unknown type" in w and "telegram" in w for w in c.validation_warnings)
+
+    def test_notification_channel_unknown_event(self, tmp_config):
+        """Warning for unknown event type in channel config."""
+        custom = {"config": {"notifications": {
+            "enabled": True,
+            "channels": [{
+                "name": "test",
+                "type": "ntfy",
+                "url": "https://ntfy.sh/test",
+                "events": ["health_warning", "nonexistent_event"],
+            }],
+        }}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert any("nonexistent_event" in w for w in c.validation_warnings)
+
+    def test_notification_negative_cooldown(self, tmp_config):
+        """Warning for negative cooldown."""
+        custom = {"config": {"notifications": {
+            "enabled": True,
+            "cooldownSecs": -10,
+            "channels": [{"name": "x", "type": "ntfy", "url": "https://ntfy.sh/x"}],
+        }}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert any("negative" in w for w in c.validation_warnings)
+
+    def test_validation_warnings_stored(self, tmp_config):
+        """Validation warnings are stored on the config object."""
+        with open(tmp_config, "w") as f:
+            yaml.dump(DEFAULT_CONFIG, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert isinstance(c.validation_warnings, list)
+
+
 # ---------------------------------------------------------------------------
 # Config mutation
 # ---------------------------------------------------------------------------

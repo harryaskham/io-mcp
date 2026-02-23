@@ -244,6 +244,9 @@ class IoMcpConfig:
     config_path: str = DEFAULT_CONFIG_FILE
     """Path to the config file."""
 
+    validation_warnings: list[str] = field(default_factory=list)
+    """Warnings from the last validation run."""
+
     @classmethod
     def load(cls, config_path: Optional[str] = None) -> "IoMcpConfig":
         """Load config from file, creating with defaults if not found.
@@ -336,6 +339,71 @@ class IoMcpConfig:
         speed = self.runtime.get("tts", {}).get("speed", 1.0)
         if not isinstance(speed, (int, float)) or speed < 0.1 or speed > 5.0:
             warnings.append(f"TTS speed {speed} is out of range (0.1-5.0)")
+
+        # ── Health monitor validation ─────────────────────────────
+        health_cfg = self.runtime.get("healthMonitor", {})
+        if health_cfg:
+            warn_thresh = health_cfg.get("warningThresholdSecs", 300)
+            unresp_thresh = health_cfg.get("unresponsiveThresholdSecs", 600)
+            check_interval = health_cfg.get("checkIntervalSecs", 30)
+
+            if isinstance(warn_thresh, (int, float)) and isinstance(unresp_thresh, (int, float)):
+                if warn_thresh >= unresp_thresh:
+                    warnings.append(
+                        f"healthMonitor.warningThresholdSecs ({warn_thresh}) >= "
+                        f"unresponsiveThresholdSecs ({unresp_thresh}) — "
+                        "warning should be shorter than unresponsive"
+                    )
+            if isinstance(check_interval, (int, float)) and check_interval < 5:
+                warnings.append(
+                    f"healthMonitor.checkIntervalSecs ({check_interval}) is very low — "
+                    "consider >= 10 seconds to avoid excessive checking"
+                )
+
+        # ── Notification channel validation ───────────────────────
+        notif_cfg = self.runtime.get("notifications", {})
+        if notif_cfg.get("enabled", False):
+            channels = notif_cfg.get("channels", [])
+            if not channels:
+                warnings.append("notifications.enabled is true but no channels configured")
+            for i, ch in enumerate(channels):
+                ch_name = ch.get("name", f"channel[{i}]")
+                ch_url = ch.get("url", "")
+                ch_type = ch.get("type", "webhook")
+
+                if not ch_url:
+                    warnings.append(f"Notification channel '{ch_name}' has no URL")
+                elif not ch_url.startswith(("http://", "https://")):
+                    warnings.append(
+                        f"Notification channel '{ch_name}' URL doesn't start with http(s):// — "
+                        f"got: {ch_url[:50]}"
+                    )
+
+                valid_types = {"ntfy", "slack", "discord", "webhook"}
+                if ch_type not in valid_types:
+                    warnings.append(
+                        f"Notification channel '{ch_name}' has unknown type '{ch_type}' — "
+                        f"expected one of: {', '.join(sorted(valid_types))}"
+                    )
+
+                events = ch.get("events", [])
+                if events:
+                    valid_events = {"all", "health_warning", "health_unresponsive",
+                                    "choices_timeout", "agent_connected",
+                                    "agent_disconnected", "error"}
+                    for evt in events:
+                        if evt not in valid_events:
+                            warnings.append(
+                                f"Notification channel '{ch_name}' has unknown event '{evt}' — "
+                                f"expected one of: {', '.join(sorted(valid_events))}"
+                            )
+
+            cooldown = notif_cfg.get("cooldownSecs", 60)
+            if isinstance(cooldown, (int, float)) and cooldown < 0:
+                warnings.append(f"notifications.cooldownSecs ({cooldown}) cannot be negative")
+
+        # ── Store warnings for programmatic access ────────────────
+        self.validation_warnings = list(warnings)
 
         # Report warnings
         for w in warnings:
