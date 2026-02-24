@@ -87,6 +87,7 @@ class Session:
 
     # ── UI state (saved/restored on tab switch) ───────────────────
     scroll_index: int = 0                    # remembered cursor position in choices list
+    inbox_pane_focused: bool = False          # was inbox pane focused when we switched away?
 
     # ── Input modes (per-session) ─────────────────────────────────
     input_mode: bool = False

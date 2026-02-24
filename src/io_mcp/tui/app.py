@@ -409,6 +409,14 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         # Initial health check
         self._update_daemon_status()
 
+    def watch_focused(self, focused: Widget | None) -> None:
+        """Keep _inbox_pane_focused in sync when widget focus changes.
+
+        This fires whenever Textual's focus changes (Tab key, click, etc.),
+        ensuring the logical inbox/choices state matches actual widget focus.
+        """
+        self._sync_inbox_focus_from_widget()
+
     def _safe_call(self, callback, *args) -> bool:
         """Call callback on the Textual event loop, swallowing 'App is not running'.
 
@@ -1496,9 +1504,17 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         else:
             list_view.index = 0
 
-        # Focus right pane (choices)
-        self._inbox_pane_focused = False
-        list_view.focus()
+        # Focus the appropriate pane — respect restored inbox focus state
+        # (e.g. when switching back to a session that had inbox focused)
+        if self._inbox_pane_focused and self._inbox_pane_visible():
+            try:
+                inbox_list = self.query_one("#inbox-list", ListView)
+                inbox_list.focus()
+            except Exception:
+                list_view.focus()
+        else:
+            self._inbox_pane_focused = False
+            list_view.focus()
 
         if self._dwell_time > 0:
             dwell_bar = self.query_one("#dwell-bar", DwellBar)
@@ -1998,7 +2014,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
     def _switch_to_session(self, session: Session) -> None:
         """Switch UI to a different session. Called from main thread (action methods)."""
-        # Save current scroll position
+        # Save current scroll position and inbox pane focus state
         old_session = self._focused()
         if old_session and old_session.session_id != session.session_id:
             try:
@@ -2006,14 +2022,16 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 old_session.scroll_index = list_view.index or 0
             except Exception:
                 pass
+            old_session.inbox_pane_focused = self._inbox_pane_focused
 
         # Stop current TTS
         self._tts.stop()
         if old_session:
             old_session.reading_options = False
 
-        # Focus new session
+        # Focus new session — restore its saved inbox pane focus state
         self.manager.focus(session.session_id)
+        self._inbox_pane_focused = session.inbox_pane_focused
 
         # Update UI directly (we're on the main thread)
         self._update_tab_bar()
@@ -3248,10 +3266,46 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 session.reading_options = False
                 self._tts.stop()
 
+    def _sync_inbox_focus_from_widget(self) -> None:
+        """Sync _inbox_pane_focused with actual widget focus.
+
+        Called when focus changes (e.g. via Tab key or click) to keep
+        the logical state in sync with Textual's widget focus state.
+        """
+        if not self._inbox_pane_visible():
+            return
+        try:
+            inbox_list = self.query_one("#inbox-list", ListView)
+            choices_list = self.query_one("#choices", ListView)
+            if inbox_list.has_focus:
+                self._inbox_pane_focused = True
+            elif choices_list.has_focus:
+                self._inbox_pane_focused = False
+        except Exception:
+            pass
+
     def _active_list_view(self) -> ListView:
-        """Get the currently focused list view (inbox or choices)."""
-        if self._inbox_pane_focused and self._inbox_pane_visible():
-            return self.query_one("#inbox-list", ListView)
+        """Get the currently focused list view (inbox or choices).
+
+        Checks actual widget focus first to handle Tab key / click focus
+        changes, then falls back to the logical _inbox_pane_focused state.
+        """
+        if self._inbox_pane_visible():
+            try:
+                inbox_list = self.query_one("#inbox-list", ListView)
+                choices_list = self.query_one("#choices", ListView)
+                # If one of them has actual focus, use that and sync state
+                if inbox_list.has_focus:
+                    self._inbox_pane_focused = True
+                    return inbox_list
+                elif choices_list.has_focus:
+                    self._inbox_pane_focused = False
+                    return choices_list
+                # Neither has focus — use logical state
+                if self._inbox_pane_focused:
+                    return inbox_list
+            except Exception:
+                pass
         return self.query_one("#choices", ListView)
 
     def action_cursor_down(self) -> None:
