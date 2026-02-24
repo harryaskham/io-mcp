@@ -33,7 +33,7 @@ from ..notifications import (
 )
 
 from .themes import COLOR_SCHEMES, DEFAULT_SCHEME, get_scheme, build_css
-from .widgets import ChoiceItem, InboxListItem, DwellBar, SubmitTextArea, EXTRA_OPTIONS, PRIMARY_EXTRAS, SECONDARY_EXTRAS, MORE_OPTIONS_ITEM, _safe_action
+from .widgets import ChoiceItem, InboxListItem, DwellBar, ManagedListView, SubmitTextArea, EXTRA_OPTIONS, PRIMARY_EXTRAS, SECONDARY_EXTRAS, MORE_OPTIONS_ITEM, _safe_action
 from .views import ViewsMixin
 from .voice import VoiceMixin
 from .settings_menu import SettingsMixin
@@ -388,10 +388,10 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         yield Label("", id="agent-activity")
         yield Vertical(id="speech-log")
         with Horizontal(id="main-content"):
-            yield ListView(id="inbox-list")
+            yield ManagedListView(id="inbox-list")
             with Vertical(id="choices-panel"):
                 yield Label("", id="preamble")
-                yield ListView(id="choices")
+                yield ManagedListView(id="choices")
                 yield DwellBar(id="dwell-bar")
         yield RichLog(id="pane-view", markup=False, highlight=False, auto_scroll=True, max_lines=200)
         yield SubmitTextArea(id="freeform-input", soft_wrap=True, show_line_numbers=False, tab_behavior="focus")
