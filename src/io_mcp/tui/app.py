@@ -234,6 +234,9 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         # Log viewer mode
         self._log_viewer_mode = False
 
+        # System logs mode (TUI errors, proxy logs, speech history)
+        self._system_logs_mode = False
+
         # Help screen mode
         self._help_mode = False
 
@@ -1205,6 +1208,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             self._dashboard_action_mode = False
             self._dashboard_action_target = None
             self._log_viewer_mode = False
+            self._system_logs_mode = False
             self._help_mode = False
             self._history_mode = False
             self._tab_picker_mode = False
@@ -2303,6 +2307,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         self._quick_action_options = None
         self._dashboard_mode = False
         self._log_viewer_mode = False
+        self._system_logs_mode = False
         self._help_mode = False
         self._history_mode = False
         self._tab_picker_mode = False
@@ -3042,6 +3047,14 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                     if idx < len(speech_log):
                         self._tts.speak_async(speech_log[idx].text)
                 return
+            # System logs: read the log entry text
+            if getattr(self, '_system_logs_mode', False):
+                if isinstance(event.item, ChoiceItem):
+                    entries = getattr(self, '_system_log_entries', [])
+                    idx = event.item.display_index
+                    if idx < len(entries):
+                        self._tts.speak_async(entries[idx])
+                return
             # Help screen: read the shortcut description
             if getattr(self, '_help_mode', False):
                 if isinstance(event.item, ChoiceItem):
@@ -3175,6 +3188,11 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                     self._log_viewer_mode = False
                     self._exit_settings()
                     return
+                # Check if we're in system logs mode (Enter closes it)
+                if getattr(self, '_system_logs_mode', False):
+                    self._system_logs_mode = False
+                    self._exit_settings()
+                    return
                 # Check if we're in help mode (Enter closes it)
                 if getattr(self, '_help_mode', False):
                     self._help_mode = False
@@ -3207,7 +3225,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                     return
                 # Check if we're in quick settings submenu
                 if getattr(self, '_quick_settings_mode', False):
-                    items = ["Fast toggle", "Voice toggle", "Notifications", "Settings", "Restart proxy", "Restart TUI", "Back"]
+                    items = ["Fast toggle", "Voice toggle", "Notifications", "View logs", "Settings", "Restart proxy", "Restart TUI", "Back"]
                     if idx < len(items):
                         self._handle_quick_settings_select(items[idx])
                     return
@@ -3669,7 +3687,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         # Quick settings submenu — dispatch by number
         if getattr(self, '_quick_settings_mode', False):
-            items = ["Fast toggle", "Voice toggle", "Notifications", "Settings", "Restart proxy", "Restart TUI", "Back"]
+            items = ["Fast toggle", "Voice toggle", "Notifications", "View logs", "Settings", "Restart proxy", "Restart TUI", "Back"]
             if 1 <= n <= len(items):
                 self._handle_quick_settings_select(items[n - 1])
             return
@@ -3740,6 +3758,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             if getattr(self, '_help_mode', False):
                 return
             if getattr(self, '_log_viewer_mode', False):
+                return
+            if getattr(self, '_system_logs_mode', False):
                 return
             if getattr(self, '_history_mode', False):
                 return
@@ -4039,6 +4059,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             self.action_spawn_agent()
         elif label == "Dashboard":
             self.action_dashboard()
+        elif label == "View logs":
+            self.action_view_system_logs()
         elif label == "Close tab":
             session = self._focused()
             if session:
@@ -4070,6 +4092,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             {"label": "Fast toggle", "summary": f"Toggle speed (current: {self.settings.speed:.1f}x)"},
             {"label": "Voice toggle", "summary": f"Quick-switch voice (current: {self.settings.voice})"},
             {"label": "Notifications", "summary": "Check Android notifications"},
+            {"label": "View logs", "summary": "TUI errors, proxy logs, speech history"},
             {"label": "Settings", "summary": "Open full settings menu"},
             {"label": "Restart proxy", "summary": "Kill and restart MCP proxy (agents reconnect)"},
             {"label": "Restart TUI", "summary": "Restart the TUI backend"},
@@ -4106,6 +4129,9 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         elif label == "Notifications":
             self._in_settings = False
             self._show_notifications()
+        elif label == "View logs":
+            self._in_settings = False
+            self.action_view_system_logs()
         elif label == "Settings":
             self._in_settings = False
             self._enter_settings()
