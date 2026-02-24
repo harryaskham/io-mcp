@@ -325,7 +325,7 @@ register_session(
 - Ambient mode: escalating TTS updates during silence (30s initial, then every 45s with context). **Disabled by default.** Enable in `config.ambient.enabled: true`
 - Agent activity indicator shows last speech in TUI
 - **Health monitoring**: agents are checked every 30s for stuck/crashed state. Warning at 5 min, unresponsive at 10 min. Tmux pane liveness verified. Tab bar shows ⚠/✗ indicators. Configurable in `config.healthMonitor`
-- **Notification webhooks**: send alerts to ntfy, Slack, Discord, or generic webhooks. Events: `health_warning`, `health_unresponsive`, `agent_connected`, `agent_disconnected`, `error`. Per-event cooldown prevents spam. Configure in `config.notifications`
+- **Notification webhooks**: send alerts to ntfy, Slack, Discord, or generic webhooks. Events: `health_warning`, `health_unresponsive`, `agent_connected`, `agent_disconnected`, `error`, `pulse_down`, `pulse_recovered`. Per-event cooldown prevents spam. Configure in `config.notifications`
 - **Smart summaries**: sessions track tool call counts and build activity summaries. Dashboard shows per-agent summaries. Agent log (`g` key) shows unified timeline of speech + selections
 - **Tab bar**: always visible — shows "io-mcp" branding when idle, agent name for single session, full tab bar for multiple agents. Health indicators shown per-tab
 - **Dashboard actions**: selecting a session in the dashboard shows a sub-menu: Switch to, Close tab, Kill tmux pane, Back. Close tab is also available in the extra options menu
@@ -339,6 +339,7 @@ register_session(
 - **Two-column inbox layout**: when an agent sends choices, the TUI shows a left pane (inbox list of pending/completed items with status icons ●/○/✓) and a right pane (choices for the active item). Left pane is ~30% width. Items show truncated preambles and counts
 - **Collapsed extras menu**: extra options are split into primary (always visible, e.g. "Record response") and secondary (hidden behind a "More options ›" toggle). Selecting the toggle expands/collapses the secondary extras. Reduces clutter in the default choices view
 - **PulseAudio health check**: TTS engine adds a brief 50ms pause before PulseAudio playback to let the audio subsystem settle, preventing playback glitches on network audio
+- **PulseAudio auto-recovery**: when PulseAudio goes down, the TUI attempts escalating recovery — kill orphaned paplay, restart daemon, suspend/resume sinks, full kill+restart. Sends `pulse_down` / `pulse_recovered` notifications. After exhausting attempts, speaks specific recovery steps and sends a high-priority alert. Attempts auto-reset after a backoff period (5× cooldown) so recovery keeps retrying. Configure in `config.pulseAudio`
 - **`get_logs` MCP tool**: agents can call `get_logs(lines=50)` to retrieve recent TUI error logs, proxy logs, and speech history for debugging. Reads from `/tmp/io-mcp-tui-error.log` and `/tmp/io-mcp-proxy.log`
 - **`--default-config` flag**: run `io-mcp --default-config` to ignore user config files and use built-in defaults only. Does not overwrite the config file on disk. Useful for debugging config issues
 

@@ -505,6 +505,17 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                         f.write(f"\n--- PulseAudio recovered ---\n")
                 except Exception:
                     pass
+                # Notify recovery
+                try:
+                    self._notifier.notify(NotificationEvent(
+                        event_type="pulse_recovered",
+                        title="PulseAudio recovered",
+                        message="PulseAudio connection restored.",
+                        priority=2,
+                        tags=["loud_sound", "pulse_recovered"],
+                    ))
+                except Exception:
+                    pass
 
             self._pulse_was_ok = pls_ok
 
@@ -570,6 +581,10 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         Respects config settings for max attempts and cooldown period.
         Logs all attempts and plays appropriate chimes on success/failure.
+        Sends notification webhooks on failure and recovery.
+        Provides specific recovery steps when all attempts are exhausted.
+        Auto-resets attempt counter after a backoff period (5x cooldown)
+        so reconnection is retried periodically even after initial exhaustion.
         """
         # Check if auto-reconnect is enabled
         if self._config and not self._config.pulse_auto_reconnect:
@@ -581,12 +596,28 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             max_attempts = self._config.pulse_max_reconnect_attempts
             cooldown = self._config.pulse_reconnect_cooldown
 
+        # Auto-reset: if enough time has passed since last attempt (5x cooldown),
+        # reset the counter so we keep trying periodically instead of giving up forever
+        now = time.time()
+        backoff_reset = cooldown * 5
+        if (self._pulse_reconnect_attempts >= max_attempts
+                and self._pulse_last_reconnect > 0
+                and now - self._pulse_last_reconnect >= backoff_reset):
+            self._pulse_reconnect_attempts = 0
+            try:
+                with open("/tmp/io-mcp-tui-error.log", "a") as f:
+                    f.write(
+                        f"\n--- PulseAudio reconnect attempts reset "
+                        f"(backoff elapsed: {backoff_reset:.0f}s) ---\n"
+                    )
+            except Exception:
+                pass
+
         # Check if we've exceeded max attempts
         if self._pulse_reconnect_attempts >= max_attempts:
             return
 
         # Check cooldown
-        now = time.time()
         if now - self._pulse_last_reconnect < cooldown:
             return
 
@@ -610,8 +641,9 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         # Attempt reconnection via TTS engine
         success = False
+        diagnostic_info = ""
         try:
-            success = self._tts.reconnect_pulse()
+            success, diagnostic_info = self._tts.reconnect_pulse()
         except Exception:
             pass
 
@@ -626,6 +658,20 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             try:
                 with open("/tmp/io-mcp-tui-error.log", "a") as f:
                     f.write(f"  → PulseAudio reconnected successfully!\n")
+                    if diagnostic_info:
+                        f.write(f"    Diagnostics: {diagnostic_info}\n")
+            except Exception:
+                pass
+            # Notify recovery
+            try:
+                self._notifier.notify(NotificationEvent(
+                    event_type="pulse_recovered",
+                    title="PulseAudio recovered",
+                    message=f"PulseAudio reconnected on attempt {attempt}.",
+                    priority=2,
+                    tags=["loud_sound", "pulse_recovered"],
+                    extra={"diagnostics": diagnostic_info},
+                ))
             except Exception:
                 pass
         else:
@@ -636,8 +682,99 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                         f"  → PulseAudio reconnect failed "
                         f"({remaining} attempts remaining)\n"
                     )
+                    if diagnostic_info:
+                        f.write(f"    Diagnostics: {diagnostic_info}\n")
             except Exception:
                 pass
+
+            # Send notification on each failure
+            try:
+                self._notifier.notify(NotificationEvent(
+                    event_type="pulse_down",
+                    title="PulseAudio down",
+                    message=(
+                        f"PulseAudio reconnect attempt {attempt}/{max_attempts} failed. "
+                        f"{remaining} attempts remaining."
+                    ),
+                    priority=4,
+                    tags=["mute", "pulse_down"],
+                    extra={"diagnostics": diagnostic_info,
+                           "attempt": attempt,
+                           "max_attempts": max_attempts},
+                ))
+            except Exception:
+                pass
+
+            # When all attempts exhausted, speak recovery steps
+            if remaining == 0:
+                self._pulse_recovery_exhausted(diagnostic_info)
+
+    def _pulse_recovery_exhausted(self, diagnostic_info: str = "") -> None:
+        """Handle exhausted PulseAudio reconnect attempts.
+
+        Speaks specific recovery steps, logs them, and sends a high-priority
+        notification with actionable guidance so the user knows exactly what
+        to do to restore audio.
+        """
+        try:
+            steps = self._tts.pulse_recovery_steps()
+        except Exception:
+            steps = ["Restart io-mcp TUI to reset audio subsystem"]
+
+        steps_text = "\n".join(f"  {i+1}. {s}" for i, s in enumerate(steps))
+        log_msg = (
+            f"\n--- PulseAudio auto-reconnect exhausted ---\n"
+            f"Recovery steps:\n{steps_text}\n"
+        )
+        if diagnostic_info:
+            log_msg += f"Last diagnostics: {diagnostic_info}\n"
+
+        try:
+            with open("/tmp/io-mcp-tui-error.log", "a") as f:
+                f.write(log_msg)
+        except Exception:
+            pass
+
+        # Speak recovery guidance (using termux fallback if PulseAudio is down)
+        try:
+            spoken_steps = ". ".join(steps[:3])
+            self._tts.speak_async(
+                f"PulseAudio recovery failed. Try: {spoken_steps}"
+            )
+        except Exception:
+            pass
+
+        # Play error chime
+        try:
+            self._tts.play_chime("error")
+        except Exception:
+            pass
+
+        # Haptic feedback
+        try:
+            self._vibrate_pattern("attention")
+        except Exception:
+            pass
+
+        # High-priority notification with recovery steps
+        try:
+            self._notifier.notify(NotificationEvent(
+                event_type="pulse_down",
+                title="PulseAudio recovery exhausted",
+                message=(
+                    "All auto-reconnect attempts failed. "
+                    "Manual intervention required.\n\n"
+                    "Recovery steps:\n" + "\n".join(f"• {s}" for s in steps)
+                ),
+                priority=5,
+                tags=["rotating_light", "pulse_down"],
+                extra={
+                    "diagnostics": diagnostic_info,
+                    "recovery_steps": steps,
+                },
+            ))
+        except Exception:
+            pass
 
     def _cleanup_stale_sessions(self) -> None:
         """Remove sessions that have been inactive past the configured timeout.
