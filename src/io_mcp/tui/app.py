@@ -1868,9 +1868,10 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         self._tts.play_chime("select")
 
         compact_msg = (
-            "COMPACT YOUR CONTEXT NOW. Use the /tmux-cli skill to send '/compact' "
-            "followed by Enter to your own tmux pane. Example: "
-            "tmux send-keys -t $TMUX_PANE '/compact' Enter. "
+            "COMPACT YOUR CONTEXT NOW. Send '/compact' then Enter to your own "
+            "tmux pane, then send Enter again to confirm the menu selection. "
+            "Use: tmux send-keys -t $TMUX_PANE '/compact' Enter && sleep 2 && "
+            "tmux send-keys -t $TMUX_PANE Enter. "
             "Wait 60 seconds for compaction to complete, then continue working."
         )
 
