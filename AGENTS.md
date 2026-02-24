@@ -250,6 +250,7 @@ uv run io-mcp        # Run directly (auto-starts proxy)
 uv run io-mcp --dev  # Dev mode (uses uv run for proxy)
 uv run io-mcp --restart  # Force kill all processes first
 uv run io-mcp --default-config  # Ignore user config, use built-in defaults
+uv run io-mcp --reset-config   # Delete config.yml and regenerate with defaults
 io-mcp server        # Start proxy daemon only
 io-mcp status        # Show health of proxy/backend/API
 uv run pytest tests/ # Run tests
@@ -342,6 +343,7 @@ register_session(
 - **PulseAudio auto-recovery**: when PulseAudio goes down, the TUI attempts escalating recovery — kill orphaned paplay, restart daemon, suspend/resume sinks, full kill+restart. Sends `pulse_down` / `pulse_recovered` notifications. After exhausting attempts, speaks specific recovery steps and sends a high-priority alert. Attempts auto-reset after a backoff period (5× cooldown) so recovery keeps retrying. Configure in `config.pulseAudio`
 - **`get_logs` MCP tool**: agents can call `get_logs(lines=50)` to retrieve recent TUI error logs, proxy logs, and speech history for debugging. Reads from `/tmp/io-mcp-tui-error.log` and `/tmp/io-mcp-proxy.log`
 - **`--default-config` flag**: run `io-mcp --default-config` to ignore user config files and use built-in defaults only. Does not overwrite the config file on disk. Useful for debugging config issues
+- **`--reset-config` flag**: run `io-mcp --reset-config` to delete `~/.config/io-mcp/config.yml` and regenerate it with all current defaults. Use this when your config has stale keys or missing new defaults. The old config is deleted and a fresh one is written with the latest defaults. You can also manually delete the config file and restart io-mcp to achieve the same effect
 
 ### Fallback TTS (when MCP is down)
 

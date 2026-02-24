@@ -667,3 +667,70 @@ class TestSessionAmbientFields:
         s.ambient_count = 5
         s.ambient_count = 0  # simulates tool call reset
         assert s.ambient_count == 0
+
+
+# ---------------------------------------------------------------------------
+# Config reset
+# ---------------------------------------------------------------------------
+
+class TestConfigReset:
+    """Tests for IoMcpConfig.reset() — delete and regenerate config."""
+
+    def test_reset_deletes_and_recreates(self, tmp_path):
+        """reset() deletes existing config and creates fresh defaults."""
+        config_path = str(tmp_path / "config.yml")
+        # Write a custom config
+        custom = {"config": {"tts": {"speed": 2.5, "model": "gpt-4o-mini-tts"}}}
+        with open(config_path, "w") as f:
+            yaml.dump(custom, f)
+
+        # Reset
+        config = IoMcpConfig.reset(config_path)
+
+        # File should exist with defaults
+        assert os.path.isfile(config_path)
+        # Speed should be the default, not the custom value
+        assert config.tts_speed == 1.3
+        # Model should be the default
+        assert config.tts_model_name == "mai-voice-1"
+
+    def test_reset_when_no_file_exists(self, tmp_path):
+        """reset() works fine when the file doesn't exist yet."""
+        config_path = str(tmp_path / "config.yml")
+        assert not os.path.isfile(config_path)
+
+        config = IoMcpConfig.reset(config_path)
+
+        # File should be created with defaults
+        assert os.path.isfile(config_path)
+        assert config.tts_speed == 1.3
+
+    def test_reset_preserves_all_defaults(self, tmp_path):
+        """After reset, config has all DEFAULT_CONFIG keys."""
+        config_path = str(tmp_path / "config.yml")
+
+        config = IoMcpConfig.reset(config_path)
+
+        # Read back from disk and verify key sections exist
+        with open(config_path, "r") as f:
+            on_disk = yaml.safe_load(f)
+
+        assert "providers" in on_disk
+        assert "models" in on_disk
+        assert "config" in on_disk
+        assert "emotionPresets" in on_disk
+        assert "openai" in on_disk["providers"]
+        assert "healthMonitor" in on_disk["config"]
+        assert "ambient" in on_disk["config"]
+        assert "notifications" in on_disk["config"]
+
+    def test_reset_prints_deleted_message(self, tmp_path, capsys):
+        """reset() prints a message about deleting the config."""
+        config_path = str(tmp_path / "config.yml")
+        # Create a file first
+        with open(config_path, "w") as f:
+            yaml.dump({"config": {"tts": {"speed": 1.0}}}, f)
+
+        IoMcpConfig.reset(config_path)
+        captured = capsys.readouterr()
+        assert "deleted" in captured.out.lower()
