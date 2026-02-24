@@ -263,6 +263,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         self._inbox_pane_focused = False
         self._inbox_scroll_index = 0  # cursor position in inbox list
         self._inbox_was_visible = False  # saved inbox state for message mode
+        self._inbox_last_generation = -1  # tracks session._inbox_generation to skip no-op rebuilds
 
         # Notification webhooks
         self._notifier = create_dispatcher(config)
@@ -1951,15 +1952,31 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         Shows pending and done inbox items. Active item is highlighted.
         Hides the inbox list entirely when there are ≤1 items (looks like
         the current single-pane layout).
+
+        Uses a generation counter from the session to skip rebuilds when the
+        inbox hasn't changed — avoids expensive widget teardown/recreation on
+        the ~1-second _update_speech_log timer.
         """
         try:
             session = self._focused()
             inbox_list = self.query_one("#inbox-list", ListView)
-            inbox_list.clear()
 
             if session is None:
+                inbox_list.clear()
                 inbox_list.display = False
+                self._inbox_last_generation = -1
                 return
+
+            # Skip rebuild if the inbox hasn't mutated since the last render
+            gen = session._inbox_generation
+            if gen == self._inbox_last_generation:
+                # Still update the highlight in case scroll index changed
+                if self._inbox_scroll_index < len(inbox_list.children):
+                    inbox_list.index = self._inbox_scroll_index
+                return
+            self._inbox_last_generation = gen
+
+            inbox_list.clear()
 
             # Collect all inbox items: pending (from inbox deque) + done
             pending = [item for item in session.inbox if not item.done and item.kind == "choices"]
@@ -2239,6 +2256,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         # Focus new session — restore its saved inbox pane focus state
         self.manager.focus(session.session_id)
         self._inbox_pane_focused = session.inbox_pane_focused
+        self._inbox_last_generation = -1  # force inbox rebuild for new session
 
         # Update UI directly (we're on the main thread)
         self._update_tab_bar()
