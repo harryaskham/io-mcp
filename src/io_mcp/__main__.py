@@ -868,6 +868,12 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
             speech.append(f"[{entry.timestamp:.0f}] {entry.text[:200]}")
         logs["speech_log"] = speech
 
+        # TTS health status
+        try:
+            logs["tts_health"] = frontend.tts.tts_health
+        except Exception:
+            logs["tts_health"] = {"status": "unknown"}
+
         return _attach_messages(json.dumps(logs), session)
 
     # ─── Dispatch table ───────────────────────────────────────
