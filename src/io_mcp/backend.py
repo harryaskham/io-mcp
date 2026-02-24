@@ -4,7 +4,15 @@ Exposes /handle-mcp endpoint that the MCP proxy server calls.
 Each request is a JSON object with {tool, args, session_id} and the
 response is the tool's return value (a string).
 
-Also exposes /health for the proxy to verify the backend is running.
+Also exposes simple REST endpoints for non-MCP callers:
+  POST /speak          {"text": "...", "session_id": "..."}
+  POST /speak-async    {"text": "...", "session_id": "..."}
+  POST /choices        {"preamble": "...", "choices": [...], "session_id": "..."}
+  POST /message        {"text": "...", "session_id": "..."}
+  POST /inbox          {"session_id": "..."}
+  GET  /health
+
+These thin wrappers auto-create sessions on first use — no registration needed.
 """
 
 from __future__ import annotations
@@ -41,17 +49,48 @@ class BackendHandler(BaseHTTPRequestHandler):
         else:
             self._json_response(404, {"error": "not found"})
 
-    def do_POST(self) -> None:
-        if self.path != "/handle-mcp":
-            self._json_response(404, {"error": "not found"})
-            return
+    # ─── Simple REST endpoint mapping ─────────────────────────────
+    # Maps clean URL paths to MCP tool names + arg reshaping.
+    # session_id defaults to "http-caller" if not provided.
+    # Sessions are auto-created on first use — no registration needed.
+    _SIMPLE_ENDPOINTS = {
+        "/speak":       ("speak",           lambda b: {"text": b.get("text", "")}),
+        "/speak-async": ("speak_async",     lambda b: {"text": b.get("text", "")}),
+        "/choices":     ("present_choices",  lambda b: {"preamble": b.get("preamble", ""), "choices": b.get("choices", [])}),
+        "/inbox":       ("check_inbox",      lambda b: {}),
+    }
 
+    def do_POST(self) -> None:
+        # Parse body once for all endpoints
         try:
             content_length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(content_length)
-            request = json.loads(body)
+            request = json.loads(body) if body else {}
         except (json.JSONDecodeError, ValueError) as e:
             self._json_response(400, {"error": f"Invalid JSON: {e}"})
+            return
+
+        # ── Simple REST endpoints (/speak, /choices, etc.) ────────
+        if self.path in self._SIMPLE_ENDPOINTS:
+            tool_name, arg_fn = self._SIMPLE_ENDPOINTS[self.path]
+            session_id = request.get("session_id", "http-caller")
+            args = arg_fn(request)
+            try:
+                result = self.tool_dispatch(tool_name, args, session_id)
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                response = result.encode("utf-8")
+                self.send_header("Content-Length", str(len(response)))
+                self.end_headers()
+                self.wfile.write(response)
+            except Exception as e:
+                log.error(f"Simple endpoint error: {self.path}: {e}")
+                self._json_response(500, {"error": str(e)[:200]})
+            return
+
+        # ── MCP proxy endpoint (/handle-mcp) ──────────────────────
+        if self.path != "/handle-mcp":
+            self._json_response(404, {"error": "not found"})
             return
 
         tool = request.get("tool", "")
