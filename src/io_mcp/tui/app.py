@@ -4208,8 +4208,18 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             {"label": "Settings", "summary": "Open full settings menu"},
             {"label": "Restart proxy", "summary": "Kill and restart MCP proxy (agents reconnect)"},
             {"label": "Restart TUI", "summary": "Restart the TUI backend"},
-            {"label": "Back", "summary": "Return to choices"},
         ]
+
+        # Add djent swarm controls when djent integration is enabled
+        if self._config and self._config.djent_enabled:
+            items.extend([
+                {"label": "Swarm status", "summary": "Show djent agent status and project overview"},
+                {"label": "Start swarm", "summary": "Launch the djent dev loop in a new tmux window"},
+                {"label": "Stop swarm", "summary": "Gracefully stop all djent agents"},
+                {"label": "View agent logs", "summary": "Tail recent djent agent log output"},
+            ])
+
+        items.append({"label": "Back", "summary": "Return to choices"})
 
         list_view = self.query_one("#choices", ListView)
         list_view.clear()
@@ -4257,9 +4267,123 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             session = self._focused()
             self._clear_all_modal_state(session=session)
             self._restart_tui()
+        elif label == "Swarm status":
+            self._run_djent_command("Swarm status", "djent status 2>&1 | head -40")
+        elif label == "Start swarm":
+            self._start_djent_swarm()
+        elif label == "Stop swarm":
+            self._stop_djent_swarm()
+        elif label == "View agent logs":
+            self._run_djent_command("Agent logs", "djent log 2>&1 | tail -20")
         else:
             # "Back" or unknown
             self._exit_settings()
+
+    def _run_djent_command(self, label: str, command: str) -> None:
+        """Run a djent CLI command in a background thread, speak the output, return to quick settings."""
+        self._speak_ui(f"Running {label}")
+
+        def _run():
+            try:
+                result = subprocess.run(
+                    command, shell=True, capture_output=True, text=True, timeout=30
+                )
+                # Strip ANSI escape codes for clean TTS output
+                import re as _re
+                output = _re.sub(r'\x1b\[[0-9;]*m', '', result.stdout.strip() or result.stderr.strip())
+                if result.returncode == 0:
+                    summary = output[:300] if output else "Done"
+                    self._tts.speak_async(f"{label}: {summary}")
+                else:
+                    err = output[:150] if output else f"exit code {result.returncode}"
+                    self._tts.speak_async(f"{label} failed: {err}")
+            except subprocess.TimeoutExpired:
+                self._tts.speak_async(f"{label} timed out after 30 seconds")
+            except Exception as e:
+                self._tts.speak_async(f"Error running {label}: {str(e)[:80]}")
+
+            self.call_from_thread(self._enter_quick_settings)
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _start_djent_swarm(self) -> None:
+        """Start the djent dev loop in a new tmux window with confirmation."""
+
+        def _on_confirm(label: str):
+            if label.lower().startswith("start"):
+                self._speak_ui("Starting djent swarm")
+
+                def _run():
+                    try:
+                        result = subprocess.run(
+                            "tmux new-window -n djent 'djent -e \"(loop/dev)\"'",
+                            shell=True, capture_output=True, text=True, timeout=15
+                        )
+                        if result.returncode == 0:
+                            self._tts.speak_async("Djent swarm started in new tmux window")
+                        else:
+                            err = result.stderr.strip()[:100] or f"exit code {result.returncode}"
+                            self._tts.speak_async(f"Failed to start swarm: {err}")
+                    except Exception as e:
+                        self._tts.speak_async(f"Error starting swarm: {str(e)[:80]}")
+
+                    self.call_from_thread(self._enter_quick_settings)
+
+                threading.Thread(target=_run, daemon=True).start()
+            else:
+                self._enter_quick_settings()
+
+        self._show_dialog(
+            title="Start Djent Swarm?",
+            message="This will launch the djent dev loop in a new tmux window.",
+            buttons=[
+                {"label": "Start swarm", "summary": "Launch djent -e '(loop/dev)' in new tmux window"},
+                {"label": "Cancel", "summary": "Go back to quick settings"},
+            ],
+            callback=_on_confirm,
+        )
+
+    def _stop_djent_swarm(self) -> None:
+        """Stop all djent agents with confirmation."""
+
+        def _on_confirm(label: str):
+            if label.lower().startswith("stop"):
+                self._speak_ui("Stopping djent swarm")
+
+                def _run():
+                    try:
+                        import re as _re
+                        result = subprocess.run(
+                            "djent down 2>&1",
+                            shell=True, capture_output=True, text=True, timeout=30
+                        )
+                        output = _re.sub(r'\x1b\[[0-9;]*m', '', result.stdout.strip() or result.stderr.strip())
+                        if result.returncode == 0:
+                            summary = output[:200] if output else "Done"
+                            self._tts.speak_async(f"Swarm stopped. {summary}")
+                        else:
+                            err = output[:100] if output else f"exit code {result.returncode}"
+                            self._tts.speak_async(f"Stop failed: {err}")
+                    except subprocess.TimeoutExpired:
+                        self._tts.speak_async("Stop command timed out after 30 seconds")
+                    except Exception as e:
+                        self._tts.speak_async(f"Error stopping swarm: {str(e)[:80]}")
+
+                    self.call_from_thread(self._enter_quick_settings)
+
+                threading.Thread(target=_run, daemon=True).start()
+            else:
+                self._enter_quick_settings()
+
+        self._show_dialog(
+            title="Stop Djent Swarm?",
+            message="This will gracefully stop all djent agents and reset bead states.",
+            buttons=[
+                {"label": "Stop swarm", "summary": "Run djent down to stop all agents"},
+                {"label": "Cancel", "summary": "Go back to quick settings"},
+            ],
+            callback=_on_confirm,
+        )
 
     def _show_history(self) -> None:
         """Show selection history for the focused session in a scrollable list.
