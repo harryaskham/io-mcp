@@ -85,12 +85,13 @@ async def test_show_choices_populates_listview():
         extra_items = [c for c in items if c.choice_index <= 0]
 
         assert len(real_items) == 2
-        assert len(extra_items) == len(EXTRA_OPTIONS)
+        # Collapsed mode: "More options ›" + "Record response" = 2 visible extras
+        assert len(extra_items) == 2
 
 
 @pytest.mark.asyncio
 async def test_extra_option_index_mapping():
-    """Extra option logical indices map correctly to EXTRA_OPTIONS array."""
+    """Extra option labels match the collapsed extras (More options + Record response)."""
     app = make_app()
     async with app.run_test() as pilot:
         session, _ = app.manager.get_or_create("test-1")
@@ -111,13 +112,10 @@ async def test_extra_option_index_mapping():
         items = [c for c in list_view.children if isinstance(c, ChoiceItem)]
         extra_items = [c for c in items if c.choice_index <= 0]
 
-        # Verify every extra item maps to a valid EXTRA_OPTIONS entry
-        for item in extra_items:
-            ei = len(EXTRA_OPTIONS) - 1 + item.choice_index
-            assert 0 <= ei < len(EXTRA_OPTIONS), (
-                f"choice_index={item.choice_index} maps to ei={ei}, "
-                f"out of range [0, {len(EXTRA_OPTIONS)})"
-            )
+        # Collapsed mode: should have "More options ›" and "Record response"
+        labels = [item.choice_label for item in extra_items]
+        assert "More options ›" in labels
+        assert "Record response" in labels
 
 
 @pytest.mark.asyncio
@@ -143,8 +141,8 @@ async def test_default_focus_is_first_real_choice():
         await pilot.pause(0.1)
 
         list_view = app.query_one("#choices", ListView)
-        # Focus should be on the first real choice
-        assert list_view.index == len(EXTRA_OPTIONS)
+        # Focus should be on the first real choice (after collapsed extras: More + Record = 2)
+        assert list_view.index == 2
 
 
 @pytest.mark.asyncio

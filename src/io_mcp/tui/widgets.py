@@ -42,7 +42,13 @@ def _safe_action(fn):
 
 # ─── Extra options (negative indices) ──────────────────────────────────────
 
-EXTRA_OPTIONS = [
+# Primary extras: always visible above the real choices
+PRIMARY_EXTRAS = [
+    {"label": "Record response", "summary": "Speak your reply (voice input)"},
+]
+
+# Secondary extras: hidden behind "More options ›" header
+SECONDARY_EXTRAS = [
     {"label": "Queue message", "summary": "Type or speak a message to queue for the agent's next response"},
     {"label": "Multi select", "summary": "Toggle multiple choices then confirm -- do several things at once"},
     {"label": "Branch to worktree", "summary": "Create a git worktree for isolated work on a new branch"},
@@ -54,8 +60,13 @@ EXTRA_OPTIONS = [
     {"label": "Dashboard", "summary": "Overview of all active agents"},
     {"label": "Close tab", "summary": "Close the focused agent tab"},
     {"label": "Quick settings", "summary": "Speed, voice, notifications, restart"},
-    {"label": "Record response", "summary": "Speak your reply (voice input)"},
 ]
+
+# "More options" toggle item
+MORE_OPTIONS_ITEM = {"label": "More options ›", "summary": ""}
+
+# Full list for backward compat (used by extras_count, all_items, etc.)
+EXTRA_OPTIONS = SECONDARY_EXTRAS + PRIMARY_EXTRAS
 
 
 # ─── Choice Item Widget ─────────────────────────────────────────────────────

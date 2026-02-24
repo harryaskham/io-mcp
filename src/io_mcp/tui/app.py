@@ -33,7 +33,7 @@ from ..notifications import (
 )
 
 from .themes import COLOR_SCHEMES, DEFAULT_SCHEME, get_scheme, build_css
-from .widgets import ChoiceItem, DwellBar, SubmitTextArea, EXTRA_OPTIONS, _safe_action
+from .widgets import ChoiceItem, DwellBar, SubmitTextArea, EXTRA_OPTIONS, PRIMARY_EXTRAS, SECONDARY_EXTRAS, MORE_OPTIONS_ITEM, _safe_action
 from .views import ViewsMixin
 from .voice import VoiceMixin
 from .settings_menu import SettingsMixin
@@ -204,6 +204,9 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         # Settings state (app-level, not per-session)
         self._in_settings = False
         self._settings_just_closed = False
+
+        # Extra options expand/collapse state
+        self._extras_expanded = False
 
         # Dwell timer
         self._dwell_timer: Optional[Timer] = None
@@ -1207,6 +1210,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         # ── Normal mode: full choice presentation ──
         # Build the full list: extras + real choices
+        # Reset extras to collapsed for each new choice presentation
+        self._extras_expanded = False
         session.extras_count = len(EXTRA_OPTIONS)
         session.all_items = list(EXTRA_OPTIONS) + session.choices
 
@@ -1365,12 +1370,10 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                     s = c.get('summary', '')
                     text = f"{logical}. {c.get('label', '')}. {s}" if s else f"{logical}. {c.get('label', '')}"
                 else:
-                    ei = len(EXTRA_OPTIONS) - 1 + logical
-                    if 0 <= ei < len(EXTRA_OPTIONS):
-                        e = EXTRA_OPTIONS[ei]
-                        text = f"{e['label']}. {e['summary']}"
-                    else:
-                        text = ""
+                    # Extra option — use the widget's label directly
+                    text = item.choice_label
+                    if item.choice_summary:
+                        text = f"{text}. {item.choice_summary}"
                 if text:
                     self._tts.speak_async(text)
         except Exception:
@@ -1406,9 +1409,17 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         list_view = self.query_one("#choices", ListView)
         list_view.clear()
 
-        # Add extras (indices 0, -1, -2, -3)
-        for i, e in enumerate(EXTRA_OPTIONS):
-            logical_idx = -(len(EXTRA_OPTIONS) - 1 - i)  # -3, -2, -1, 0
+        # Build the extras portion based on expand/collapse state
+        if self._extras_expanded:
+            # Expanded: show all extras (secondary + primary)
+            visible_extras = list(SECONDARY_EXTRAS) + list(PRIMARY_EXTRAS)
+        else:
+            # Collapsed: just "More options ›" + primary extras (Record response)
+            visible_extras = [MORE_OPTIONS_ITEM] + list(PRIMARY_EXTRAS)
+
+        # Add extras (negative indices)
+        for i, e in enumerate(visible_extras):
+            logical_idx = -(len(visible_extras) - 1 - i)
             list_view.append(ChoiceItem(
                 e["label"], e.get("summary", ""),
                 index=logical_idx, display_index=i,
@@ -1418,15 +1429,16 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         for i, c in enumerate(session.choices):
             list_view.append(ChoiceItem(
                 c.get("label", "???"), c.get("summary", ""),
-                index=i + 1, display_index=len(EXTRA_OPTIONS) + i,
+                index=i + 1, display_index=len(visible_extras) + i,
             ))
 
         list_view.display = True
         # Restore scroll position or default to first real choice
+        n_extras = len(visible_extras)
         if session.scroll_index > 0 and session.scroll_index < len(list_view.children):
             list_view.index = session.scroll_index
-        elif len(list_view.children) > len(EXTRA_OPTIONS):
-            list_view.index = len(EXTRA_OPTIONS)  # first real choice
+        elif len(list_view.children) > n_extras:
+            list_view.index = n_extras  # first real choice
         else:
             list_view.index = 0
         list_view.focus()
@@ -2802,12 +2814,10 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 s = c.get('summary', '')
                 text = f"{logical}. {c.get('label', '')}. {s}" if s else f"{logical}. {c.get('label', '')}"
             else:
-                ei = len(EXTRA_OPTIONS) - 1 + logical
-                if 0 <= ei < len(EXTRA_OPTIONS):
-                    e = EXTRA_OPTIONS[ei]
-                    text = f"{e['label']}. {e.get('summary', '')}" if e.get('summary') else e['label']
-                else:
-                    text = ""
+                # Extra option — use the widget's label directly
+                text = event.item.choice_label
+                if event.item.choice_summary:
+                    text = f"{text}. {event.item.choice_summary}"
             if text:
                 # Deduplicate with cooldown — skip if same text was spoken very recently
                 # but allow re-reading after a brief pause (e.g. scrolling away and back)
@@ -3085,9 +3095,15 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         list_view.clear()
         q = query.lower()
 
+        # Build visible extras based on expand/collapse state
+        if self._extras_expanded:
+            visible_extras = list(SECONDARY_EXTRAS) + list(PRIMARY_EXTRAS)
+        else:
+            visible_extras = [MORE_OPTIONS_ITEM] + list(PRIMARY_EXTRAS)
+
         # Always show extras (but filtered too if query is set)
-        for i, e in enumerate(EXTRA_OPTIONS):
-            logical_idx = -(len(EXTRA_OPTIONS) - 1 - i)
+        for i, e in enumerate(visible_extras):
+            logical_idx = -(len(visible_extras) - 1 - i)
             if q and q not in e["label"].lower() and q not in e.get("summary", "").lower():
                 continue
             list_view.append(ChoiceItem(
@@ -3104,7 +3120,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 continue
             list_view.append(ChoiceItem(
                 label, summary,
-                index=i + 1, display_index=len(EXTRA_OPTIONS) + i,
+                index=i + 1, display_index=len(visible_extras) + i,
             ))
             match_count += 1
 
@@ -3619,7 +3635,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         # Handle extra options
         if logical <= 0:
-            self._handle_extra_select(logical)
+            label = item.choice_label
+            self._handle_extra_select(label)
             return
 
         # Real choice
@@ -3658,20 +3675,21 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         self._show_waiting(label)
 
-    def _handle_extra_select(self, logical_index: int) -> None:
-        """Handle selection of extra options.
-
-        Display order (top to bottom): -3=Record, -2=Fast, -1=Voice, 0=Settings.
-        Maps logical_index to EXTRA_OPTIONS array via: ei = len(EXTRA_OPTIONS) - 1 + logical_index.
-        """
+    def _handle_extra_select(self, label: str) -> None:
+        """Handle selection of extra options by label."""
         self._tts.stop()
         self._vibrate(100)  # Haptic feedback on extra selection
 
-        ei = len(EXTRA_OPTIONS) - 1 + logical_index
-        if ei < 0 or ei >= len(EXTRA_OPTIONS):
+        if label == "More options ›" or label == "More options":
+            # Toggle expand/collapse and re-render
+            self._extras_expanded = not self._extras_expanded
+            self._show_choices()
+            if self._extras_expanded:
+                self._speak_ui("More options")
+            else:
+                self._speak_ui("Collapsed")
             return
 
-        label = EXTRA_OPTIONS[ei]["label"]
         if label == "Record response":
             self.action_voice_input()
         elif label == "Multi select":
