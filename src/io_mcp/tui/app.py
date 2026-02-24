@@ -989,8 +989,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
     def _update_speech_log(self) -> None:
         """Update the speech log display and agent activity indicator.
 
-        When the agent is working (no active choices), also refreshes the
-        activity feed in the choices ListView to keep it current.
+        When the agent is working (no active choices), shows a clean
+        waiting view with essential keyboard shortcuts in the right pane.
         """
         log_widget = self.query_one("#speech-log", Vertical)
         log_widget.remove_children()
@@ -1018,7 +1018,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         elif activity:
             activity.display = False
 
-        # If agent is NOT presenting choices, refresh the activity feed
+        # If agent is NOT presenting choices, show inbox waiting view
         # Rate limit: only update if enough time has passed (avoid flooding UI)
         if not session.active and not self._in_settings:
             import time as _time
@@ -1026,8 +1026,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             last_feed = getattr(self, '_last_feed_update', 0)
             if now - last_feed > 1.0:  # At most once per second
                 self._last_feed_update = now
-                self._show_activity_feed(session)
-            # Hide the small speech log — activity feed covers it
+                self._show_waiting_with_shortcuts(session)
+            # Hide the small speech log — waiting view covers it
             log_widget.display = False
             return
 
@@ -1577,15 +1577,18 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         ))
         list_view.display = True
 
-    def _show_activity_feed(self, session) -> None:
-        """Populate the choices ListView with an activity feed for the session.
+    def _show_waiting_with_shortcuts(self, session) -> None:
+        """Show a clean waiting state with essential keyboard shortcuts.
 
-        Shows actionable options at the top, then session info and recent
-        speech log entries to fill empty space when the agent is working.
-        Items with index -1000..-1010 are actionable (queue message, settings, etc.)
+        Replaces the old activity feed. Shows the inbox view (left pane)
+        with a minimal right pane containing status and shortcut hints.
         """
         try:
             s = self._cs
+
+            # Show inbox view with history
+            self._ensure_main_content_visible(show_inbox=True)
+
             list_view = self.query_one("#choices", ListView)
             list_view.clear()
 
@@ -1595,52 +1598,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
             di = 0  # display_index counter
 
-            # ── Actionable options ─────────────────────────────────
-            actionable = [
-                (-1000, "Queue message", "m", "Send a message to this agent"),
-                (-1001, "Settings", "s", "Speed, voice, TTS model"),
-                (-1003, "Dashboard", "d", "All agent sessions"),
-            ]
-            if session.tmux_pane:
-                actionable.insert(2, (-1002, "Pane view", "v", f"Live tmux output ({session.tmux_pane})"))
-
-            for idx, label, key, desc in actionable:
-                list_view.append(ChoiceItem(
-                    f"[bold {s['accent']}]{label}[/bold {s['accent']}]  [{s['fg_dim']}]{key}[/{s['fg_dim']}]",
-                    f"[{s['fg_dim']}]{desc}[/{s['fg_dim']}]",
-                    index=idx, display_index=di,
-                ))
-                di += 1
-
-            # ── Session info section ───────────────────────────────
-            # Summary line
-            summary = session.summary()
-            if summary:
-                list_view.append(ChoiceItem(
-                    f"[{s['blue']}]{session.name}[/{s['blue']}]",
-                    f"[{s['fg_dim']}]{summary}[/{s['fg_dim']}]",
-                    index=-996, display_index=di,
-                ))
-                di += 1
-
-            # Agent metadata
-            if session.registered:
-                meta_parts = []
-                if session.cwd:
-                    meta_parts.append(session.cwd)
-                if session.hostname:
-                    meta_parts.append(session.hostname)
-                if session.tmux_pane:
-                    meta_parts.append(f"pane {session.tmux_pane}")
-                if meta_parts:
-                    list_view.append(ChoiceItem(
-                        f"[{s['fg_dim']}]{' | '.join(meta_parts)}[/{s['fg_dim']}]",
-                        "",
-                        index=-998, display_index=di,
-                    ))
-                    di += 1
-
-            # Tool stats
+            # ── Status line ──────────────────────────────────
             if session.tool_call_count > 0:
                 import time as _time
                 elapsed = _time.time() - session.last_tool_call
@@ -1650,16 +1608,32 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                     ago = f"{int(elapsed) // 60}m ago"
                 else:
                     ago = f"{int(elapsed) // 3600}h ago"
-                tool_text = f"[{s['fg_dim']}]{session.tool_call_count} calls[/{s['fg_dim']}]"
-                if session.last_tool_name:
-                    tool_text += f"  [{s['fg_dim']}]last: {session.last_tool_name} ({ago})[/{s['fg_dim']}]"
-                list_view.append(ChoiceItem(
-                    tool_text, "",
-                    index=-997, display_index=di,
-                ))
-                di += 1
+                status_text = f"[{s['fg_dim']}]Agent working... last activity {ago}[/{s['fg_dim']}]"
+            else:
+                status_text = f"[{s['fg_dim']}]Waiting for agent...[/{s['fg_dim']}]"
+            list_view.append(ChoiceItem(
+                status_text, "",
+                index=-999, display_index=di,
+            ))
+            di += 1
 
-            # Pending messages indicator
+            # ── Essential shortcuts ──────────────────────────
+            shortcuts = [
+                ("m", "Queue message"),
+                ("s", "Settings"),
+                ("d", "Dashboard"),
+            ]
+            if session.tmux_pane:
+                shortcuts.insert(2, ("v", "Pane view"))
+
+            shortcut_parts = [f"[{s['fg_dim']}]{key}[/{s['fg_dim']}]={label}" for key, label in shortcuts]
+            list_view.append(ChoiceItem(
+                f"[{s['fg_dim']}]  {' · '.join(shortcut_parts)}[/{s['fg_dim']}]", "",
+                index=-998, display_index=di,
+            ))
+            di += 1
+
+            # ── Pending messages indicator ───────────────────
             if session.pending_messages:
                 count = len(session.pending_messages)
                 list_view.append(ChoiceItem(
@@ -1668,61 +1642,6 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                     index=-994, display_index=di,
                 ))
                 di += 1
-
-            # Inbox queue indicator — show each queued item's preamble
-            inbox_count = session.inbox_choices_count()
-            if inbox_count > 0:
-                list_view.append(ChoiceItem(
-                    f"[{s['accent']}]{inbox_count} choice set{'s' if inbox_count != 1 else ''} queued[/{s['accent']}]",
-                    f"[{s['fg_dim']}]Will present when current task resolves[/{s['fg_dim']}]",
-                    index=-993, display_index=di,
-                ))
-                di += 1
-                # Show preambles of queued items
-                for qi, q_item in enumerate(session.inbox):
-                    if q_item.done or q_item.kind != "choices":
-                        continue
-                    preamble_preview = q_item.preamble[:80] if q_item.preamble else "(no preamble)"
-                    n_choices = len(q_item.choices)
-                    list_view.append(ChoiceItem(
-                        f"  [{s['fg_dim']}]› {preamble_preview}[/{s['fg_dim']}]",
-                        f"[{s['fg_dim']}]{n_choices} option{'s' if n_choices != 1 else ''}[/{s['fg_dim']}]",
-                        index=-992 + qi, display_index=di,
-                    ))
-                    di += 1
-                di += 1
-
-            # ── Recent speech log ──────────────────────────────────
-            recent = list(reversed(session.speech_log[-20:]))
-            if recent:
-                # Section header
-                list_view.append(ChoiceItem(
-                    f"[{s['fg_dim']}]--- recent speech ---[/{s['fg_dim']}]", "",
-                    index=-995, display_index=di,
-                ))
-                di += 1
-
-                import time as _time
-                now = _time.time()
-                for i, entry in enumerate(recent):
-                    age = now - entry.timestamp
-                    if age < 60:
-                        age_str = f"{int(age)}s ago"
-                    elif age < 3600:
-                        age_str = f"{int(age) // 60}m ago"
-                    else:
-                        age_str = f"{int(age) // 3600}h ago"
-                    list_view.append(ChoiceItem(
-                        entry.text,
-                        f"[{s['fg_dim']}]{age_str}[/{s['fg_dim']}]",
-                        index=-900 + i, display_index=di,
-                    ))
-                    di += 1
-            else:
-                list_view.append(ChoiceItem(
-                    f"[{s['fg_dim']}]No activity yet[/{s['fg_dim']}]", "",
-                    index=-900, display_index=di,
-                ))
 
             list_view.display = True
             list_view.index = 0
@@ -3931,27 +3850,6 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         if getattr(self, '_settings_just_closed', False):
             return
         session = self._focused()
-
-        # Handle activity feed actions (when agent is working, no choices)
-        if session and not session.active:
-            list_view = self.query_one("#choices", ListView)
-            idx = list_view.index or 0
-            item = self._get_item_at_display_index(idx)
-            if item is not None:
-                ci = item.choice_index
-                if ci == -1000:
-                    self.action_queue_message()
-                    return
-                elif ci == -1001:
-                    self._enter_settings()
-                    return
-                elif ci == -1002:
-                    self.action_pane_view()
-                    return
-                elif ci == -1003:
-                    self.action_dashboard()
-                    return
-            return
 
         if not session or not session.active or not session.choices:
             return

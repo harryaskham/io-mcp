@@ -315,7 +315,7 @@ register_session(
 - Queued messages are in-memory only (lost on backend restart)
 - **Sessions are stateless**: no disk persistence. When the backend restarts, agents re-register fresh. This avoids ghost sessions and stale state.
 - **UI voice**: `tts.uiVoice` config uses a separate voice for UI narration (settings, prompts, navigation) while agent speech uses the regular voice
-- **Activity feed**: When the agent is working without choices, the TUI shows an activity feed with actionable items (Queue message, Settings, Pane view, Dashboard) plus a scrollable speech log
+- **Waiting view**: When the agent is working without choices, the right pane shows a clean waiting state with agent status and essential keyboard shortcut hints (m, s, d, v). The inbox list (left pane) remains visible for browsing history
 - **Restart loop**: TUI runs inside a restart loop — "Restart TUI" cleanly exits and re-launches, "Quit" exits fully
 - MCP server auto-restarts up to 5 times on crash (watchdog with exponential backoff)
 - All 15 MCP tools wrapped with error safety — single tool errors don't crash the server
