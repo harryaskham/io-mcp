@@ -134,17 +134,22 @@ class InboxListItem(ListItem):
 
     Shows a status icon (● pending, ✓ done) and truncated preamble text.
     Active (currently displayed) item is highlighted. Done items are dimmed.
+    In multi-agent mode, shows the agent/session name prefix so the user
+    knows which agent sent each item.
     """
 
     def __init__(self, preamble: str, is_done: bool = False,
                  is_active: bool = False, inbox_index: int = 0,
-                 n_choices: int = 0, **kwargs) -> None:
+                 n_choices: int = 0, session_name: str = "",
+                 accent_color: str = "", **kwargs) -> None:
         super().__init__(**kwargs)
         self.inbox_preamble = preamble
         self.is_done = is_done
         self.is_active = is_active
         self.inbox_index = inbox_index  # position in the inbox list
         self.n_choices = n_choices
+        self.session_name = session_name  # agent name (shown in multi-agent mode)
+        self.accent_color = accent_color  # color for agent name tag
 
     def compose(self) -> ComposeResult:
         # Status icon
@@ -155,17 +160,29 @@ class InboxListItem(ListItem):
         else:
             icon = "○"
 
+        # Agent name prefix (only set in multi-agent mode)
+        if self.session_name:
+            accent = self.accent_color or "#88c0d0"
+            if self.is_done:
+                name_tag = f"[dim][{accent}]{self.session_name}[/{accent}][/dim] "
+            else:
+                name_tag = f"[{accent}]{self.session_name}[/{accent}] "
+        else:
+            name_tag = ""
+
         # Truncate preamble for the narrow left pane
-        text = self.inbox_preamble[:40] if self.inbox_preamble else "(no preamble)"
-        if len(self.inbox_preamble) > 40:
+        # Use shorter limit when agent name takes space
+        max_len = 28 if self.session_name else 40
+        text = self.inbox_preamble[:max_len] if self.inbox_preamble else "(no preamble)"
+        if len(self.inbox_preamble) > max_len:
             text += "…"
 
         if self.is_done:
-            yield Label(f" {icon} [dim]{text}[/dim]", classes="inbox-label")
+            yield Label(f" {icon} {name_tag}[dim]{text}[/dim]", classes="inbox-label")
         elif self.is_active:
-            yield Label(f" {icon} {text}", classes="inbox-label")
+            yield Label(f" {icon} {name_tag}{text}", classes="inbox-label")
         else:
-            yield Label(f" {icon} {text}", classes="inbox-label")
+            yield Label(f" {icon} {name_tag}{text}", classes="inbox-label")
 
 
 # ─── Dwell Progress Bar ─────────────────────────────────────────────────────
