@@ -88,6 +88,7 @@ android/
 | `set_stt_model(model)` | Switch STT model |
 | `set_emotion(emotion)` | Set emotion preset or custom instructions |
 | `get_settings()` | Read current settings as JSON |
+| `get_logs(lines)` | Get recent TUI error, proxy, and speech logs for debugging |
 | `reload_config()` | Re-read config from disk, clear TTS cache |
 | `pull_latest()` | Git pull --rebase + config refresh (restart TUI for code changes) |
 | `request_restart()` | Restart backend (TUI reloads, proxy stays) |
@@ -248,6 +249,7 @@ nix build            # Build package
 uv run io-mcp        # Run directly (auto-starts proxy)
 uv run io-mcp --dev  # Dev mode (uses uv run for proxy)
 uv run io-mcp --restart  # Force kill all processes first
+uv run io-mcp --default-config  # Ignore user config, use built-in defaults
 io-mcp server        # Start proxy daemon only
 io-mcp status        # Show health of proxy/backend/API
 uv run pytest tests/ # Run tests
@@ -318,7 +320,7 @@ register_session(
 - **Activity feed**: When the agent is working without choices, the TUI shows an activity feed with actionable items (Queue message, Settings, Pane view, Dashboard) plus a scrollable speech log
 - **Restart loop**: TUI runs inside a restart loop — "Restart TUI" cleanly exits and re-launches, "Quit" exits fully
 - MCP server auto-restarts up to 5 times on crash (watchdog with exponential backoff)
-- All 15 MCP tools wrapped with error safety — single tool errors don't crash the server
+- All 16 MCP tools wrapped with error safety — single tool errors don't crash the server
 - Config validated on load with specific warnings for invalid references
 - Ambient mode: escalating TTS updates during silence (30s initial, then every 45s with context). **Disabled by default.** Enable in `config.ambient.enabled: true`
 - Agent activity indicator shows last speech in TUI
@@ -331,9 +333,14 @@ register_session(
 - **TUI restart resilience**: backend uses a mutable app reference so tool dispatch survives TUI restarts. Pending `present_choices` calls automatically retry with the new TUI instance
 - **Speech reminders**: tool responses include a reminder if the agent hasn't called `speak_async()` in over 60 seconds, nudging agents to narrate during long operations
 - **Thinking phrases**: ambient updates use playful filler phrases ("Hmm, let me see", "One moment", "Huh, interesting") instead of generic status messages
-- **Local TTS fallback**: option scroll readout uses `termux-tts-speak` (Android native TTS, default) or espeak-ng for instant audio when API TTS isn't cached yet. Full-quality API voice plays on cache hit. Agent speech always uses full API TTS. Configure with `tts.localBackend`: `termux`, `espeak`, or `none`.
+- **Local TTS fallback**: option scroll readout uses `termux-tts-speak` (Android native TTS via MUSIC audio stream, default) or espeak-ng for instant audio when API TTS isn't cached yet. Full-quality API voice plays on cache hit. Agent speech always uses full API TTS. Configure with `tts.localBackend`: `termux`, `espeak`, or `none`. The termux backend bypasses PulseAudio entirely.
 - **Number keys everywhere**: `1`-`9` number selection works in all menus: choices, settings, dashboard, dialogs, spawn menu, tab picker, quick actions, and setting value pickers
 - **Hostname auto-detection**: server detects Tailscale DNS hostname (e.g. `harrys-macbook-pro`) from `tailscale status --json`. Overrides `localhost`, `.local`, or empty hostnames from agents. Only caches good values — retries Tailscale if it initially fails.
+- **Two-column inbox layout**: when an agent sends choices, the TUI shows a left pane (inbox list of pending/completed items with status icons ●/○/✓) and a right pane (choices for the active item). Left pane is ~30% width. Items show truncated preambles and counts
+- **Collapsed extras menu**: extra options are split into primary (always visible, e.g. "Record response") and secondary (hidden behind a "More options ›" toggle). Selecting the toggle expands/collapses the secondary extras. Reduces clutter in the default choices view
+- **PulseAudio health check**: TTS engine adds a brief 50ms pause before PulseAudio playback to let the audio subsystem settle, preventing playback glitches on network audio
+- **`get_logs` MCP tool**: agents can call `get_logs(lines=50)` to retrieve recent TUI error logs, proxy logs, and speech history for debugging. Reads from `/tmp/io-mcp-tui-error.log` and `/tmp/io-mcp-proxy.log`
+- **`--default-config` flag**: run `io-mcp --default-config` to ignore user config files and use built-in defaults only. Does not overwrite the config file on disk. Useful for debugging config issues
 
 ### Fallback TTS (when MCP is down)
 
