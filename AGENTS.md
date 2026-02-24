@@ -5,51 +5,67 @@ MCP server providing hands-free Claude Code interaction via scroll wheel (smart 
 ## Architecture
 
 ```
-┌─────────────────┐   SSE :8444   ┌──────────────┐
-│  Claude Code A  │◄────────────►│  MCP Server   │
-│  (agent)        │               │  (server.py)  │
-└─────────────────┘               └──────┬───────┘
-┌─────────────────┐                      │ per-session
-│  Claude Code B  │◄────────────────────►│ state via
-│  (agent)        │                      │ Context
-└─────────────────┘               ┌──────┴───────┐
-                                  │  Textual TUI  │  ◄─── Frontend API :8445
-                                  │  (tui.py)     │       (SSE + REST)
-                                  └──────┬───────┘            │
-                                         │              ┌─────┴──────┐
-                              ┌──────────┼──────────┐   │ Android App│
-                              │          │          │   │ (Compose)  │
-                         scroll wheel  keyboard   TTS   └────────────┘
-                         (smart ring)  (optional) audio
+┌─────────────────┐  streamable-http  ┌──────────────┐
+│  Claude Code A  │◄────────────────►│  MCP Proxy    │ :8444
+│  (agent)        │                   │  (proxy.py)   │
+└─────────────────┘                   └──────┬───────┘
+┌─────────────────┐                          │ HTTP POST
+│  Claude Code B  │◄────────────────────────►│ /handle-mcp
+│  (agent)        │                          │
+└─────────────────┘                   ┌──────┴───────┐
+                                      │  Backend      │ :8446
+                                      │  (__main__.py) │
+                                      └──────┬───────┘
+                                             │
+                                      ┌──────┴───────┐
+                                      │  Textual TUI  │  ◄─── Frontend API :8445
+                                      │  (tui/app.py) │       (SSE + REST)
+                                      └──────┬───────┘            │
+                                             │              ┌─────┴──────┐
+                                  ┌──────────┼──────────┐   │ Android App│
+                                  │          │          │   │ (Compose)  │
+                             scroll wheel  keyboard   TTS   └────────────┘
+                             (smart ring)  (optional) audio
 ```
 
-- **MCP Server** (`server.py`): FastMCP tools via streamable-http on port 8444. Decoupled from frontend via `Frontend` protocol
-- **Frontend API** (`api.py`): REST + SSE on port 8445 for remote frontends (Android app)
-- **TUI** (`tui.py`): Textual app — tabbed sessions, scroll/keyboard navigation, TTS, voice input
+- **MCP Proxy** (`proxy.py`): Thin FastMCP proxy on :8444. Agents connect here. Survives backend restarts.
+- **Backend** (`__main__.py`): Main process with TUI, TTS, session logic. Exposes /handle-mcp on :8446 for the proxy.
+- **Frontend API** (`api.py`): REST + SSE on :8445 for remote frontends (Android app)
+- **TUI** (`tui/app.py`): Textual app — tabbed sessions, scroll/keyboard navigation, TTS, voice input
 - **Android App** (`android/`): Jetpack Compose stateless frontend — displays choices, sends selections, mic button
 - **Multi-session**: Each agent gets its own tab with independent state
 - **TTS pipeline**: `tts` CLI → WAV → `paplay` via PulseAudio. Streaming mode for lower latency
 - **Config system**: `~/.config/io-mcp/config.yml` merged with local `.io-mcp.yml`
-- **Haptic feedback**: `termux-vibrate` on scroll (30ms) and selection (100ms)
-- **Ambient mode**: Escalating status updates during agent silence — configurable timing and messages
+- **Haptic feedback**: `termux-vibrate` on scroll (30ms) and selection (100ms). Vibration patterns for semantic events.
+- **Ambient mode**: Escalating status updates during agent silence — exponential backoff after 4th update
 
 ## Source Layout
 
 ```
 src/io_mcp/
-├── __main__.py   # CLI entry, server startup, Frontend adapter, watchdog
-├── api.py        # Frontend API: EventBus, SSE, REST endpoints, HTTP server
-├── cli.py        # CLI tool: io-mcp-msg for sending messages to sessions
-├── config.py     # IoMcpConfig: YAML loading, env expansion, validation, key bindings
-├── server.py     # MCP tools, Frontend/TTSBackend protocols, create_mcp_server()
-├── session.py    # Session/SpeechEntry/HistoryEntry dataclasses, SessionManager
-├── settings.py   # Settings: wraps IoMcpConfig with property accessors
-├── tui.py        # Textual app: choices, TTS, voice input, settings, extras
-└── tts.py        # TTSEngine: caching, streaming, pregeneration, playback
+├── __main__.py       # CLI entry, two-process startup, tool dispatcher, backend HTTP
+├── api.py            # Frontend API: EventBus, SSE, REST endpoints, HTTP server
+├── backend.py        # Backend HTTP server: /handle-mcp, /health endpoints
+├── cli.py            # CLI tool: io-mcp-msg for sending messages to sessions
+├── config.py         # IoMcpConfig: YAML loading, env expansion, validation, key bindings
+├── notifications.py  # Webhook notifications: ntfy, Slack, Discord, generic webhooks
+├── proxy.py          # Thin MCP proxy: forwards tool calls to backend, survives restarts
+├── server.py         # MCP tool definitions (used by tests; proxy.py is production path)
+├── session.py        # Session/SpeechEntry/HistoryEntry dataclasses, SessionManager
+├── settings.py       # Settings: wraps IoMcpConfig with property accessors
+├── tui/
+│   ├── __init__.py
+│   ├── app.py        # Textual app: choices, TTS, voice input, settings, extras
+│   ├── settings_menu.py  # Settings menu mixin: speed, voice, emotion, theme
+│   ├── views.py      # Dashboard, timeline, pane view, help screen, session actions
+│   ├── voice.py      # Voice recording and transcription mixin
+│   ├── themes.py     # Color schemes (nord, tokyo-night, catppuccin, dracula) + CSS
+│   └── widgets.py    # ChoiceItem, DwellBar, EXTRA_OPTIONS
+└── tts.py            # TTSEngine: caching, streaming, pregeneration, chimes, playback
 android/
 ├── app/src/main/java/com/iomcp/app/MainActivity.kt  # Compose UI
-├── flake.nix     # Nix dev shell for Android SDK
-└── build files   # Gradle build configuration
+├── flake.nix         # Nix dev shell for Android SDK
+└── build files       # Gradle build configuration
 ```
 
 ## MCP Tools
@@ -72,6 +88,9 @@ android/
 | `get_settings()` | Read current settings as JSON |
 | `reload_config()` | Re-read config from disk, clear TTS cache |
 | `pull_latest()` | Git pull --rebase + hot reload |
+| `request_restart()` | Restart backend (TUI reloads, proxy stays) |
+| `request_proxy_restart()` | Restart proxy (breaks MCP connections) |
+| `check_inbox()` | Poll for queued user messages without waiting |
 
 All tool responses include any queued user messages.
 
@@ -100,6 +119,7 @@ config:
     model: gpt-4o-mini-tts
     speed: 1.3
     emotion: happy
+    uiVoice: ""             # separate voice for UI narration (settings, prompts)
     voiceRotation: []       # cycle voices across agent tabs
     emotionRotation: []
   stt:
@@ -111,6 +131,21 @@ config:
     enabled: true
     initialDelaySecs: 30      # first update after 30s of silence
     repeatIntervalSecs: 45    # subsequent updates every 45s
+  healthMonitor:              # detect stuck/crashed agents
+    enabled: true
+    warningThresholdSecs: 300   # 5 min → warning
+    unresponsiveThresholdSecs: 600  # 10 min → unresponsive
+    checkIntervalSecs: 30     # how often to check
+    checkTmuxPane: true       # verify tmux pane is alive
+  notifications:              # webhook notifications (opt-in)
+    enabled: false
+    cooldownSecs: 60          # min gap between identical notifications
+    channels:
+      - name: phone
+        type: ntfy            # ntfy, slack, discord, or webhook
+        url: https://ntfy.sh/my-io-mcp
+        priority: 3
+        events: [health_warning, health_unresponsive, error]
   agents:                     # spawning new Claude Code agents
     defaultWorkdir: ~
     hosts:                    # remote hosts for agent spawning
@@ -165,14 +200,16 @@ quickActions:               # macros accessible via 'x' key
 | `t` | Spawn new Claude Code agent (local or remote) |
 | `x` | Quick actions (configurable macros) |
 | `c` | Toggle conversation mode (continuous voice chat) |
-| `d` | Dashboard (overview of all agent sessions) |
-| `g` | Agent log (scrollable speech transcript) |
+| `d` | Dashboard (overview of all agent sessions with summaries) |
+| `v` | Pane view (live tmux output for focused agent) |
+| `g` | Timeline (unified speech + selection history for focused agent) |
 | `i` | Freeform text input |
 | `m` | Queue message for agent |
 | `space` | Voice input (toggle recording) |
 | `s` | Settings menu |
 | `p`/`P` | Replay prompt / all options |
 | `r` | Hot reload |
+| `?` | Help (keyboard shortcut reference) |
 | `q` | Quit |
 
 ## Android App
@@ -204,8 +241,12 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 ```bash
 nix develop          # Dev shell
 nix build            # Build package
-uv run io-mcp        # Run directly
-uv run pytest tests/ # Run tests (60 tests)
+uv run io-mcp        # Run directly (auto-starts proxy)
+uv run io-mcp --dev  # Dev mode (uses uv run for proxy)
+uv run io-mcp --restart  # Force kill all processes first
+io-mcp server        # Start proxy daemon only
+io-mcp status        # Show health of proxy/backend/API
+uv run pytest tests/ # Run tests
 ```
 
 ## CLI Tools
@@ -266,11 +307,27 @@ register_session(
 - Use `run_command()` to execute shell commands on the server device with user approval
 - Use `present_multi_select()` for checkable batch selections
 - User messages queued via `m` key appear in your next tool response — check for them
+- Use `check_inbox()` to poll for queued messages during long operations without a tool call
+- Queued messages persist across TUI restarts (saved with session data)
+- **UI voice**: `tts.uiVoice` config uses a separate voice for UI narration (settings, prompts, navigation) while agent speech uses the regular voice
+- **Activity feed**: When the agent is working without choices, the TUI shows an activity feed with actionable items (Queue message, Settings, Pane view, Dashboard) plus a scrollable speech log
+- **Restart loop**: TUI runs inside a restart loop — "Restart TUI" cleanly exits and re-launches, "Quit" exits fully
 - MCP server auto-restarts up to 5 times on crash (watchdog with exponential backoff)
 - All 15 MCP tools wrapped with error safety — single tool errors don't crash the server
 - Config validated on load with specific warnings for invalid references
 - Ambient mode: escalating TTS updates during silence (30s initial, then every 45s with context). Configurable in `config.ambient`
 - Agent activity indicator shows last speech in TUI
+- **Health monitoring**: agents are checked every 30s for stuck/crashed state. Warning at 5 min, unresponsive at 10 min. Tmux pane liveness verified. Tab bar shows ⚠/✗ indicators. Configurable in `config.healthMonitor`
+- **Notification webhooks**: send alerts to ntfy, Slack, Discord, or generic webhooks. Events: `health_warning`, `health_unresponsive`, `agent_connected`, `agent_disconnected`, `error`. Per-event cooldown prevents spam. Configure in `config.notifications`
+- **Smart summaries**: sessions track tool call counts and build activity summaries. Dashboard shows per-agent summaries. Agent log (`g` key) shows unified timeline of speech + selections
+- **Tab bar**: always visible — shows "io-mcp" branding when idle, agent name for single session, full tab bar for multiple agents. Health indicators shown per-tab
+- **Dashboard actions**: selecting a session in the dashboard shows a sub-menu: Switch to, Close tab, Kill tmux pane, Back. Close tab is also available in the extra options menu
+- **Dead session pruning**: health monitor auto-removes sessions with confirmed-dead tmux panes that are unresponsive. More aggressive than the standard 5-min stale timeout
+- **TUI restart resilience**: backend uses a mutable app reference so tool dispatch survives TUI restarts. Pending `present_choices` calls automatically retry with the new TUI instance
+- **Speech reminders**: tool responses include a reminder if the agent hasn't called `speak_async()` in over 60 seconds, nudging agents to narrate during long operations
+- **Thinking phrases**: ambient updates use playful filler phrases ("Hmm, let me see...", "One moment...", "Huh, interesting...") instead of generic status messages
+- **Number keys everywhere**: `1`-`9` number selection works in all menus: choices, settings, dashboard, dialogs, spawn menu, tab picker, quick actions, and setting value pickers
+- **Hostname auto-detection**: server detects Tailscale DNS hostname (e.g. `harrys-macbook-pro`) from `tailscale status --json`. Overrides `localhost`, `.local`, or empty hostnames from agents
 
 ### Fallback TTS (when MCP is down)
 
