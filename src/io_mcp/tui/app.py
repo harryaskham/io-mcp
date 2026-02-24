@@ -1872,6 +1872,10 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             list_view.display = True
             list_view.index = 0
 
+            # Focus the right pane (choices) so keyboard navigation works
+            self._inbox_pane_focused = False
+            list_view.focus()
+
             # Update inbox list to highlight the selected done item
             self._inbox_scroll_index = idx
             self._update_inbox_list()
