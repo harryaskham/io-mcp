@@ -251,7 +251,7 @@ async def test_message_mode_opens():
 
 @pytest.mark.asyncio
 async def test_inbox_list_hidden_with_single_item():
-    """Inbox list (left pane) is hidden when there's only 1 inbox item."""
+    """Inbox list (left pane) is always visible when agent is registered."""
     app = make_app()
     async with app.run_test() as pilot:
         session, _ = app.manager.get_or_create("test-1")
@@ -273,7 +273,8 @@ async def test_inbox_list_hidden_with_single_item():
         await pilot.pause(0.1)
 
         inbox_list = app.query_one("#inbox-list", ListView)
-        assert inbox_list.display is False
+        # Inbox pane is always visible once agent is connected
+        assert inbox_list.display is True
 
         # Main content should be visible
         main_content = app.query_one("#main-content")

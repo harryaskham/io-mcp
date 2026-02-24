@@ -1513,7 +1513,12 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         self._update_speech_log()
 
     def _show_waiting(self, label: str) -> None:
-        """Show waiting state after selection, with activity feed filling the space."""
+        """Show waiting state after selection, staying in inbox view.
+
+        After resolving a choice, the inbox view persists showing the
+        done item. If there are more pending items, the next one will
+        auto-present via the inbox drain loop.
+        """
         self.query_one("#preamble").display = False
         self.query_one("#dwell-bar").display = False
         status = self.query_one("#status", Label)
@@ -1523,15 +1528,22 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         status.update(after_text)
         status.display = True
 
-        # Update inbox list and show main content with activity feed
+        # Stay in inbox view — update inbox list to reflect the done item
         self._ensure_main_content_visible(show_inbox=True)
         self._inbox_pane_focused = False
 
-        # Fill the choices area with activity feed
-        self._show_activity_feed(session)
+        # Show a simple waiting state in the right pane (not full activity feed)
+        list_view = self.query_one("#choices", ListView)
+        list_view.clear()
+        s = self._cs
+        list_view.append(ChoiceItem(
+            f"[{s['fg_dim']}]Waiting for agent...[/{s['fg_dim']}]", "",
+            index=-999, display_index=0,
+        ))
+        list_view.display = True
 
     def _show_idle(self) -> None:
-        """Show idle state with activity feed filling the space."""
+        """Show idle state with inbox view."""
         self.query_one("#preamble").display = False
         self.query_one("#dwell-bar").display = False
         self.query_one("#speech-log").display = False
@@ -1552,11 +1564,18 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         status.update(status_text)
         status.display = True
 
-        # Update inbox list and show main content with activity feed
+        # Show inbox view with history
         self._ensure_main_content_visible(show_inbox=True)
 
-        # Fill the choices area with activity feed
-        self._show_activity_feed(session)
+        # Show simple waiting state in right pane
+        s = self._cs
+        list_view = self.query_one("#choices", ListView)
+        list_view.clear()
+        list_view.append(ChoiceItem(
+            f"[{s['fg_dim']}]Waiting for agent...[/{s['fg_dim']}]", "",
+            index=-999, display_index=0,
+        ))
+        list_view.display = True
 
     def _show_activity_feed(self, session) -> None:
         """Populate the choices ListView with an activity feed for the session.
@@ -1736,8 +1755,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             # Total displayable items
             total = len(pending) + len(done)
 
-            # Hide left pane when ≤1 item (identical to current behavior)
-            if total <= 1:
+            # Always show inbox pane when agent is connected (even if empty/single)
+            if total == 0 and not session.registered:
                 inbox_list.display = False
                 return
 
