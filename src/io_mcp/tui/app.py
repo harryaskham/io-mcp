@@ -60,6 +60,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         Binding("enter", "select", "Select", show=True),
         Binding("i", "freeform_input", "Type reply", show=True),
         Binding("m", "queue_message", "Message", show=True),
+        Binding("M", "voice_message", "Voice msg", show=False),
         Binding("space", "voice_input", "Voice", show=True),
         Binding("s", "toggle_settings", "Settings", show=True),
         Binding("p", "replay_prompt", "Replay", show=False),
@@ -127,6 +128,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         reload_key = kb.get("hotReload", "r")
         quit_key = kb.get("quit", "q")
 
+        voice_message_key = kb.get("voiceMessage", "M")
+
         self._bindings = [
             Binding(f"{down_key},down", "cursor_down", "Down", show=False),
             Binding(f"{up_key},up", "cursor_up", "Up", show=False),
@@ -134,6 +137,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             Binding(freeform_key, "freeform_input", "Type reply", show=True),
             Binding(message_key, "queue_message", "Message", show=True),
             Binding(voice_key, "voice_input", "Voice", show=True),
+            Binding(voice_message_key, "voice_message", "Voice msg", show=False),
             Binding(settings_key, "toggle_settings", "Settings", show=True),
             Binding(replay_key, "replay_prompt", "Replay", show=False),
             Binding(replay_all_key, "replay_prompt_full", "Replay all", show=False),
@@ -341,7 +345,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         yield SubmitTextArea(id="freeform-input", soft_wrap=True, show_line_numbers=False, tab_behavior="focus")
         yield Input(placeholder="Filter choices...", id="filter-input")
         yield DwellBar(id="dwell-bar")
-        yield Static("[dim]↕[/dim] Scroll  [dim]⏎[/dim] Select  [dim]x[/dim] Multi  [dim]u[/dim] Undo  [dim]i[/dim] Type  [dim]m[/dim] Msg  [dim]␣[/dim] Voice  [dim]/[/dim] Filter  [dim]s[/dim] Settings  [dim]q[/dim] Back/Quit", id="footer-help")
+        yield Static("[dim]↕[/dim] Scroll  [dim]⏎[/dim] Select  [dim]x[/dim] Multi  [dim]u[/dim] Undo  [dim]i[/dim] Type  [dim]m[/dim] Msg  [dim]M[/dim] VoiceMsg  [dim]␣[/dim] Voice  [dim]/[/dim] Filter  [dim]s[/dim] Settings  [dim]q[/dim] Back/Quit", id="footer-help")
 
     def on_mount(self) -> None:
         self.title = "io-mcp"
@@ -2932,6 +2936,23 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         self._tts.stop()
         self._speak_ui("Type or speak a message for the agent")
+
+    def action_voice_message(self) -> None:
+        """Start voice recording directly in message mode.
+
+        Like pressing m then space, but as a single key (M). Records voice,
+        transcribes, and queues the result as a pending message for the agent.
+        """
+        session = self._focused()
+        if not session:
+            return
+        if getattr(session, 'input_mode', False) or getattr(session, 'voice_recording', False):
+            return
+        self._message_mode = True
+        self._freeform_spoken_pos = 0
+        self._tts.stop()
+        self._speak_ui("Recording voice message")
+        self._start_voice_recording()
 
     def action_filter_choices(self) -> None:
         """Open filter input to narrow the choice list by typing."""

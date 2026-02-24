@@ -1123,7 +1123,8 @@ def main() -> None:
                          "h": _app.action_prev_tab, "l": _app.action_next_tab,
                          "s": _app.action_toggle_settings, "d": _app.action_dashboard,
                          "n": _app.action_next_choices_tab,
-                         "m": _app.action_queue_message, "i": _app.action_freeform_input,
+                         "m": _app.action_queue_message, "M": _app.action_voice_message,
+                         "i": _app.action_freeform_input,
                         }.get(key, lambda: None)()
                     except Exception:
                         pass
@@ -1157,7 +1158,8 @@ def main() -> None:
                          "h": _app.action_prev_tab, "l": _app.action_next_tab,
                          "s": _app.action_toggle_settings, "d": _app.action_dashboard,
                          "n": _app.action_next_choices_tab,
-                         "m": _app.action_queue_message, "i": _app.action_freeform_input,
+                         "m": _app.action_queue_message, "M": _app.action_voice_message,
+                         "i": _app.action_freeform_input,
                         }.get(key, lambda: None)()
                     except Exception:
                         pass
