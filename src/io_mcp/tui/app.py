@@ -3192,15 +3192,14 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
     def _pick_by_number(self, n: int) -> None:
         """Immediately select option by 1-based number.
 
-        Works in regular choices, activity feed, and quick settings submenu.
-        Blocked during text input, voice recording, and settings edit mode.
+        Works in all menus: regular choices, activity feed, quick settings,
+        dashboard, settings, dialogs, spawn menu, tab picker, and setting
+        edit mode. Blocked only during text input and voice recording.
         """
         session = self._focused()
         if not session:
             return
         if session.input_mode or session.voice_recording:
-            return
-        if self._setting_edit_mode:
             return
 
         # Quick settings submenu — dispatch by number
@@ -3220,6 +3219,84 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             sessions = self.manager.all_sessions()
             if 1 <= n <= len(sessions):
                 self._dashboard_session_actions(n - 1)
+            return
+
+        # Settings menu — select setting by number
+        if self._in_settings and not getattr(self, '_dashboard_mode', False):
+            # Tab picker
+            if getattr(self, '_tab_picker_mode', False):
+                sessions = getattr(self, '_tab_picker_sessions', [])
+                if 1 <= n <= len(sessions):
+                    self._tab_picker_mode = False
+                    self._in_settings = False
+                    self._switch_to_session(sessions[n - 1])
+                return
+
+            # Spawn agent menu
+            spawn_opts = getattr(self, '_spawn_options', None)
+            if spawn_opts:
+                if 1 <= n <= len(spawn_opts):
+                    self._in_settings = False
+                    self._do_spawn(spawn_opts[n - 1])
+                    self._spawn_options = None
+                return
+
+            # Quick action menu
+            qa_opts = getattr(self, '_quick_action_options', None)
+            if qa_opts:
+                if 1 <= n <= len(qa_opts):
+                    self._in_settings = False
+                    action = qa_opts[n - 1].get("_action")
+                    self._quick_action_options = None
+                    if action is None:
+                        self._exit_settings()
+                    else:
+                        self._execute_quick_action(action)
+                return
+
+            # Worktree options
+            if getattr(self, '_worktree_options', None):
+                wt_opts = self._worktree_options
+                if 1 <= n <= len(wt_opts):
+                    self._handle_worktree_select(n - 1)
+                return
+
+            # Dialog (quit confirm, restart confirm, etc.)
+            dialog_cb = getattr(self, '_dialog_callback', None)
+            dialog_btns = getattr(self, '_dialog_buttons', None)
+            if dialog_cb and dialog_btns:
+                if 1 <= n <= len(dialog_btns):
+                    # Buttons are at display_index 1+ (index 0 is the message)
+                    # Use n directly as display_index since message is at 0
+                    self._handle_dialog_select(n)
+                return
+
+            # Help, timeline, history, log — read-only, no action on number
+            if getattr(self, '_help_mode', False):
+                return
+            if getattr(self, '_log_viewer_mode', False):
+                return
+            if getattr(self, '_history_mode', False):
+                return
+
+            # Settings items (Speed, Voice, Emotion, etc.)
+            if hasattr(self, '_settings_items') and self._settings_items:
+                if 1 <= n <= len(self._settings_items):
+                    key = self._settings_items[n - 1]["key"]
+                    if key == "close":
+                        self._exit_settings()
+                    else:
+                        self._enter_setting_edit(key)
+                return
+
+            # Setting edit mode — number picks from value list
+            if self._setting_edit_mode:
+                list_view = self.query_one("#choices", ListView)
+                if 1 <= n <= len(list_view.children):
+                    list_view.index = n - 1
+                    self._apply_setting_edit()
+                return
+
             return
 
         # Activity feed — dispatch actionable items by number
