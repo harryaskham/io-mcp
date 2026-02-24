@@ -17,7 +17,7 @@ from typing import Optional
 from textual import on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical, VerticalScroll
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.events import MouseScrollDown, MouseScrollUp
 from textual.reactive import reactive
 from textual.timer import Timer
@@ -336,7 +336,9 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
     def compose(self) -> ComposeResult:
         yield Header(name="io-mcp", show_clock=False)
-        yield Static("", id="tab-bar")
+        with Horizontal(id="tab-bar"):
+            yield Static("", id="tab-bar-left")
+            yield Static("", id="tab-bar-right")
         yield Static("", id="daemon-status")
         status_text = "[dim]Ready — demo mode[/dim]" if self._demo else "[dim]Waiting for agent...[/dim]"
         yield Label(status_text, id="status")
@@ -858,15 +860,19 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
     def _update_tab_bar(self) -> None:
         """Update the tab bar display.
 
-        Always visible — shows 'io-mcp' branding when no sessions,
-        agent name for single sessions, and full tab bar for multiple.
-        Right side shows daemon status indicators (mcp/tui/api) and
-        inbox queue count.
+        Two-section layout:
+        - Left: agent tabs/branding (grows, wraps to multiple lines)
+        - Right: daemon status indicators + inbox count (fixed)
         """
-        tab_bar = self.query_one("#tab-bar", Static)
+        try:
+            tab_left = self.query_one("#tab-bar-left", Static)
+            tab_right = self.query_one("#tab-bar-right", Static)
+        except Exception:
+            return
+
         s = get_scheme(getattr(self, '_color_scheme', DEFAULT_SCHEME))
 
-        # Build right-hand side status
+        # ── Right side: status indicators + inbox ──
         rhs_parts = []
         # Inbox queue count across all sessions
         total_inbox = sum(
@@ -874,14 +880,14 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             for sess in self.manager.all_sessions()
         )
         if total_inbox > 0:
-            rhs_parts.append(f"[{s['accent']}]inbox:{total_inbox}[/{s['accent']}]")
+            rhs_parts.append(f"[bold {s['accent']}]q:{total_inbox}[/bold {s['accent']}]")
         # Daemon health dots
         daemon_status = getattr(self, '_daemon_status_text', '')
         if daemon_status:
             rhs_parts.append(daemon_status)
-        rhs = f"  [{s['fg_dim']}]|[/{s['fg_dim']}]  " + " ".join(rhs_parts) if rhs_parts else ""
+        tab_right.update(" ".join(rhs_parts) if rhs_parts else "")
 
-        # Build left-hand side (tabs/branding)
+        # ── Left side: agent tabs/branding ──
         if self.manager.count() <= 0:
             lhs = f"[bold {s['accent']}]io-mcp[/bold {s['accent']}]  [dim]waiting for agent...[/dim]"
         elif self.manager.count() == 1:
@@ -911,14 +917,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 error=s['error'],
             )
 
-        tab_bar.update(f"{lhs}{rhs}")
-        tab_bar.display = True
-
-        # Hide the separate daemon-status widget (now merged into tab bar)
-        try:
-            self.query_one("#daemon-status", Static).display = False
-        except Exception:
-            pass
+        tab_left.update(lhs)
 
     # ─── Speech log rendering ──────────────────────────────────────
 

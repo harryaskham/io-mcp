@@ -103,20 +103,33 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
 
     #tab-bar {{
         dock: top;
-        height: 1;
+        height: auto;
         width: 1fr;
-        color: {s['accent']};
         background: {s['bg_alt']};
+        layout: horizontal;
+    }}
+
+    #tab-bar-left {{
+        width: 1fr;
+        height: auto;
+        min-height: 1;
+        color: {s['accent']};
         padding: 0 1;
     }}
 
-    /* ─── Daemon status line ────────────────────────────────── */
+    #tab-bar-right {{
+        width: auto;
+        height: auto;
+        min-height: 1;
+        color: {s['fg_dim']};
+        padding: 0 1;
+        content-align: right middle;
+    }}
+
+    /* ─── Daemon status line (legacy, hidden — merged into tab bar) ── */
 
     #daemon-status {{
-        height: 1;
-        color: {s['fg_dim']};
-        width: 1fr;
-        padding: 0 2;
+        display: none;
     }}
 
     /* ─── Agent prompt / preamble ──────────────────────────── */
