@@ -273,6 +273,22 @@ class IoMcpConfig:
     """Warnings from the last validation run."""
 
     @classmethod
+    def reset(cls, config_path: Optional[str] = None) -> "IoMcpConfig":
+        """Delete the config file and regenerate it with all current defaults.
+
+        This is useful when the config has stale keys or the user wants a
+        clean slate with all the latest default values.
+
+        Returns the freshly-created IoMcpConfig with defaults.
+        """
+        path = config_path or DEFAULT_CONFIG_FILE
+        if os.path.isfile(path):
+            os.unlink(path)
+            print(f"  Config: deleted {path}", flush=True)
+        # Load will see the file is missing and create it with defaults
+        return cls.load(path)
+
+    @classmethod
     def load(cls, config_path: Optional[str] = None) -> "IoMcpConfig":
         """Load config from file, creating with defaults if not found.
 

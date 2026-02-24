@@ -15,6 +15,7 @@ Usage:
     uv run io-mcp server             # Start proxy daemon only
     uv run io-mcp server --foreground  # Proxy in foreground (debug)
     uv run io-mcp --demo             # Demo mode, no MCP
+    uv run io-mcp --reset-config     # Delete config.yml and regenerate with defaults
 """
 
 from __future__ import annotations
@@ -1157,6 +1158,8 @@ def main() -> None:
     parser.add_argument("--config-file", default=None, metavar="PATH")
     parser.add_argument("--default-config", action="store_true",
                         help="Ignore user config, use built-in defaults (does not overwrite config file)")
+    parser.add_argument("--reset-config", action="store_true",
+                        help="Delete config.yml and regenerate with current defaults (clean slate)")
     parser.add_argument("--djent", action="store_true")
     args = parser.parse_args()
 
@@ -1171,6 +1174,10 @@ def main() -> None:
         expanded = _expand_config(raw)
         config = IoMcpConfig(raw=raw, expanded=expanded, config_path="/dev/null")
         print("  Config: using built-in defaults (--default-config)", flush=True)
+    elif args.reset_config:
+        # Delete and regenerate config with all current defaults
+        config = IoMcpConfig.reset(args.config_file)
+        print("  Config: reset to defaults (--reset-config)", flush=True)
     else:
         config = IoMcpConfig.load(args.config_file)
     if args.djent:
