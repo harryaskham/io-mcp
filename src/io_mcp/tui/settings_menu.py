@@ -141,7 +141,7 @@ class SettingsMixin:
         # Guard: prevent the Enter keypress that triggered "close" from
         # also firing _do_select on the freshly-restored choice list.
         self._settings_just_closed = True
-        self.set_timer(0.1, self._clear_settings_guard)
+        self.set_timer(0.3, self._clear_settings_guard)
 
         # UI first, then TTS
         if session and session.active:

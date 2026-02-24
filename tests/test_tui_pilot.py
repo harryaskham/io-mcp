@@ -487,7 +487,7 @@ async def test_exit_settings_uses_clear_all_modal_state():
         assert app._settings_just_closed is True  # guard active
 
         # Guard clears after timer (100ms)
-        await pilot.pause(0.15)
+        await pilot.pause(0.3)
         assert app._settings_just_closed is False
 
 
@@ -548,7 +548,7 @@ async def test_choices_force_exit_settings():
         assert session.selection is None  # No selection made
 
         # Guard clears after timer
-        await pilot.pause(0.15)
+        await pilot.pause(0.3)
         assert app._settings_just_closed is False
 
 
