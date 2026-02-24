@@ -206,6 +206,8 @@ class TTSEngine:
         if path and os.path.isfile(path):
             # Fast path: cached — kill current and play immediately
             self.stop()
+            import time as _t
+            _t.sleep(0.05)  # Brief pause to let PulseAudio settle
             self._start_playback(path)
             if block:
                 self._wait_for_playback()
@@ -214,6 +216,8 @@ class TTSEngine:
             p = self._generate_to_file(text, voice_override, emotion_override)
             if p:
                 self.stop()
+                import time as _t
+                _t.sleep(0.05)  # Brief pause to let PulseAudio settle
                 self._start_playback(p)
                 if block:
                     self._wait_for_playback()
