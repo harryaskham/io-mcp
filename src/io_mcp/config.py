@@ -193,15 +193,38 @@ DEFAULT_CONFIG: dict[str, Any] = {
         },
     },
     "emotionPresets": {
-        "happy": "Speak in a warm, cheerful, and upbeat tone. Sound genuinely pleased and positive.",
-        "calm": "Speak in a soothing, relaxed, and measured tone. Be gentle and unhurried.",
-        "excited": "Speak with high energy and enthusiasm. Sound genuinely thrilled and animated.",
-        "serious": "Speak in a focused, professional, and matter-of-fact tone. Be clear and direct.",
-        "friendly": "Speak in a warm, conversational, and approachable tone. Like talking to a good friend.",
-        "neutral": "Speak in a natural, even tone without strong emotion.",
-        "storyteller": "Speak like a captivating narrator. Vary pace and emphasis for dramatic effect.",
-        "gentle": "Speak softly and kindly, as if comforting someone. Warm and tender.",
-        "shy": "Speak in a soft, quiet whisper. Be hesitant and gentle, as if sharing a secret. Keep volume low and intimate.",
+        "happy": {
+            "instructions": "Speak in a warm, cheerful, and upbeat tone. Sound genuinely pleased and positive.",
+            "ssmlStyle": "cheerful",
+        },
+        "calm": {
+            "instructions": "Speak in a soothing, relaxed, and measured tone. Be gentle and unhurried.",
+        },
+        "excited": {
+            "instructions": "Speak with high energy and enthusiasm. Sound genuinely thrilled and animated.",
+            "ssmlStyle": "excited",
+        },
+        "serious": {
+            "instructions": "Speak in a focused, professional, and matter-of-fact tone. Be clear and direct.",
+        },
+        "friendly": {
+            "instructions": "Speak in a warm, conversational, and approachable tone. Like talking to a good friend.",
+            "ssmlStyle": "friendly",
+        },
+        "neutral": {
+            "instructions": "Speak in a natural, even tone without strong emotion.",
+        },
+        "storyteller": {
+            "instructions": "Speak like a captivating narrator. Vary pace and emphasis for dramatic effect.",
+        },
+        "gentle": {
+            "instructions": "Speak softly and kindly, as if comforting someone. Warm and tender.",
+            "ssmlStyle": "gentle",
+        },
+        "shy": {
+            "instructions": "Speak in a soft, quiet whisper. Be hesitant and gentle, as if sharing a secret. Keep volume low and intimate.",
+            "ssmlStyle": "whispering",
+        },
     },
 }
 
@@ -374,10 +397,17 @@ class IoMcpConfig:
                 if provider and provider not in self.raw.get("providers", {}):
                     warnings.append(f"Model '{name}' references provider '{provider}' which is not defined")
 
-        # Check emotion preset exists
+        # Check emotion preset exists and supports current provider
         emotion = self.runtime.get("tts", {}).get("emotion", "")
         presets = self.raw.get("emotionPresets", {})
-        if emotion and presets and emotion not in presets:
+        if emotion and presets and emotion in presets:
+            if not self._preset_supports_provider(presets[emotion]):
+                provider_name = self.tts_provider_name
+                warnings.append(
+                    f"Emotion preset '{emotion}' has no value for provider "
+                    f"'{provider_name}' — it will have no effect"
+                )
+        elif emotion and presets and emotion not in presets:
             # Not an error — could be a custom instruction string
             pass
 
@@ -527,19 +557,62 @@ class IoMcpConfig:
     def tts_emotion(self) -> str:
         return self.runtime.get("tts", {}).get("emotion", "neutral")
 
+    def _resolve_preset(self, preset_value: Any) -> dict[str, str]:
+        """Normalize an emotion preset value to a dict.
+
+        Supports both the legacy flat-string format (plain instructions text)
+        and the new provider-aware dict format with ``instructions`` and/or
+        ``ssmlStyle`` keys.
+        """
+        if isinstance(preset_value, str):
+            return {"instructions": preset_value}
+        if isinstance(preset_value, dict):
+            return preset_value
+        return {}
+
+    def _preset_supports_provider(self, preset_value: Any, provider: str | None = None) -> bool:
+        """Check whether *preset_value* has a usable value for *provider*.
+
+        For ``azure-speech`` the preset must contain an ``ssmlStyle`` key.
+        For all other providers (OpenAI-style) it must contain ``instructions``.
+        If *provider* is ``None`` the current TTS provider is used.
+        """
+        resolved = self._resolve_preset(preset_value)
+        prov = provider or self.tts_provider_name
+        if prov == "azure-speech":
+            return bool(resolved.get("ssmlStyle"))
+        return bool(resolved.get("instructions"))
+
     @property
     def tts_instructions(self) -> str:
-        """Get the TTS instructions text for the current emotion preset."""
+        """Get the TTS instructions text for the current emotion preset.
+
+        For OpenAI-style providers this returns the ``instructions`` field.
+        For ``azure-speech`` this returns the ``ssmlStyle`` value (passed via
+        ``--instructions`` to the ``tts`` CLI which maps it to SSML).
+        """
         emotion = self.tts_emotion
         presets = self.expanded.get("emotionPresets", {})
-        # If the emotion matches a preset, use its text
         if emotion in presets:
-            return presets[emotion]
-        # Otherwise treat the emotion value itself as custom instructions
+            resolved = self._resolve_preset(presets[emotion])
+            if self.tts_provider_name == "azure-speech":
+                return resolved.get("ssmlStyle", "")
+            return resolved.get("instructions", "")
+        # Custom instruction string (not a preset name)
         return emotion
 
     @property
     def emotion_preset_names(self) -> list[str]:
+        """Return preset names that are valid for the current TTS provider."""
+        presets = self.expanded.get("emotionPresets", {})
+        return [
+            name for name, value in presets.items()
+            if self._preset_supports_provider(value)
+        ]
+
+    @property
+    def all_emotion_preset_names(self) -> list[str]:
+        """Return all preset names regardless of provider."""
         return list(self.expanded.get("emotionPresets", {}).keys())
 
     @property
@@ -950,7 +1023,17 @@ class IoMcpConfig:
         # Add emotion/instructions (override or default)
         emotion = emotion_override or self.tts_emotion
         presets = self.expanded.get("emotionPresets", {})
-        instructions = presets.get(emotion, emotion) if emotion else self.tts_instructions
+        if emotion and emotion in presets:
+            resolved = self._resolve_preset(presets[emotion])
+            if provider == "azure-speech":
+                instructions = resolved.get("ssmlStyle", "")
+            else:
+                instructions = resolved.get("instructions", "")
+        elif emotion:
+            # Custom instruction string (not a preset name)
+            instructions = emotion
+        else:
+            instructions = self.tts_instructions
         if instructions:
             args.extend(["--instructions", instructions])
 

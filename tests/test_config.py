@@ -269,11 +269,28 @@ class TestConfigAccessors:
     def test_emotion_defaults(self, config_with_defaults):
         c = config_with_defaults
         assert c.tts_emotion == "shy"
+        # Default model is mai-voice-1 (azure-speech) so only presets with ssmlStyle are shown
         assert "shy" in c.emotion_preset_names
-        assert "calm" in c.emotion_preset_names
+        assert "happy" in c.emotion_preset_names  # has ssmlStyle
+        # "calm" has no ssmlStyle so it's filtered out for azure-speech
+        assert "calm" not in c.emotion_preset_names
+        # all_emotion_preset_names returns everything regardless of provider
+        assert "calm" in c.all_emotion_preset_names
+        assert "shy" in c.all_emotion_preset_names
 
     def test_tts_instructions_from_preset(self, config_with_defaults):
         c = config_with_defaults
+        # Default model is mai-voice-1 (azure-speech), emotion is "shy"
+        # For azure-speech, tts_instructions returns the ssmlStyle value
+        instructions = c.tts_instructions
+        assert instructions == "whispering"
+
+    def test_tts_instructions_openai_preset(self, tmp_config):
+        """OpenAI provider returns instruction text from presets."""
+        custom = {"config": {"tts": {"model": "gpt-4o-mini-tts", "voice": "sage", "emotion": "shy"}}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
         instructions = c.tts_instructions
         assert "whisper" in instructions.lower() or "quiet" in instructions.lower()
 
@@ -536,6 +553,17 @@ class TestConfigMutation:
         c = config_with_defaults
         c.set_tts_emotion("excited")
         assert c.tts_emotion == "excited"
+        # Default model is azure-speech, so tts_instructions returns ssmlStyle
+        assert c.tts_instructions == "excited"
+
+    def test_set_tts_emotion_openai(self, tmp_config):
+        """With OpenAI model, tts_instructions returns instruction text."""
+        custom = {"config": {"tts": {"model": "gpt-4o-mini-tts", "voice": "sage"}}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        c.set_tts_emotion("excited")
+        assert c.tts_emotion == "excited"
         assert "enthusiasm" in c.tts_instructions.lower()
 
     def test_set_stt_model(self, config_with_defaults):
@@ -592,10 +620,22 @@ class TestCLIArgs:
     def test_tts_args_with_overrides(self, config_with_defaults, monkeypatch):
         monkeypatch.setenv("AZURE_SPEECH_API_KEY", "test-key")
         c = IoMcpConfig.load(config_with_defaults.config_path)
+        # Use "happy" which has ssmlStyle "cheerful" for azure-speech
         args = c.tts_cli_args("hello", voice_override="en-US-Teo:MAI-Voice-1",
-                              emotion_override="calm")
+                              emotion_override="happy")
         assert "en-US-Teo:MAI-Voice-1" in args
-        # Should have instructions from the calm preset
+        # Default model is azure-speech, so instructions should be the ssmlStyle value
+        instructions_idx = args.index("--instructions")
+        assert args[instructions_idx + 1] == "cheerful"
+
+    def test_tts_args_openai_with_emotion(self, tmp_config, monkeypatch):
+        """OpenAI model passes instruction text from presets."""
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        custom = {"config": {"tts": {"model": "gpt-4o-mini-tts", "voice": "sage", "emotion": "calm"}}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        args = c.tts_cli_args("hello", emotion_override="calm")
         instructions_idx = args.index("--instructions")
         assert "soothing" in args[instructions_idx + 1].lower() or "relaxed" in args[instructions_idx + 1].lower()
 
@@ -626,6 +666,128 @@ class TestCLIArgs:
         args = c.stt_cli_args()
         # mai-ears-1 doesn't support realtime
         assert "--realtime" not in args
+
+
+# ---------------------------------------------------------------------------
+# Provider-aware emotion presets
+# ---------------------------------------------------------------------------
+
+class TestProviderAwarePresets:
+    """Tests for the provider-aware emotion preset system."""
+
+    @pytest.fixture
+    def tmp_config(self, tmp_path):
+        return str(tmp_path / "config.yml")
+
+    def test_preset_structure_dict(self, tmp_config):
+        """Presets are dicts with instructions and optional ssmlStyle."""
+        c = IoMcpConfig.load(tmp_config)
+        presets = c.expanded.get("emotionPresets", {})
+        # All defaults should be dicts
+        for name, preset in presets.items():
+            assert isinstance(preset, dict), f"Preset '{name}' should be a dict"
+            assert "instructions" in preset, f"Preset '{name}' should have 'instructions'"
+
+    def test_azure_speech_filters_presets(self, tmp_config):
+        """Azure-speech provider only shows presets with ssmlStyle."""
+        c = IoMcpConfig.load(tmp_config)
+        # Default is mai-voice-1 (azure-speech)
+        names = c.emotion_preset_names
+        # Only presets with ssmlStyle should appear
+        for name in names:
+            preset = c.expanded["emotionPresets"][name]
+            assert "ssmlStyle" in preset, f"Preset '{name}' shown for azure-speech but has no ssmlStyle"
+
+    def test_openai_shows_all_instruction_presets(self, tmp_config):
+        """OpenAI provider shows presets with instructions."""
+        custom = {"config": {"tts": {"model": "gpt-4o-mini-tts", "voice": "sage"}}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        names = c.emotion_preset_names
+        # All defaults have instructions, so all should appear
+        assert "calm" in names
+        assert "shy" in names
+        assert "happy" in names
+
+    def test_legacy_string_preset_compat(self, tmp_config):
+        """Legacy string presets are treated as OpenAI instructions."""
+        custom = {
+            "emotionPresets": {
+                "custom_legacy": "Speak like a pirate.",
+            },
+            "config": {"tts": {"model": "gpt-4o-mini-tts", "voice": "sage", "emotion": "custom_legacy"}},
+        }
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert "custom_legacy" in c.emotion_preset_names
+        assert c.tts_instructions == "Speak like a pirate."
+
+    def test_legacy_string_preset_not_shown_for_azure(self, tmp_config):
+        """Legacy string presets are hidden for azure-speech (no ssmlStyle)."""
+        custom = {
+            "emotionPresets": {
+                "custom_legacy": "Speak like a pirate.",
+            },
+            "config": {"tts": {"model": "mai-voice-1"}},
+        }
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert "custom_legacy" not in c.emotion_preset_names
+
+    def test_resolve_preset_string(self, tmp_config):
+        """_resolve_preset normalizes strings to dict."""
+        c = IoMcpConfig.load(tmp_config)
+        result = c._resolve_preset("Speak softly.")
+        assert result == {"instructions": "Speak softly."}
+
+    def test_resolve_preset_dict(self, tmp_config):
+        """_resolve_preset passes dicts through."""
+        c = IoMcpConfig.load(tmp_config)
+        val = {"instructions": "hello", "ssmlStyle": "cheerful"}
+        result = c._resolve_preset(val)
+        assert result == val
+
+    def test_all_emotion_preset_names(self, tmp_config):
+        """all_emotion_preset_names returns everything, not filtered."""
+        c = IoMcpConfig.load(tmp_config)
+        all_names = c.all_emotion_preset_names
+        filtered_names = c.emotion_preset_names
+        # All names should be a superset of filtered names
+        assert set(filtered_names).issubset(set(all_names))
+        # Calm should be in all but not filtered (azure-speech default)
+        assert "calm" in all_names
+
+    def test_validation_warns_unsupported_emotion(self, tmp_config):
+        """Validation warns when current emotion doesn't support current provider."""
+        custom = {"config": {"tts": {"model": "mai-voice-1", "emotion": "calm"}}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert any("calm" in w and "no value for provider" in w for w in c.validation_warnings)
+
+    def test_no_warning_for_supported_emotion(self, tmp_config):
+        """No warning when emotion supports the current provider."""
+        custom = {"config": {"tts": {"model": "mai-voice-1", "emotion": "shy"}}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert not any("no value for provider" in w for w in c.validation_warnings)
+
+    def test_switching_model_changes_available_presets(self, tmp_config):
+        """Switching TTS model changes which presets are available."""
+        c = IoMcpConfig.load(tmp_config)
+        # Default: azure-speech
+        azure_names = c.emotion_preset_names
+        # Switch to openai
+        c.set_tts_model("gpt-4o-mini-tts")
+        openai_names = c.emotion_preset_names
+        # OpenAI should have more presets (all have instructions)
+        assert len(openai_names) >= len(azure_names)
+        assert "calm" in openai_names
+        assert "calm" not in azure_names
 
 
 # ---------------------------------------------------------------------------
