@@ -447,6 +447,9 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
     def _get_session(session_id: str):
         session, created = frontend.manager.get_or_create(session_id)
         if created:
+            # Check if there's a placeholder session to take over
+            # (from TUI restart — persisted sessions waiting for reconnection)
+            placeholder = _find_and_claim_placeholder(session)
             try:
                 frontend.on_session_created(session)
             except Exception:
@@ -455,6 +458,62 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
         session.heartbeat_spoken = False
         session.ambient_count = 0
         return session
+
+    def _find_and_claim_placeholder(session):
+        """Find a placeholder session and transfer its identity to the new session.
+
+        On TUI restart, persisted sessions create placeholder tabs (IDs start
+        with 'persisted-'). When a real agent connects, we match it to a
+        placeholder and transfer the name, registration data, and activity.
+        If only one placeholder exists, we always match (single-agent case).
+        """
+        try:
+            placeholders = [
+                (sid, frontend.manager.get(sid))
+                for sid in list(frontend.manager.session_order)
+                if sid.startswith("persisted-") and frontend.manager.get(sid)
+            ]
+
+            if not placeholders:
+                return None
+
+            # If only one placeholder, always match
+            if len(placeholders) == 1:
+                sid, placeholder = placeholders[0]
+            else:
+                # Multiple placeholders — can't match without registration data
+                return None
+
+            # Transfer identity
+            session.name = placeholder.name
+            session.registered = placeholder.registered
+            session.cwd = placeholder.cwd
+            session.hostname = placeholder.hostname
+            session.username = placeholder.username
+            session.tmux_session = placeholder.tmux_session
+            session.tmux_pane = placeholder.tmux_pane
+            session.voice_override = placeholder.voice_override
+            session.emotion_override = placeholder.emotion_override
+            session.agent_metadata = dict(placeholder.agent_metadata)
+
+            # Transfer activity data
+            session.restore_activity({
+                "speech_log": [{"text": s.text, "timestamp": s.timestamp}
+                              for s in placeholder.speech_log],
+                "history": [{"label": h.label, "summary": h.summary,
+                            "preamble": h.preamble, "timestamp": h.timestamp}
+                           for h in placeholder.history],
+                "tool_call_count": placeholder.tool_call_count,
+                "last_tool_name": placeholder.last_tool_name,
+                "last_tool_call": placeholder.last_tool_call,
+                "pending_messages": list(placeholder.pending_messages),
+            })
+
+            # Remove the placeholder
+            frontend.manager.remove(sid)
+            return placeholder
+        except Exception:
+            return None
 
     def _registration_reminder(session) -> str:
         if not session.registered:
