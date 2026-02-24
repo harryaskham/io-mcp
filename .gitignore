@@ -11,5 +11,5 @@ build/
 result
 # <djent-init>
 .bv/
+.djent/
 # </djent-init>
-.djent/bin/

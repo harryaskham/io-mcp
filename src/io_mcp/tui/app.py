@@ -3054,12 +3054,21 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         # Haptic feedback on scroll (short buzz)
         self._vibrate(30)
 
-        # Inbox list highlight: read preamble of highlighted item
+        # Inbox list highlight: read preamble preview of highlighted item
         if isinstance(event.item, InboxListItem):
             preamble = event.item.inbox_preamble[:80] if event.item.inbox_preamble else "no preamble"
             n = event.item.n_choices
             status = "done" if event.item.is_done else f"{n} option{'s' if n != 1 else ''}"
-            self._tts.speak_async(f"{preamble}. {status}")
+            text = f"{preamble}. {status}"
+            # Deduplicate with cooldown — skip if same text was spoken very recently
+            now = time.time()
+            last_time = getattr(self, '_last_inbox_spoken_time', 0.0)
+            last_text = getattr(self, '_last_inbox_spoken_text', '')
+            if text != last_text or (now - last_time) > 0.5:
+                self._last_inbox_spoken_text = text
+                self._last_inbox_spoken_time = now
+                # Use local fallback for instant readout when scrolling inbox
+                self._tts.speak_with_local_fallback(text)
             # Track scroll position in inbox
             self._inbox_scroll_index = event.item.inbox_index
             return
