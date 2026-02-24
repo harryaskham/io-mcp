@@ -1441,13 +1441,14 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 for i, entry in enumerate(recent):
                     age = now - entry.timestamp
                     if age < 60:
-                        age_str = f"{int(age)}s"
+                        age_str = f"{int(age)}s ago"
                     elif age < 3600:
-                        age_str = f"{int(age) // 60}m"
+                        age_str = f"{int(age) // 60}m ago"
                     else:
-                        age_str = f"{int(age) // 3600}h"
+                        age_str = f"{int(age) // 3600}h ago"
                     list_view.append(ChoiceItem(
-                        f"[{s['fg_dim']}]{age_str:>4}[/{s['fg_dim']}]  {entry.text}", "",
+                        entry.text,
+                        f"[{s['fg_dim']}]{age_str}[/{s['fg_dim']}]",
                         index=-900 + i, display_index=di,
                     ))
                     di += 1

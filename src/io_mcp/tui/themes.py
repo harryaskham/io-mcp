@@ -108,7 +108,6 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
         color: {s['accent']};
         background: {s['bg_alt']};
         padding: 0 1;
-        border-bottom: solid {s['border']};
     }}
 
     /* ─── Daemon status line ────────────────────────────────── */
@@ -130,7 +129,6 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
         width: 1fr;
         height: auto;
         text-style: bold;
-        border-bottom: solid {s['border']};
     }}
 
     /* ─── Status / waiting message ─────────────────────────── */
@@ -162,7 +160,6 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
         max-height: 5;
         padding: 0 2;
         background: {s['bg']};
-        border-top: solid {s['border']};
     }}
 
     .speech-entry {{
@@ -180,9 +177,6 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
         overflow-x: hidden;
         padding: 1 0;
         background: {s['bg_alt']};
-        border-left: solid {s['border']};
-        border-right: solid {s['border']};
-        border-bottom: solid {s['border']};
     }}
 
     /* ─── Tmux pane view ──────────────────────────────────── */
@@ -190,7 +184,7 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
     #pane-view {{
         margin: 0 1;
         height: 1fr;
-        border: solid {s['border']};
+        border: tall {s['border']};
         background: {s['bg_alt']};
         color: {s['fg']};
         display: none;
@@ -248,7 +242,6 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
         background: {s['bg_alt']};
         color: {s['fg_dim']};
         padding: 0 1;
-        border-top: solid {s['border']};
     }}
 
     /* ─── Input fields ────────────────────────────────────── */
