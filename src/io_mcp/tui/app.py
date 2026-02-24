@@ -1457,7 +1457,13 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             session.speech_log.append(SpeechEntry(text=f"[choices] {preamble}"))
 
             # Alert: chime + speak session name so user knows which tab needs attention
-            self._tts.play_chime("choices")
+            # Use distinct "inbox" chime if user is already viewing choices from
+            # another session, to signal "new mail" without confusion
+            focused = self._focused()
+            if focused and focused.active and focused.session_id != session.session_id:
+                self._tts.play_chime("inbox")
+            else:
+                self._tts.play_chime("choices")
             self._speak_ui(f"{session.name} has choices")
 
             # Try to speak in background if fg is idle
@@ -1565,8 +1571,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         # Don't overwrite the UI if user is composing a message or typing
         if self._message_mode or (session and session.input_mode):
             # Choices are stored on the session; they'll be shown after input is done
-            # Just play a subtle chime to indicate choices arrived
-            self._tts.play_chime("choices")
+            # Play inbox chime (distinct from choices chime) since user is busy
+            self._tts.play_chime("inbox")
             return
 
         preamble_widget = self.query_one("#preamble", Label)
