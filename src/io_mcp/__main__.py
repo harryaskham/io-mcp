@@ -879,7 +879,22 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
                 frontend.tts.speak_async(f"Tool error: {tool_name}. {str(e)[:80]}")
             except Exception:
                 pass
-            return json.dumps({"error": f"{type(e).__name__}: {str(e)[:200]}", "tool": tool_name})
+            error_data = {"error": f"{type(e).__name__}: {str(e)[:200]}", "tool": tool_name}
+            # Include crash log content so agents can self-heal
+            crash_log = ""
+            try:
+                with open("/tmp/io-mcp-tool-error.log", "r") as f:
+                    content = f.read()
+                if content.strip():
+                    tail = content[-1500:] if len(content) > 1500 else content
+                    crash_log = (
+                        "\n\n[IO-MCP ERROR LOG]\n" + tail
+                        + "\n\n[SELF-HEALING: If this is a code bug in io-mcp, "
+                        "fix it and call pull_latest() to apply. Source: src/io_mcp/]"
+                    )
+            except Exception:
+                pass
+            return json.dumps(error_data) + crash_log
 
     return dispatch
 

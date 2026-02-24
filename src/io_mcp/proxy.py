@@ -79,9 +79,9 @@ def _forward_to_backend(
             # Backend returned an error — don't retry, return it
             try:
                 body = e.read().decode()
-                return body
+                return body + _crash_log_hint()
             except Exception:
-                return json.dumps({"error": f"Backend HTTP {e.code}"})
+                return json.dumps({"error": f"Backend HTTP {e.code}"}) + _crash_log_hint()
         except (urllib.error.URLError, ConnectionRefusedError, OSError) as e:
             last_error = str(e)
             if attempt < max_retries - 1:
@@ -91,12 +91,47 @@ def _forward_to_backend(
             else:
                 log.error(f"Backend unavailable after {max_retries} attempts: {e}")
         except Exception as e:
-            return json.dumps({"error": f"Proxy error: {str(e)[:200]}"})
+            return json.dumps({"error": f"Proxy error: {str(e)[:200]}"}) + _crash_log_hint()
 
     return json.dumps({
         "error": f"Backend unavailable after {max_retries} retries: {last_error}",
         "hint": "Is io-mcp running? Start it with: io-mcp",
-    })
+    }) + _crash_log_hint()
+
+
+def _crash_log_hint() -> str:
+    """Read recent crash logs and return self-healing instructions.
+
+    Appended to error responses so agents can diagnose and fix issues.
+    """
+    logs = []
+    for log_file in ("/tmp/io-mcp-tui-error.log", "/tmp/io-mcp-tool-error.log"):
+        try:
+            with open(log_file, "r") as f:
+                content = f.read()
+            if content.strip():
+                # Get last 2000 chars to avoid overwhelming the context
+                tail = content[-2000:] if len(content) > 2000 else content
+                logs.append(f"\n--- {log_file} ---\n{tail}")
+        except FileNotFoundError:
+            pass
+        except Exception:
+            pass
+
+    if not logs:
+        return ""
+
+    return (
+        "\n\n[IO-MCP CRASH DIAGNOSTICS]\n"
+        "The io-mcp backend encountered an error. Recent crash logs:\n"
+        + "\n".join(logs)
+        + "\n\n[SELF-HEALING INSTRUCTIONS]\n"
+        "1. If you can identify a code bug in io-mcp source, fix it and "
+        "call pull_latest() or request_restart() to apply the fix.\n"
+        "2. If the error is transient, retry your last operation.\n"
+        "3. If the backend is completely down, tell the user via fallback TTS.\n"
+        "4. The io-mcp source is at: src/io_mcp/ (tui/app.py, __main__.py, proxy.py, tts.py)\n"
+    )
 
 
 def _get_session_id(ctx: Context) -> str:
