@@ -9,8 +9,9 @@ from __future__ import annotations
 import functools
 
 from textual.app import ComposeResult
+from textual.events import MouseScrollDown, MouseScrollUp
 from textual.reactive import reactive
-from textual.widgets import Label, ListItem, Static, TextArea
+from textual.widgets import Label, ListItem, ListView, Static, TextArea
 
 
 # ─── Safe action decorator ────────────────────────────────────────────────
@@ -38,6 +39,32 @@ def _safe_action(fn):
             except Exception:
                 pass
     return wrapper
+
+
+# ─── Managed ListView (app-controlled scroll routing) ─────────────────────
+
+class ManagedListView(ListView):
+    """ListView that delegates mouse scroll events to the app.
+
+    The default ListView (via Widget._on_mouse_scroll_down/up) handles mouse
+    scroll events locally and may call event.stop(), preventing the event from
+    reaching the app-level on_mouse_scroll_down/up handlers.  This is a problem
+    for the two-pane inbox/choices layout: when the inbox pane is focused and
+    the user scrolls over the choices pane, the choices ListView eats the
+    event instead of letting the app route it to the inbox list.
+
+    By overriding the private handlers to be no-ops, all mouse scroll events
+    bubble up to IoMcpApp.on_mouse_scroll_down/up which use _active_list_view()
+    to dispatch to the correct pane.
+    """
+
+    def _on_mouse_scroll_down(self, event: MouseScrollDown) -> None:
+        # Let the event bubble to the app — don't handle locally.
+        pass
+
+    def _on_mouse_scroll_up(self, event: MouseScrollUp) -> None:
+        # Let the event bubble to the app — don't handle locally.
+        pass
 
 
 # ─── Extra options (negative indices) ──────────────────────────────────────
