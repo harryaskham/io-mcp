@@ -1473,9 +1473,10 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
             self._fg_speaking = True
             if block:
-                # Use streaming for blocking calls (lower latency)
-                self._tts.speak_streaming(text, voice_override=voice_ov,
-                                         emotion_override=emotion_ov, block=True)
+                # Use cached play for blocking calls to avoid
+                # streaming truncation (audio starting mid-sentence)
+                self._tts.speak(text, voice_override=voice_ov,
+                                emotion_override=emotion_ov)
             else:
                 self._tts.speak_async(text, voice_override=voice_ov,
                                      emotion_override=emotion_ov)

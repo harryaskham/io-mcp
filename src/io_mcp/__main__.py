@@ -463,6 +463,22 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
                     "your session properly.]")
         return ""
 
+    def _speech_reminder(session) -> str:
+        """Remind the agent to narrate if it's been too long since last speech.
+
+        Returns a reminder string if >60s since last speak call,
+        empty string otherwise. Only fires for non-speak tool calls.
+        """
+        if not session.speech_log:
+            return ""
+        last_speech = session.speech_log[-1].timestamp
+        elapsed = _time.time() - last_speech
+        if elapsed > 60:
+            return ("\n\n[REMINDER: It's been over a minute since you last used "
+                    "speak_async(). The user is listening through earphones and "
+                    "can't see the screen — narrate what you're doing!]")
+        return ""
+
     # ─── Tool implementations ─────────────────────────────────
 
     def _tool_present_choices(args, session_id):
@@ -834,12 +850,22 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
         "check_inbox": _tool_check_inbox,
     }
 
+    # Tools that should NOT get speech reminders (they ARE speech)
+    _SPEECH_TOOLS = {"speak", "speak_async", "speak_urgent",
+                     "present_choices", "present_multi_select"}
+
     def dispatch(tool_name: str, args: dict, session_id: str) -> str:
         handler = TOOLS.get(tool_name)
         if handler is None:
             return json.dumps({"error": f"Unknown tool: {tool_name}"})
         try:
-            return handler(args, session_id)
+            result = handler(args, session_id)
+            # Add speech reminder for non-speech tools
+            if tool_name not in _SPEECH_TOOLS:
+                session = frontend.manager.get(session_id)
+                if session:
+                    result += _speech_reminder(session)
+            return result
         except Exception as e:
             import traceback
             log.error(f"Tool {tool_name} error: {e}")
