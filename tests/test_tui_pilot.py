@@ -11,7 +11,7 @@ import threading
 from textual.widgets import ListView
 
 from io_mcp.tui.app import IoMcpApp
-from io_mcp.tui.widgets import ChoiceItem, SubmitTextArea, EXTRA_OPTIONS
+from io_mcp.tui.widgets import ChoiceItem, SubmitTextArea, EXTRA_OPTIONS, PRIMARY_EXTRAS
 from io_mcp.session import Session
 
 
@@ -85,13 +85,13 @@ async def test_show_choices_populates_listview():
         extra_items = [c for c in items if c.choice_index <= 0]
 
         assert len(real_items) == 2
-        # Collapsed mode: "More options ›" + "Record response" = 2 visible extras
-        assert len(extra_items) == 2
+        # Collapsed mode: "More options ›" + PRIMARY_EXTRAS visible
+        assert len(extra_items) == len(PRIMARY_EXTRAS) + 1
 
 
 @pytest.mark.asyncio
 async def test_extra_option_index_mapping():
-    """Extra option labels match the collapsed extras (More options + Record response)."""
+    """Extra option labels match the collapsed extras (More options + PRIMARY_EXTRAS)."""
     app = make_app()
     async with app.run_test() as pilot:
         session, _ = app.manager.get_or_create("test-1")
@@ -112,10 +112,11 @@ async def test_extra_option_index_mapping():
         items = [c for c in list_view.children if isinstance(c, ChoiceItem)]
         extra_items = [c for c in items if c.choice_index <= 0]
 
-        # Collapsed mode: should have "More options ›" and "Record response"
+        # Collapsed mode: should have "More options ›" + all PRIMARY_EXTRAS
         labels = [item.choice_label for item in extra_items]
         assert "More options ›" in labels
-        assert "Record response" in labels
+        for pe in PRIMARY_EXTRAS:
+            assert pe["label"] in labels
 
 
 @pytest.mark.asyncio
@@ -141,8 +142,8 @@ async def test_default_focus_is_first_real_choice():
         await pilot.pause(0.1)
 
         list_view = app.query_one("#choices", ListView)
-        # Focus should be on the first real choice (after collapsed extras: More + Record = 2)
-        assert list_view.index == 2
+        # Focus should be on the first real choice (after collapsed extras: More + PRIMARY_EXTRAS)
+        assert list_view.index == len(PRIMARY_EXTRAS) + 1
 
 
 @pytest.mark.asyncio
