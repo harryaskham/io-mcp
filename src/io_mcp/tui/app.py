@@ -3488,7 +3488,13 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 self._refresh_multi_select()
             return
 
-        display_idx = session.extras_count + n - 1
+        # Calculate the actual number of displayed extras (collapsed vs expanded)
+        if self._extras_expanded:
+            n_visible_extras = len(SECONDARY_EXTRAS) + len(PRIMARY_EXTRAS)
+        else:
+            n_visible_extras = 1 + len(PRIMARY_EXTRAS)  # "More options" + primary
+
+        display_idx = n_visible_extras + n - 1
         list_view = self.query_one("#choices", ListView)
         if display_idx < 0 or display_idx >= len(list_view.children):
             return
