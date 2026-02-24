@@ -2805,7 +2805,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
     def on_mouse_scroll_down(self, event: MouseScrollDown) -> None:
         session = self._focused()
-        if (self._in_settings or self._setting_edit_mode or (session and session.active)) and self._scroll_allowed():
+        if (self._in_settings or self._setting_edit_mode or session) and self._scroll_allowed():
             self._interrupt_readout()
             list_view = self.query_one("#choices", ListView)
             if list_view.display:
@@ -2818,7 +2818,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
     def on_mouse_scroll_up(self, event: MouseScrollUp) -> None:
         session = self._focused()
-        if (self._in_settings or self._setting_edit_mode or (session and session.active)) and self._scroll_allowed():
+        if (self._in_settings or self._setting_edit_mode or session) and self._scroll_allowed():
             self._interrupt_readout()
             list_view = self.query_one("#choices", ListView)
             if list_view.display:
