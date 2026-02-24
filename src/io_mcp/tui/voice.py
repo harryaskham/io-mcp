@@ -286,8 +286,7 @@ class VoiceMixin:
                         "charitably. If completely uninterpretable, present the same "
                         "options again and ask the user to retry."
                     )
-                    session.selection = {"selected": wrapped, "summary": "(voice input)"}
-                    session.selection_event.set()
+                    self._resolve_selection(session, {"selected": wrapped, "summary": "(voice input)"})
                     self._safe_call_from_thread(self._show_waiting, f"🎙 {transcript[:50]}")
             else:
                 if stderr_text:

@@ -991,6 +991,25 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             log_widget.mount(label)
         log_widget.display = True
 
+    # ─── Choice resolution helper ─────────────────────────────────────
+
+    def _resolve_selection(self, session: Session, result: dict) -> None:
+        """Resolve the current selection for a session.
+
+        Updates both the inbox item (if present) and the legacy
+        session.selection + session.selection_event for backward compat.
+        """
+        # Resolve inbox item first
+        item = getattr(session, '_active_inbox_item', None)
+        if item and not item.done:
+            item.result = result
+            item.done = True
+            item.event.set()
+
+        # Legacy path (backward compat)
+        session.selection = result
+        session.selection_event.set()
+
     # ─── Choice presentation (called from MCP server thread) ─────────
 
     def present_choices(self, session: Session, preamble: str, choices: list[dict]) -> dict:
@@ -1032,8 +1051,59 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             return {"selected": "error", "summary": f"TUI error: {err}"}
 
     def _present_choices_inner(self, session: Session, preamble: str, choices: list[dict]) -> dict:
-        """Inner implementation of present_choices."""
+        """Inner implementation of present_choices.
+
+        Uses the inbox queue drain pattern: each call creates an InboxItem
+        and enqueues it. If we're at the front of the queue, we present
+        choices immediately. If not, we wait until it's our turn.
+
+        This allows multiple concurrent present_choices calls on the same
+        session without clobbering each other.
+        """
+        import time as _time
+
         self._touch_session(session)
+
+        # Create and enqueue our inbox item
+        item = InboxItem(kind="choices", preamble=preamble, choices=list(choices))
+        session.enqueue(item)
+
+        # Update tab bar to show inbox count
+        self.call_from_thread(self._update_tab_bar)
+
+        # ── Drain loop: wait for our turn, then present ──
+        while True:
+            front = session.peek_inbox()
+
+            if front is item:
+                # We're at the front — present our choices
+                result = self._activate_and_present(session, item)
+
+                # Drain completed item
+                session.peek_inbox()  # moves done items to inbox_done
+
+                # Wake up the next queued item (if any) by re-checking
+                # The next item's thread will see itself at the front
+                self.call_from_thread(self._update_tab_bar)
+
+                return result
+
+            # Not at front — wait for our turn
+            item.event.wait(timeout=0.5)
+            if item.done:
+                # We were resolved externally (e.g. quit, restart)
+                return item.result or {"selected": "timeout", "summary": ""}
+
+    def _activate_and_present(self, session: Session, item: InboxItem) -> dict:
+        """Activate an inbox item as the current choice presentation.
+
+        Sets up session state from the item and blocks until the user selects.
+        """
+        import time as _time
+
+        preamble = item.preamble
+        choices = item.choices
+
         session.preamble = preamble
         session.choices = list(choices)
         session.selection = None
@@ -1042,6 +1112,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         session.intro_speaking = True
         session.reading_options = False
         session.in_settings = False
+        session._active_inbox_item = item  # Track for _do_select resolution
         self._last_spoken_text = ""  # Reset dedup for new choices
 
         # Emit event for remote frontends
@@ -1078,7 +1149,6 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             self._fg_speaking = False
 
             # Auto-start voice recording after a brief pause
-            import time as _time
             _time.sleep(0.3)
 
             # Check if conversation mode is still active (user might have pressed c)
@@ -1086,16 +1156,15 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 self.call_from_thread(self._start_voice_recording)
 
             # Block until selection (voice recording will set it)
-            session.selection_event.wait()
+            item.event.wait()
             session.active = False
 
             # Reset ambient timer
-            import time as _time_mod
-            session.last_tool_call = _time_mod.time()
+            session.last_tool_call = _time.time()
             session.ambient_count = 0
 
             self.call_from_thread(self._update_tab_bar)
-            return session.selection or {"selected": "timeout", "summary": ""}
+            return item.result or session.selection or {"selected": "timeout", "summary": ""}
 
         # ── Normal mode: full choice presentation ──
         # Build the full list: extras + real choices
@@ -1183,18 +1252,17 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             # Try to speak in background if fg is idle
             self._try_play_background_queue()
 
-        # Block until selection
-        session.selection_event.wait()
+        # Block until selection (on the inbox item's event, not session.selection_event)
+        item.event.wait()
         session.active = False
 
         # Reset ambient timer — selection counts as activity
-        import time as _time_mod
-        session.last_tool_call = _time_mod.time()
+        session.last_tool_call = _time.time()
         session.ambient_count = 0
 
         self.call_from_thread(self._update_tab_bar)
 
-        return session.selection or {"selected": "timeout", "summary": ""}
+        return item.result or session.selection or {"selected": "timeout", "summary": ""}
 
     def present_multi_select(self, session: Session, preamble: str, choices: list[dict]) -> list[dict]:
         """Show choices with toggleable checkboxes. Returns list of selected items.
@@ -1466,6 +1534,16 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                     f"[{s['purple']}]{count} message{'s' if count != 1 else ''} queued[/{s['purple']}]",
                     f"[{s['fg_dim']}]{session.pending_messages[-1][:60]}[/{s['fg_dim']}]",
                     index=-994, display_index=di,
+                ))
+                di += 1
+
+            # Inbox queue indicator
+            inbox_count = session.inbox_choices_count()
+            if inbox_count > 0:
+                list_view.append(ChoiceItem(
+                    f"[{s['accent']}]{inbox_count} choice set{'s' if inbox_count != 1 else ''} queued[/{s['accent']}]",
+                    f"[{s['fg_dim']}]Will present in order when current choices resolve[/{s['fg_dim']}]",
+                    index=-993, display_index=di,
                 ))
                 di += 1
 
@@ -1809,8 +1887,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         if session.active:
             # Resolve active choices with the compact instruction
-            session.selection = {"selected": compact_msg, "summary": "(compact context)"}
-            session.selection_event.set()
+            self._resolve_selection(session, {"selected": compact_msg, "summary": "(compact context)"})
             self._show_waiting("Compact context")
             self._speak_ui("Compact command sent to agent")
         else:
@@ -1836,8 +1913,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                     # don't hang forever after the app is replaced
                     for sess in self.manager.all_sessions():
                         if sess.active:
-                            sess.selection = {"selected": "_restart", "summary": "TUI restarting"}
-                            sess.selection_event.set()
+                            self._resolve_selection(sess, {"selected": "_restart", "summary": "TUI restarting"})
                     self._restart_requested = True
                     self.exit(return_code=42)
 
@@ -2267,8 +2343,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         self._vibrate(100)
         self._tts.play_chime("select")
 
-        session.selection = {"selected": response_text, "summary": f"(multi-select: {combined_label[:60]})"}
-        session.selection_event.set()
+        self._resolve_selection(session, {"selected": response_text, "summary": f"(multi-select: {combined_label[:60]})"})
         self._show_waiting(f"Multi: {combined_label[:50]}")
 
     def _enter_tab_picker(self) -> None:
@@ -3072,8 +3147,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         self._tts.stop()
         self._tts.speak_async(f"Selected: {text}")
 
-        session.selection = {"selected": text, "summary": "(freeform input)"}
-        session.selection_event.set()
+        self._resolve_selection(session, {"selected": text, "summary": "(freeform input)"})
         self._show_waiting(text)
 
     def _cancel_freeform(self) -> None:
@@ -3369,8 +3443,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 for sess in self.manager.all_sessions():
                     if sess.active:
                         self._cancel_dwell()
-                        sess.selection = {"selected": "quit", "summary": "User quit"}
-                        sess.selection_event.set()
+                        self._resolve_selection(sess, {"selected": "quit", "summary": "User quit"})
                 self.exit()
             else:
                 self._exit_settings()
@@ -3509,8 +3582,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         except Exception:
             pass
 
-        session.selection = {"selected": label, "summary": summary}
-        session.selection_event.set()
+        self._resolve_selection(session, {"selected": label, "summary": summary})
 
         # Emit event for remote frontends
         try:
@@ -3723,8 +3795,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         self._speak_ui("Undoing selection")
 
         # Re-activate the session with the saved choices
-        session.selection = {"selected": "_undo", "summary": ""}
-        session.selection_event.set()
+        self._resolve_selection(session, {"selected": "_undo", "summary": ""})
 
     @_safe_action
     def action_spawn_agent(self) -> None:

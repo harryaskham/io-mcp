@@ -320,7 +320,15 @@ class FrontendAPIHandler(http.server.BaseHTTPRequestHandler):
             return
         label = body.get("label", "")
         summary = body.get("summary", "")
-        session.selection = {"selected": label, "summary": summary}
+        result = {"selected": label, "summary": summary}
+        # Resolve inbox item if present
+        item = getattr(session, '_active_inbox_item', None)
+        if item and not item.done:
+            item.result = result
+            item.done = True
+            item.event.set()
+        # Legacy path
+        session.selection = result
         session.selection_event.set()
         self._send_json({"status": "selected", "label": label})
 

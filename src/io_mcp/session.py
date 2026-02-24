@@ -441,8 +441,18 @@ class SessionManager:
             for sid in self.session_order:
                 session = self.sessions[sid]
                 name = session.name
-                # Choice indicator
-                indicator = f" [bold {success}]o[/bold {success}]" if session.active else ""
+                # Choice indicator (with inbox queue count badge)
+                inbox_count = session.inbox_choices_count()
+                if session.active:
+                    if inbox_count > 1:
+                        indicator = f" [bold {success}]o+{inbox_count - 1}[/bold {success}]"
+                    else:
+                        indicator = f" [bold {success}]o[/bold {success}]"
+                elif inbox_count > 0:
+                    # Has queued choices but isn't displaying yet
+                    indicator = f" [bold {success}]+{inbox_count}[/bold {success}]"
+                else:
+                    indicator = ""
                 # Health indicator (only when not showing active choices)
                 health = getattr(session, 'health_status', 'healthy')
                 if not session.active:
