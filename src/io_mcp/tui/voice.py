@@ -23,6 +23,13 @@ if TYPE_CHECKING:
 class VoiceMixin:
     """Mixin providing voice input and recording action methods."""
 
+    def _safe_call_from_thread(self, fn, *args) -> None:
+        """Call a function via call_from_thread, silencing errors if app is shutting down."""
+        try:
+            self.call_from_thread(fn, *args)
+        except Exception:
+            pass
+
     def action_voice_input(self) -> None:
         """Toggle voice recording mode.
         Works both for choice selection and message queueing (when _message_mode is True).
@@ -177,7 +184,7 @@ class VoiceMixin:
             # Check file exists
             if not rec_file or not os.path.isfile(rec_file):
                 self._tts.speak_async("No recording file found. Back to choices.")
-                self.call_from_thread(self._restore_choices)
+                self._safe_call_from_thread(self._restore_choices)
                 return
 
             # Convert and transcribe: ffmpeg → stt --stdin
@@ -190,7 +197,7 @@ class VoiceMixin:
                 ffmpeg_bin = _find_binary("ffmpeg")
                 if not ffmpeg_bin:
                     self._tts.speak_async("ffmpeg not found")
-                    self.call_from_thread(self._restore_choices)
+                    self._safe_call_from_thread(self._restore_choices)
                     return
 
                 # Convert to WAV (for direct API upload, not piped through VAD)
@@ -203,7 +210,7 @@ class VoiceMixin:
                 )
                 if ffmpeg_result.returncode != 0:
                     self._tts.speak_async("Audio conversion failed")
-                    self.call_from_thread(self._restore_choices)
+                    self._safe_call_from_thread(self._restore_choices)
                     return
 
                 # Try direct API transcription first (faster, no VAD chunking)
@@ -266,9 +273,9 @@ class VoiceMixin:
                     count = len(msgs) if msgs else 1
                     self._tts.speak_async(f"Message queued: {transcript[:50]}. {count} pending.")
                     if session.active:
-                        self.call_from_thread(self._restore_choices)
+                        self._safe_call_from_thread(self._restore_choices)
                     else:
-                        self.call_from_thread(self._show_session_waiting, session)
+                        self._safe_call_from_thread(self._show_session_waiting, session)
                 else:
                     self._tts.speak_async(f"Got: {transcript}")
 
@@ -281,13 +288,13 @@ class VoiceMixin:
                     )
                     session.selection = {"selected": wrapped, "summary": "(voice input)"}
                     session.selection_event.set()
-                    self.call_from_thread(self._show_waiting, f"🎙 {transcript[:50]}")
+                    self._safe_call_from_thread(self._show_waiting, f"🎙 {transcript[:50]}")
             else:
                 if stderr_text:
                     self._tts.speak_async(f"Recording failed: {stderr_text[:100]}")
                 else:
                     self._tts.speak_async("No speech detected. Back to choices.")
-                self.call_from_thread(self._restore_choices)
+                self._safe_call_from_thread(self._restore_choices)
 
         threading.Thread(target=_process, daemon=True).start()
 
@@ -329,13 +336,13 @@ class VoiceMixin:
                 )
                 if result.returncode != 0:
                     self._tts.speak_async("Failed to get notifications")
-                    self.call_from_thread(self._restore_choices)
+                    self._safe_call_from_thread(self._restore_choices)
                     return
 
                 notifications = json_mod.loads(result.stdout)
                 if not notifications:
                     self._tts.speak_async("No notifications")
-                    self.call_from_thread(self._restore_choices)
+                    self._safe_call_from_thread(self._restore_choices)
                     return
 
                 # Filter to interesting notifications (skip system/ongoing)
@@ -358,7 +365,7 @@ class VoiceMixin:
 
                 if not interesting:
                     self._tts.speak_async("No new notifications")
-                    self.call_from_thread(self._restore_choices)
+                    self._safe_call_from_thread(self._restore_choices)
                     return
 
                 # Read out notifications — batch into one TTS call for speed
@@ -374,11 +381,11 @@ class VoiceMixin:
                     parts.append(text)
 
                 self._tts.speak(" ".join(parts))
-                self.call_from_thread(self._restore_choices)
+                self._safe_call_from_thread(self._restore_choices)
 
             except Exception as e:
                 self._tts.speak_async(f"Notification check failed: {str(e)[:60]}")
-                self.call_from_thread(self._restore_choices)
+                self._safe_call_from_thread(self._restore_choices)
 
         threading.Thread(target=_fetch, daemon=True).start()
 

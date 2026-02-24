@@ -1114,8 +1114,11 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             if session.active and not session.selection:
                 session.reading_options = True
                 for i, text in enumerate(numbered_full_all):
+                    # Check session still exists and is active on each iteration
                     if not session.reading_options or not session.active:
                         break
+                    if not self.manager.get(session.session_id):
+                        break  # session was removed
                     # Skip silent options in the readout
                     if i < len(choices) and choices[i].get('_silent', False):
                         continue
@@ -1277,10 +1280,12 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         list_view.display = True
         # Restore scroll position or default to first real choice
-        if session.scroll_index > 0:
+        if session.scroll_index > 0 and session.scroll_index < len(list_view.children):
             list_view.index = session.scroll_index
-        else:
+        elif len(list_view.children) > len(EXTRA_OPTIONS):
             list_view.index = len(EXTRA_OPTIONS)  # first real choice
+        else:
+            list_view.index = 0
         list_view.focus()
 
         if self._dwell_time > 0:

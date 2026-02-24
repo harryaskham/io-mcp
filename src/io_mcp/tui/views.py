@@ -193,6 +193,15 @@ class ViewsMixin:
             self._exit_settings()
             return
 
+        # Verify the session still exists (could have been removed by health monitor)
+        if not self.manager.get(target.session_id):
+            self._speak_ui("Session no longer exists")
+            if self.manager.count() > 0:
+                self.action_dashboard()
+            else:
+                self._exit_settings()
+            return
+
         pane = getattr(target, 'tmux_pane', '')
         has_pane = bool(pane)
 
