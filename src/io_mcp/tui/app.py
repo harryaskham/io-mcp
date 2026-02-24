@@ -709,19 +709,39 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         except Exception:
             pass
 
+    # Thinking-out-loud filler phrases for ambient updates
+    _THINKING_PHRASES = [
+        "Hmm, still thinking...",
+        "Let me see...",
+        "One moment...",
+        "Working on it...",
+        "Hmm, let me figure this out...",
+        "Just a sec...",
+        "Bear with me...",
+        "Almost there, I think...",
+        "Hmm...",
+        "Let me check something...",
+        "Hold on...",
+        "Huh, interesting...",
+        "Thinking...",
+        "One sec...",
+        "Mm, working on it...",
+    ]
+
     def _check_heartbeat(self) -> None:
         """Ambient mode: speak escalating status updates during agent silence.
 
         Tracks elapsed time since the last MCP tool call and speaks
         progressively more informative updates:
 
-        1st: "Agent is still working..."
+        1st: Random thinking-out-loud phrase
         2nd+: "Still working, N minutes in. Last update: [text]"
 
         Configurable via config.ambient.{enabled, initialDelaySecs, repeatIntervalSecs}.
         Resets when the agent makes its next MCP tool call.
         """
         import time as _time
+        import random
 
         # Check if ambient mode is enabled
         if self._config and not self._config.ambient_enabled:
@@ -744,12 +764,13 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         ambient_count = getattr(session, 'ambient_count', 0)
 
         if ambient_count == 0:
-            # First ambient update: after initial delay
+            # First ambient update: thinking-out-loud filler
             if elapsed >= initial_delay:
                 session.ambient_count = 1
                 self._tts.play_chime("heartbeat") if hasattr(self._tts, 'play_chime') else None
                 self._vibrate_pattern("heartbeat")
-                self._speak_ui("Agent is still working...")
+                phrase = random.choice(self._THINKING_PHRASES)
+                self._speak_ui(phrase)
                 self._update_ambient_indicator(session, elapsed)
         else:
             # Subsequent updates: exponential backoff after 4th update
@@ -775,16 +796,27 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                         last_text = last_text[:60]
 
                 last_tool = getattr(session, 'last_tool_name', '')
-                tool_hint = f" Last tool: {last_tool}." if last_tool else ""
 
-                if minutes >= 1 and last_text:
-                    msg = f"Still working, {minutes} {'minute' if minutes == 1 else 'minutes'} in.{tool_hint} Last update: {last_text}"
-                elif minutes >= 1:
-                    msg = f"Still working, {minutes} {'minute' if minutes == 1 else 'minutes'} in.{tool_hint}"
-                elif last_text:
-                    msg = f"Still working.{tool_hint} Last update: {last_text}"
-                else:
-                    msg = f"Agent is still working...{tool_hint}"
+                # Mix thinking phrases with status info
+                prefix = random.choice([
+                    "Still at it.",
+                    "Hmm, still going.",
+                    "Working away.",
+                    "Still crunching.",
+                    "Chipping away.",
+                    "Still on it.",
+                    "Plugging along.",
+                ])
+
+                parts = [prefix]
+                if minutes >= 1:
+                    parts.append(f"{minutes} {'minute' if minutes == 1 else 'minutes'} in.")
+                if last_tool:
+                    parts.append(f"Last tool: {last_tool}.")
+                if last_text:
+                    parts.append(f"Last said: {last_text}")
+
+                msg = " ".join(parts)
 
                 self._tts.speak_async(msg)
                 self._update_ambient_indicator(session, elapsed)
