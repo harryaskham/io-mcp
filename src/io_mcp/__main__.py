@@ -831,6 +831,45 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
             return json.dumps({"messages": messages, "count": len(messages)})
         return json.dumps({"messages": [], "count": 0})
 
+    def _tool_get_logs(args, session_id):
+        """Return recent io-mcp logs: TUI errors, proxy output, and backend stderr."""
+        session = _get_session(session_id)
+        session.last_tool_name = "get_logs"
+        session.tool_call_count += 1
+
+        lines = int(args.get("lines", 50))
+        logs = {}
+
+        # TUI error log
+        try:
+            with open("/tmp/io-mcp-tui-error.log", "r") as f:
+                content = f.read()
+            log_lines = content.strip().split("\n")
+            logs["tui_errors"] = log_lines[-lines:]
+        except FileNotFoundError:
+            logs["tui_errors"] = []
+        except Exception as e:
+            logs["tui_errors"] = [f"Error reading: {e}"]
+
+        # Proxy log (if exists)
+        try:
+            with open("/tmp/io-mcp-proxy.log", "r") as f:
+                content = f.read()
+            log_lines = content.strip().split("\n")
+            logs["proxy"] = log_lines[-lines:]
+        except FileNotFoundError:
+            logs["proxy"] = []
+        except Exception as e:
+            logs["proxy"] = [f"Error reading: {e}"]
+
+        # Session speech log (recent entries for this session)
+        speech = []
+        for entry in session.speech_log[-lines:]:
+            speech.append(f"[{entry.timestamp:.0f}] {entry.text[:200]}")
+        logs["speech_log"] = speech
+
+        return _attach_messages(json.dumps(logs), session)
+
     # ─── Dispatch table ───────────────────────────────────────
 
     TOOLS = {
@@ -853,6 +892,7 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
         "request_restart": _tool_request_restart,
         "request_proxy_restart": _tool_request_proxy_restart,
         "check_inbox": _tool_check_inbox,
+        "get_logs": _tool_get_logs,
     }
 
     # Tools that should NOT get speech reminders (they ARE speech)
