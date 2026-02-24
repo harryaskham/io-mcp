@@ -126,7 +126,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "voice": "en-US-Noa:MAI-Voice-1",
             "uiVoice": "en-US-Teo:MAI-Voice-1",
             "speed": 1.3,
-            "emotion": "shy",
+            "emotion": "friendly",
             "localBackend": "termux",  # "termux", "espeak", or "none"
             "voiceRotation": [],
             "emotionRotation": [],
@@ -193,15 +193,29 @@ DEFAULT_CONFIG: dict[str, Any] = {
         },
     },
     "emotionPresets": {
-        "happy": "Speak in a warm, cheerful, and upbeat tone. Sound genuinely pleased and positive.",
-        "calm": "Speak in a soothing, relaxed, and measured tone. Be gentle and unhurried.",
-        "excited": "Speak with high energy and enthusiasm. Sound genuinely thrilled and animated.",
-        "serious": "Speak in a focused, professional, and matter-of-fact tone. Be clear and direct.",
-        "friendly": "Speak in a warm, conversational, and approachable tone. Like talking to a good friend.",
-        "neutral": "Speak in a natural, even tone without strong emotion.",
-        "storyteller": "Speak like a captivating narrator. Vary pace and emphasis for dramatic effect.",
-        "gentle": "Speak softly and kindly, as if comforting someone. Warm and tender.",
-        "shy": "Speak in a soft, quiet whisper. Be hesitant and gentle, as if sharing a secret. Keep volume low and intimate.",
+        "openai": {
+            "happy": "Speak in a warm, cheerful, and upbeat tone. Sound genuinely pleased and positive.",
+            "calm": "Speak in a soothing, relaxed, and measured tone. Be gentle and unhurried.",
+            "excited": "Speak with high energy and enthusiasm. Sound genuinely thrilled and animated.",
+            "serious": "Speak in a focused, professional, and matter-of-fact tone. Be clear and direct.",
+            "friendly": "Speak in a warm, conversational, and approachable tone. Like talking to a good friend.",
+            "neutral": "Speak in a natural, even tone without strong emotion.",
+            "storyteller": "Speak like a captivating narrator. Vary pace and emphasis for dramatic effect.",
+            "gentle": "Speak softly and kindly, as if comforting someone. Warm and tender.",
+            "shy": "Speak in a soft, quiet whisper. Be hesitant and gentle, as if sharing a secret. Keep volume low and intimate.",
+        },
+        "azure-speech": {
+            "empathetic": "empathetic",
+            "excited": "excitement",
+            "happy": "joy",
+            "friendly": "friendly",
+            "neutral": "neutral",
+            "encouraging": "encouragement",
+            "confused": "confusion",
+            "sad": "sadness",
+            "surprised": "surprise",
+            "curious": "curiosity",
+        },
     },
 }
 
@@ -390,9 +404,9 @@ class IoMcpConfig:
                 if provider and provider not in self.raw.get("providers", {}):
                     warnings.append(f"Model '{name}' references provider '{provider}' which is not defined")
 
-        # Check emotion preset exists
+        # Check emotion preset exists (provider-aware)
         emotion = self.runtime.get("tts", {}).get("emotion", "")
-        presets = self.raw.get("emotionPresets", {})
+        presets = self._emotion_presets_for_provider()
         if emotion and presets and emotion not in presets:
             # Not an error — could be a custom instruction string
             pass
@@ -543,11 +557,28 @@ class IoMcpConfig:
     def tts_emotion(self) -> str:
         return self.runtime.get("tts", {}).get("emotion", "neutral")
 
+    def _emotion_presets_for_provider(self, provider: str | None = None) -> dict[str, str]:
+        """Get emotion presets for the given (or current) TTS provider.
+
+        The emotionPresets config is keyed by provider name (e.g. "openai",
+        "azure-speech").  Falls back to "openai" presets, then to a flat
+        (legacy) dict if present.
+        """
+        all_presets = self.expanded.get("emotionPresets", {})
+        prov = provider or self.tts_provider_name
+
+        # New per-provider structure: {"openai": {...}, "azure-speech": {...}}
+        if all_presets and isinstance(next(iter(all_presets.values()), None), dict):
+            return dict(all_presets.get(prov, all_presets.get("openai", {})))
+
+        # Legacy flat structure: {"happy": "...", "calm": "..."}
+        return dict(all_presets)
+
     @property
     def tts_instructions(self) -> str:
         """Get the TTS instructions text for the current emotion preset."""
         emotion = self.tts_emotion
-        presets = self.expanded.get("emotionPresets", {})
+        presets = self._emotion_presets_for_provider()
         # If the emotion matches a preset, use its text
         if emotion in presets:
             return presets[emotion]
@@ -556,7 +587,7 @@ class IoMcpConfig:
 
     @property
     def emotion_preset_names(self) -> list[str]:
-        return list(self.expanded.get("emotionPresets", {}).keys())
+        return list(self._emotion_presets_for_provider().keys())
 
     @property
     def tts_voice_rotation(self) -> list[str]:
@@ -965,21 +996,10 @@ class IoMcpConfig:
 
         # Add emotion/instructions (override or default)
         emotion = emotion_override or self.tts_emotion
-        presets = self.expanded.get("emotionPresets", {})
-        if provider == "azure-speech":
-            # Azure Speech uses SSML <mstts:express-as style="STYLE">
-            # Pass the preset name (e.g. "happy") not the text description.
-            # If emotion is a preset name, use it directly as the SSML style.
-            # If it's custom text (not a preset), pass it as-is (user may
-            # be providing a valid SSML style name).
-            style = emotion if emotion else ""
-            if style:
-                args.extend(["--instructions", style])
-        else:
-            # OpenAI: resolve preset name to full text instructions
-            instructions = presets.get(emotion, emotion) if emotion else self.tts_instructions
-            if instructions:
-                args.extend(["--instructions", instructions])
+        presets = self._emotion_presets_for_provider()
+        instructions = presets.get(emotion, emotion) if emotion else self.tts_instructions
+        if instructions:
+            args.extend(["--instructions", instructions])
 
         args.extend(["--stdout", "--response-format", "wav"])
         return args
