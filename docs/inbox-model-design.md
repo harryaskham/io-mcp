@@ -144,7 +144,7 @@ The key challenge: each `present_choices` call runs in its own HTTP thread. When
 - `src/io_mcp/tui/app.py` — `_present_choices_inner`, `_do_select`, all `selection_event.set()` callers
 - `src/io_mcp/tui/app.py` — tab bar rendering (inbox count badge)
 - `src/io_mcp/__main__.py` — `_tool_present_choices` loop (handle new return shape)
-- `src/io_mcp/tui/app.py` — `_show_activity_feed` (show inbox count)
+- `src/io_mcp/tui/app.py` — `_show_waiting_with_shortcuts` (waiting view with shortcuts)
 
 ### Testing
 
