@@ -59,6 +59,9 @@ class ViewsMixin:
         preamble_widget.update(f"[bold {s['accent']}]Dashboard[/bold {s['accent']}] — {len(sessions)} agent{'s' if len(sessions) != 1 else ''}")
         preamble_widget.display = True
 
+        # Ensure main content is visible, hide inbox pane in modal views
+        self._ensure_main_content_visible(show_inbox=False)
+
         list_view = self.query_one("#choices", ListView)
         list_view.clear()
 
@@ -328,6 +331,9 @@ class ViewsMixin:
         preamble_widget.update(" — ".join(preamble_parts))
         preamble_widget.display = True
 
+        # Ensure main content is visible, hide inbox pane in modal views
+        self._ensure_main_content_visible(show_inbox=False)
+
         list_view = self.query_one("#choices", ListView)
         list_view.clear()
 
@@ -396,8 +402,8 @@ class ViewsMixin:
         self._tts.stop()
         self._speak_ui(f"Pane view for {session.name}. Press v to close.")
 
-        # Show pane view, hide choices
-        self.query_one("#choices").display = False
+        # Show pane view, hide main content
+        self.query_one("#main-content").display = False
         self.query_one("#preamble").display = False
         pane_view.clear()
         pane_view.display = True
@@ -499,6 +505,9 @@ class ViewsMixin:
             f"[dim](?/esc to close)[/dim]"
         )
         preamble_widget.display = True
+
+        # Ensure main content is visible, hide inbox pane in modal views
+        self._ensure_main_content_visible(show_inbox=False)
 
         list_view = self.query_one("#choices", ListView)
         list_view.clear()

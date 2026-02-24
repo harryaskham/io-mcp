@@ -75,6 +75,9 @@ class SettingsMixin:
         preamble_widget.update("Settings")
         preamble_widget.display = True
 
+        # Ensure main content container is visible, hide inbox pane in settings
+        self._ensure_main_content_visible(show_inbox=False)
+
         list_view = self.query_one("#choices", ListView)
         list_view.clear()
         for i, s in enumerate(self._settings_items):

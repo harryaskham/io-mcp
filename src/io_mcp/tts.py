@@ -602,6 +602,7 @@ class TTSEngine:
             warning: Mid-frequency double pulse (caution)
             success: Bright ascending arpeggio (task completed)
             disconnect: Descending three-note (agent disconnected)
+            inbox: Quick triple ascending (new inbox item queued)
         """
         if self._muted:
             return
@@ -674,5 +675,12 @@ class TTSEngine:
                 self.play_tone(400, 30, 0.1)
                 _time.sleep(0.15)
                 self.play_tone(400, 40, 0.12)
+            elif style == "inbox":
+                # Distinct from "choices": quick triple ascending notes
+                self.play_tone(500, 40, 0.12)
+                _time.sleep(0.05)
+                self.play_tone(700, 40, 0.12)
+                _time.sleep(0.05)
+                self.play_tone(1000, 60, 0.18)
 
         threading.Thread(target=_play, daemon=True).start()

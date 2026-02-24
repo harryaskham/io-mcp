@@ -182,6 +182,56 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
         width: 1fr;
     }}
 
+    /* ─── Two-column inbox layout ─────────────────────────── */
+
+    #main-content {{
+        layout: horizontal;
+        height: 1fr;
+        width: 1fr;
+    }}
+
+    #inbox-list {{
+        width: 30;
+        min-width: 20;
+        max-width: 40;
+        height: 1fr;
+        border-right: tall {s['border']};
+        background: {s['bg']};
+        padding: 0;
+        overflow-x: hidden;
+        display: none;
+    }}
+
+    #choices-panel {{
+        width: 1fr;
+        height: 1fr;
+    }}
+
+    /* ─── Inbox list item styling ─────────────────────────── */
+
+    InboxListItem {{
+        padding: 0 1;
+        height: auto;
+        width: 1fr;
+        margin: 0;
+        background: {s['bg']};
+    }}
+
+    InboxListItem > .inbox-label {{
+        color: {s['fg']};
+        width: 1fr;
+        height: auto;
+    }}
+
+    InboxListItem.-highlight {{
+        background: {s['highlight_bg']};
+    }}
+
+    InboxListItem.-highlight > .inbox-label {{
+        color: {s['highlight_fg']};
+        text-style: bold;
+    }}
+
     /* ─── Choices list ────────────────────────────────────── */
 
     #choices {{

@@ -244,3 +244,106 @@ async def test_message_mode_opens():
         await pilot.press("escape")
         await pilot.pause(0.2)
         assert app._message_mode is False
+
+
+# ─── Inbox two-column layout tests ──────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_inbox_list_hidden_with_single_item():
+    """Inbox list (left pane) is hidden when there's only 1 inbox item."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        session, _ = app.manager.get_or_create("test-1")
+        session.registered = True
+        session.name = "Test"
+        app.on_session_created(session)
+
+        # Set up single active choice
+        session.preamble = "Pick one"
+        session.choices = [
+            {"label": "Alpha", "summary": "First"},
+            {"label": "Beta", "summary": "Second"},
+        ]
+        session.active = True
+        session.extras_count = len(EXTRA_OPTIONS)
+        session.all_items = list(EXTRA_OPTIONS) + session.choices
+
+        app._show_choices()
+        await pilot.pause(0.1)
+
+        inbox_list = app.query_one("#inbox-list", ListView)
+        assert inbox_list.display is False
+
+        # Main content should be visible
+        main_content = app.query_one("#main-content")
+        assert main_content.display is True
+
+
+@pytest.mark.asyncio
+async def test_inbox_list_visible_with_multiple_items():
+    """Inbox list (left pane) is visible when there are multiple inbox items."""
+    from io_mcp.session import InboxItem
+
+    app = make_app()
+    async with app.run_test() as pilot:
+        session, _ = app.manager.get_or_create("test-1")
+        session.registered = True
+        session.name = "Test"
+        app.on_session_created(session)
+
+        # Enqueue two inbox items
+        item1 = InboxItem(kind="choices", preamble="First question", choices=[{"label": "A", "summary": ""}])
+        item2 = InboxItem(kind="choices", preamble="Second question", choices=[{"label": "B", "summary": ""}])
+        session.enqueue(item1)
+        session.enqueue(item2)
+
+        # Set up session as if first item is active
+        session.preamble = item1.preamble
+        session.choices = list(item1.choices)
+        session.active = True
+        session._active_inbox_item = item1
+        session.extras_count = len(EXTRA_OPTIONS)
+        session.all_items = list(EXTRA_OPTIONS) + session.choices
+
+        app._show_choices()
+        await pilot.pause(0.1)
+
+        inbox_list = app.query_one("#inbox-list", ListView)
+        assert inbox_list.display is True
+
+        # Should have 2 items in inbox list
+        from io_mcp.tui.widgets import InboxListItem
+        inbox_items = [c for c in inbox_list.children if isinstance(c, InboxListItem)]
+        assert len(inbox_items) == 2
+
+
+@pytest.mark.asyncio
+async def test_inbox_pane_focus_default_is_choices():
+    """Default focus should be on the right (choices) pane."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        session, _ = app.manager.get_or_create("test-1")
+        session.registered = True
+        session.name = "Test"
+        app.on_session_created(session)
+
+        session.preamble = "Pick one"
+        session.choices = [{"label": "Alpha", "summary": ""}]
+        session.active = True
+        session.extras_count = len(EXTRA_OPTIONS)
+        session.all_items = list(EXTRA_OPTIONS) + session.choices
+
+        app._show_choices()
+        await pilot.pause(0.1)
+
+        assert app._inbox_pane_focused is False
+
+
+@pytest.mark.asyncio
+async def test_main_content_hidden_initially():
+    """Main content container is hidden when no agent is connected."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        main_content = app.query_one("#main-content")
+        assert main_content.display is False

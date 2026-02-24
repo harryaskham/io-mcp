@@ -98,6 +98,47 @@ class ChoiceItem(ListItem):
             yield Label(f"       {self.choice_summary}", classes="choice-summary")
 
 
+# ─── Inbox List Item Widget ───────────────────────────────────────────────────
+
+class InboxListItem(ListItem):
+    """A single item in the inbox list (left pane of two-column layout).
+
+    Shows a status icon (● pending, ✓ done) and truncated preamble text.
+    Active (currently displayed) item is highlighted. Done items are dimmed.
+    """
+
+    def __init__(self, preamble: str, is_done: bool = False,
+                 is_active: bool = False, inbox_index: int = 0,
+                 n_choices: int = 0, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.inbox_preamble = preamble
+        self.is_done = is_done
+        self.is_active = is_active
+        self.inbox_index = inbox_index  # position in the inbox list
+        self.n_choices = n_choices
+
+    def compose(self) -> ComposeResult:
+        # Status icon
+        if self.is_active:
+            icon = "[bold]●[/bold]"
+        elif self.is_done:
+            icon = "[dim]✓[/dim]"
+        else:
+            icon = "○"
+
+        # Truncate preamble for the narrow left pane
+        text = self.inbox_preamble[:40] if self.inbox_preamble else "(no preamble)"
+        if len(self.inbox_preamble) > 40:
+            text += "…"
+
+        if self.is_done:
+            yield Label(f" {icon} [dim]{text}[/dim]", classes="inbox-label")
+        elif self.is_active:
+            yield Label(f" {icon} {text}", classes="inbox-label")
+        else:
+            yield Label(f" {icon} {text}", classes="inbox-label")
+
+
 # ─── Dwell Progress Bar ─────────────────────────────────────────────────────
 
 class DwellBar(Static):

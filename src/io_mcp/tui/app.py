@@ -33,7 +33,7 @@ from ..notifications import (
 )
 
 from .themes import COLOR_SCHEMES, DEFAULT_SCHEME, get_scheme, build_css
-from .widgets import ChoiceItem, DwellBar, SubmitTextArea, EXTRA_OPTIONS, PRIMARY_EXTRAS, SECONDARY_EXTRAS, MORE_OPTIONS_ITEM, _safe_action
+from .widgets import ChoiceItem, InboxListItem, DwellBar, SubmitTextArea, EXTRA_OPTIONS, PRIMARY_EXTRAS, SECONDARY_EXTRAS, MORE_OPTIONS_ITEM, _safe_action
 from .views import ViewsMixin
 from .voice import VoiceMixin
 from .settings_menu import SettingsMixin
@@ -244,6 +244,10 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         self._multi_select_mode = False
         self._multi_select_checked: list[bool] = []
 
+        # Inbox pane focus state (two-column layout)
+        self._inbox_pane_focused = False
+        self._inbox_scroll_index = 0  # cursor position in inbox list
+
         # Notification webhooks
         self._notifier = create_dispatcher(config)
 
@@ -270,6 +274,26 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             if ui_voice and ui_voice != self._config.tts_voice:
                 voice_ov = ui_voice
         self._tts.speak_async(text, voice_override=voice_ov)
+
+    def _ensure_main_content_visible(self, show_inbox: bool = False) -> None:
+        """Ensure the #main-content container is visible.
+
+        Called before showing the #choices list in any context (settings,
+        dashboard, activity feed, etc.) since #choices is now nested inside
+        #main-content > #choices-panel.
+
+        Args:
+            show_inbox: If True, also update and show the inbox list.
+                       If False, hide the inbox list (for modal views).
+        """
+        try:
+            self.query_one("#main-content").display = True
+            if show_inbox:
+                self._update_inbox_list()
+            else:
+                self.query_one("#inbox-list").display = False
+        except Exception:
+            pass
 
     # ─── Haptic feedback ────────────────────────────────────────────
 
@@ -346,13 +370,16 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         status_text = "[dim]Ready — demo mode[/dim]" if self._demo else "[dim]Waiting for agent...[/dim]"
         yield Label(status_text, id="status")
         yield Label("", id="agent-activity")
-        yield Label("", id="preamble")
         yield Vertical(id="speech-log")
-        yield ListView(id="choices")
+        with Horizontal(id="main-content"):
+            yield ListView(id="inbox-list")
+            with Vertical(id="choices-panel"):
+                yield Label("", id="preamble")
+                yield ListView(id="choices")
+                yield DwellBar(id="dwell-bar")
         yield RichLog(id="pane-view", markup=False, highlight=False, auto_scroll=True, max_lines=200)
         yield SubmitTextArea(id="freeform-input", soft_wrap=True, show_line_numbers=False, tab_behavior="focus")
         yield Input(placeholder="Filter choices...", id="filter-input")
-        yield DwellBar(id="dwell-bar")
         yield Static("[dim]↕[/dim] Scroll  [dim]⏎[/dim] Select  [dim]x[/dim] Multi  [dim]u[/dim] Undo  [dim]i[/dim] Type  [dim]m[/dim] Msg  [dim]M[/dim] VoiceMsg  [dim]␣[/dim] Voice  [dim]/[/dim] Filter  [dim]s[/dim] Settings  [dim]q[/dim] Back/Quit", id="footer-help")
 
     def on_mount(self) -> None:
@@ -365,6 +392,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         self.query_one("#dwell-bar").display = False
         self.query_one("#speech-log").display = False
         self.query_one("#pane-view").display = False
+        self.query_one("#main-content").display = False
+        self.query_one("#inbox-list").display = False
 
         # Start periodic session cleanup (every 60 seconds, 5 min timeout)
         self._cleanup_timer = self.set_interval(60, self._cleanup_stale_sessions)
@@ -1020,6 +1049,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         Updates both the inbox item (if present) and the legacy
         session.selection + session.selection_event for backward compat.
+        After resolution, updates the inbox list to reflect the change.
         """
         # Resolve inbox item first
         item = getattr(session, '_active_inbox_item', None)
@@ -1031,6 +1061,9 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         # Legacy path (backward compat)
         session.selection = result
         session.selection_event.set()
+
+        # Update inbox list to show item as done
+        self._safe_call(self._update_inbox_list)
 
     # ─── Choice presentation (called from MCP server thread) ─────────
 
@@ -1111,6 +1144,11 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         # Update tab bar to show inbox count
         self._safe_call(self._update_tab_bar)
 
+        # Play inbox chime if user is already viewing choices for this session
+        if session.active and self._is_focused(session.session_id):
+            self._tts.play_chime("inbox")
+            self._safe_call(self._update_inbox_list)
+
         # ── Drain loop: wait for our turn, then present ──
         while True:
             front = session.peek_inbox()
@@ -1188,7 +1226,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
             # Show conversation UI
             def _show_convo():
-                self.query_one("#choices").display = False
+                self.query_one("#main-content").display = False
                 self.query_one("#dwell-bar").display = False
                 preamble_widget = self.query_one("#preamble", Label)
                 preamble_widget.update(f"[bold {self._cs['success']}]🗣[/bold {self._cs['success']}] {preamble}")
@@ -1419,6 +1457,9 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         self.query_one("#status").display = False
 
+        # Show the main content container (with inbox list if applicable)
+        self._ensure_main_content_visible(show_inbox=True)
+
         list_view = self.query_one("#choices", ListView)
         list_view.clear()
 
@@ -1454,6 +1495,9 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             list_view.index = n_extras  # first real choice
         else:
             list_view.index = 0
+
+        # Focus right pane (choices)
+        self._inbox_pane_focused = False
         list_view.focus()
 
         if self._dwell_time > 0:
@@ -1479,6 +1523,10 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         status.update(after_text)
         status.display = True
 
+        # Update inbox list and show main content with activity feed
+        self._ensure_main_content_visible(show_inbox=True)
+        self._inbox_pane_focused = False
+
         # Fill the choices area with activity feed
         self._show_activity_feed(session)
 
@@ -1494,7 +1542,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             status_text = "[dim]Ready -- demo mode[/dim]" if self._demo else "[dim]Waiting for agent...[/dim]"
             status.update(status_text)
             status.display = True
-            self.query_one("#choices").display = False
+            self.query_one("#main-content").display = False
             return
 
         if session.tool_call_count > 0:
@@ -1503,6 +1551,9 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             status_text = f"[{self._cs['accent']}]{session.name} connected[/{self._cs['accent']}]"
         status.update(status_text)
         status.display = True
+
+        # Update inbox list and show main content with activity feed
+        self._ensure_main_content_visible(show_inbox=True)
 
         # Fill the choices area with activity feed
         self._show_activity_feed(session)
@@ -1659,6 +1710,135 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         except Exception:
             # Guard against app not running or widget errors during shutdown
             pass
+
+    # ─── Inbox list (left pane of two-column layout) ───────────────
+
+    def _update_inbox_list(self) -> None:
+        """Update the inbox list (left pane) with items from the focused session.
+
+        Shows pending and done inbox items. Active item is highlighted.
+        Hides the inbox list entirely when there are ≤1 items (looks like
+        the current single-pane layout).
+        """
+        try:
+            session = self._focused()
+            inbox_list = self.query_one("#inbox-list", ListView)
+            inbox_list.clear()
+
+            if session is None:
+                inbox_list.display = False
+                return
+
+            # Collect all inbox items: pending (from inbox deque) + done
+            pending = [item for item in session.inbox if not item.done and item.kind == "choices"]
+            done = [item for item in session.inbox_done if item.kind == "choices"]
+
+            # Total displayable items
+            total = len(pending) + len(done)
+
+            # Hide left pane when ≤1 item (identical to current behavior)
+            if total <= 1:
+                inbox_list.display = False
+                return
+
+            # Show the inbox pane
+            inbox_list.display = True
+
+            # Determine which item is currently active
+            active_item = getattr(session, '_active_inbox_item', None)
+
+            # Add items: pending first (newest at top), then done
+            idx = 0
+            for item in reversed(list(pending)):
+                is_active = (item is active_item)
+                inbox_list.append(InboxListItem(
+                    preamble=item.preamble,
+                    is_done=False,
+                    is_active=is_active,
+                    inbox_index=idx,
+                    n_choices=len(item.choices),
+                ))
+                idx += 1
+
+            for item in reversed(done[-10:]):  # Show last 10 done items
+                inbox_list.append(InboxListItem(
+                    preamble=item.preamble,
+                    is_done=True,
+                    is_active=False,
+                    inbox_index=idx,
+                    n_choices=len(item.choices),
+                ))
+                idx += 1
+
+            # Highlight the active item
+            if self._inbox_scroll_index < len(inbox_list.children):
+                inbox_list.index = self._inbox_scroll_index
+            else:
+                inbox_list.index = 0
+
+        except Exception:
+            pass
+
+    def _get_inbox_item_at_index(self, idx: int):
+        """Get the InboxItem corresponding to an inbox list position.
+
+        Returns the InboxItem from the session's inbox/inbox_done, or None.
+        """
+        session = self._focused()
+        if not session:
+            return None
+
+        pending = [item for item in session.inbox if not item.done and item.kind == "choices"]
+        done = [item for item in session.inbox_done if item.kind == "choices"]
+
+        # Mirror the order in _update_inbox_list: reversed pending, then reversed done[-10:]
+        ordered = list(reversed(list(pending))) + list(reversed(done[-10:]))
+
+        if 0 <= idx < len(ordered):
+            return ordered[idx]
+        return None
+
+    def _handle_inbox_select(self, inbox_widget: InboxListItem) -> None:
+        """Handle selection of an item in the inbox list (left pane).
+
+        If the item is pending, switch it to be the active item and show
+        its choices in the right pane.
+        If the item is done, show its resolved result as read-only info.
+        """
+        session = self._focused()
+        if not session:
+            return
+
+        idx = inbox_widget.inbox_index
+        inbox_item = self._get_inbox_item_at_index(idx)
+        if inbox_item is None:
+            return
+
+        if inbox_item.done:
+            # Show resolved result
+            result = inbox_item.result or {}
+            label = result.get("selected", "")
+            self._speak_ui(f"Already resolved: {label}")
+            return
+
+        # Make this the active inbox item and show its choices
+        self._tts.stop()
+        session.preamble = inbox_item.preamble
+        session.choices = list(inbox_item.choices)
+        session.selection = None
+        session.selection_event.clear()
+        session.active = True
+        session._active_inbox_item = inbox_item
+        self._extras_expanded = False
+        session.extras_count = len(EXTRA_OPTIONS)
+        session.all_items = list(EXTRA_OPTIONS) + session.choices
+
+        # Switch focus to right pane
+        self._inbox_pane_focused = False
+        self._show_choices()
+
+        # Speak the preamble
+        self._tts.speak_async(inbox_item.preamble)
 
     # ─── Speech with priority ─────────────────────────────────────
 
@@ -1833,7 +2013,6 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
     def _show_session_waiting(self, session: Session) -> None:
         """Show waiting state for a specific session."""
-        self.query_one("#choices").display = False
         self.query_one("#preamble").display = False
         self.query_one("#dwell-bar").display = False
         self._update_speech_log()
@@ -1880,6 +2059,9 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         preamble_widget = self.query_one("#preamble", Label)
         preamble_widget.update(f"[bold {s['purple']}]{title}[/bold {s['purple']}]")
         preamble_widget.display = True
+
+        # Ensure main content is visible, hide inbox pane in dialog
+        self._ensure_main_content_visible(show_inbox=False)
 
         list_view = self.query_one("#choices", ListView)
         list_view.clear()
@@ -2097,6 +2279,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         preamble_widget.update(f"[bold {s['accent']}]Git Worktree[/bold {s['accent']}]")
         preamble_widget.display = True
 
+        self._ensure_main_content_visible(show_inbox=False)
+
         list_view = self.query_one("#choices", ListView)
         list_view.clear()
         for i, opt in enumerate(worktree_opts):
@@ -2132,7 +2316,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             session.input_mode = True
             self._freeform_spoken_pos = 0
 
-            self.query_one("#choices").display = False
+            self.query_one("#main-content").display = False
             inp = self.query_one("#freeform-input", SubmitTextArea)
             inp.clear()
             inp.styles.display = "block"
@@ -2145,7 +2329,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             session.input_mode = True
             self._freeform_spoken_pos = 0
 
-            self.query_one("#choices").display = False
+            self.query_one("#main-content").display = False
             inp = self.query_one("#freeform-input", SubmitTextArea)
             inp.clear()
             inp.styles.display = "block"
@@ -2490,6 +2674,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         )
         preamble_widget.display = True
 
+        self._ensure_main_content_visible(show_inbox=False)
+
         list_view = self.query_one("#choices", ListView)
         list_view.clear()
 
@@ -2512,11 +2698,26 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         self._tab_picker_sessions = sessions
         self._speak_ui(f"Pick a tab. {len(sessions)} tabs. Scrolling switches live.")
 
+    def _inbox_pane_visible(self) -> bool:
+        """Check if the inbox pane (left column) is currently visible."""
+        try:
+            return self.query_one("#inbox-list", ListView).display
+        except Exception:
+            return False
+
     def action_next_tab(self) -> None:
-        """Switch to next tab (no-op if only one session)."""
+        """Switch to next tab, or switch to choices pane if inbox is visible."""
         session = self._focused()
         if session and (session.input_mode or session.voice_recording):
             return
+
+        # If inbox pane is visible and we're in the inbox, switch to choices pane
+        if self._inbox_pane_visible() and self._inbox_pane_focused:
+            self._inbox_pane_focused = False
+            self.query_one("#choices", ListView).focus()
+            self._speak_ui("Choices")
+            return
+
         if self.manager.count() <= 1:
             return
         new_session = self.manager.next_tab()
@@ -2526,10 +2727,19 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             self._switch_to_session(new_session)
 
     def action_prev_tab(self) -> None:
-        """Switch to previous tab (no-op if only one session)."""
+        """Switch to previous tab, or switch to inbox pane if inbox is visible."""
         session = self._focused()
         if session and (session.input_mode or session.voice_recording):
             return
+
+        # If inbox pane is visible and we're in choices, switch to inbox pane
+        if self._inbox_pane_visible() and not self._inbox_pane_focused:
+            self._inbox_pane_focused = True
+            inbox_list = self.query_one("#inbox-list", ListView)
+            inbox_list.focus()
+            self._speak_ui("Inbox")
+            return
+
         if self.manager.count() <= 1:
             return
         new_session = self.manager.prev_tab()
@@ -2728,6 +2938,16 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         # Haptic feedback on scroll (short buzz)
         self._vibrate(30)
 
+        # Inbox list highlight: read preamble of highlighted item
+        if isinstance(event.item, InboxListItem):
+            preamble = event.item.inbox_preamble[:80] if event.item.inbox_preamble else "no preamble"
+            n = event.item.n_choices
+            status = "done" if event.item.is_done else f"{n} option{'s' if n != 1 else ''}"
+            self._tts.speak_async(f"{preamble}. {status}")
+            # Track scroll position in inbox
+            self._inbox_scroll_index = event.item.inbox_index
+            return
+
         session = self._focused()
 
         # In setting edit mode, read the value
@@ -2861,6 +3081,15 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
     @on(ListView.Selected)
     def on_list_selected(self, event: ListView.Selected) -> None:
         """Handle Enter/click on a list item."""
+        # Check if this is an inbox list selection (left pane)
+        try:
+            inbox_list = self.query_one("#inbox-list", ListView)
+            if event.list_view is inbox_list and isinstance(event.item, InboxListItem):
+                self._handle_inbox_select(event.item)
+                return
+        except Exception:
+            pass
+
         session = self._focused()
         if self._setting_edit_mode:
             self._apply_setting_edit()
@@ -2957,12 +3186,18 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 session.reading_options = False
                 self._tts.stop()
 
+    def _active_list_view(self) -> ListView:
+        """Get the currently focused list view (inbox or choices)."""
+        if self._inbox_pane_focused and self._inbox_pane_visible():
+            return self.query_one("#inbox-list", ListView)
+        return self.query_one("#choices", ListView)
+
     def action_cursor_down(self) -> None:
         session = self._focused()
         if session and (session.input_mode or session.voice_recording):
             return
         self._interrupt_readout()
-        list_view = self.query_one("#choices", ListView)
+        list_view = self._active_list_view()
         if list_view.display:
             list_view.action_cursor_down()
 
@@ -2971,7 +3206,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         if session and (session.input_mode or session.voice_recording):
             return
         self._interrupt_readout()
-        list_view = self.query_one("#choices", ListView)
+        list_view = self._active_list_view()
         if list_view.display:
             list_view.action_cursor_up()
 
@@ -2987,7 +3222,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         session = self._focused()
         if (self._in_settings or self._setting_edit_mode or session) and self._scroll_allowed():
             self._interrupt_readout()
-            list_view = self.query_one("#choices", ListView)
+            list_view = self._active_list_view()
             if list_view.display:
                 if self._invert_scroll:
                     list_view.action_cursor_up()
@@ -3000,7 +3235,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         session = self._focused()
         if (self._in_settings or self._setting_edit_mode or session) and self._scroll_allowed():
             self._interrupt_readout()
-            list_view = self.query_one("#choices", ListView)
+            list_view = self._active_list_view()
             if list_view.display:
                 if self._invert_scroll:
                     list_view.action_cursor_down()
@@ -3038,7 +3273,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         self._cancel_dwell()
 
         # UI first
-        self.query_one("#choices").display = False
+        self.query_one("#main-content").display = False
         self.query_one("#dwell-bar").display = False
         inp = self.query_one("#freeform-input", SubmitTextArea)
         inp.clear()
@@ -3063,7 +3298,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         self._freeform_spoken_pos = 0
 
         # UI
-        self.query_one("#choices").display = False
+        self.query_one("#main-content").display = False
         self.query_one("#dwell-bar").display = False
         inp = self.query_one("#freeform-input", SubmitTextArea)
         inp.clear()
@@ -3763,6 +3998,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         preamble_widget.display = True
         self.query_one("#status").display = False
 
+        self._ensure_main_content_visible(show_inbox=False)
+
         items = [
             {"label": "Fast toggle", "summary": f"Toggle speed (current: {self.settings.speed:.1f}x)"},
             {"label": "Voice toggle", "summary": f"Quick-switch voice (current: {self.settings.voice})"},
@@ -3855,6 +4092,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             f"[dim](esc to close)[/dim]"
         )
         preamble_widget.display = True
+
+        self._ensure_main_content_visible(show_inbox=False)
 
         list_view = self.query_one("#choices", ListView)
         list_view.clear()
@@ -3969,6 +4208,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         preamble_widget = self.query_one("#preamble", Label)
         preamble_widget.update(f"[bold {self._cs['accent']}]Spawn New Agent[/bold {self._cs['accent']}]")
         preamble_widget.display = True
+
+        self._ensure_main_content_visible(show_inbox=False)
 
         list_view = self.query_one("#choices", ListView)
         list_view.clear()
