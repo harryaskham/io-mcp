@@ -58,6 +58,7 @@ SECONDARY_EXTRAS = [
     {"label": "Switch tab", "summary": "Scroll through agent tabs and select one"},
     {"label": "New agent", "summary": "Spawn a new Claude Code agent (local or remote)"},
     {"label": "Dashboard", "summary": "Overview of all active agents"},
+    {"label": "View logs", "summary": "TUI errors, proxy logs, speech history"},
     {"label": "Close tab", "summary": "Close the focused agent tab"},
     {"label": "Quick settings", "summary": "Speed, voice, notifications, restart"},
 ]

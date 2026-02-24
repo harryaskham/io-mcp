@@ -104,6 +104,7 @@ class SettingsMixin:
         self._dashboard_action_mode = False
         self._dashboard_action_target = None
         self._log_viewer_mode = False
+        self._system_logs_mode = False
         self._help_mode = False
         self._history_mode = False
         self._tab_picker_mode = False

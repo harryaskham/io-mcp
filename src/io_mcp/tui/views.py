@@ -1,7 +1,8 @@
 """View action mixins for IoMcpApp.
 
-Contains dashboard, timeline (agent log), pane view, and help screen
-action methods. These are mixed into IoMcpApp via multiple inheritance.
+Contains dashboard, timeline (agent log), pane view, help screen,
+and system log viewer action methods. These are mixed into IoMcpApp
+via multiple inheritance.
 """
 
 from __future__ import annotations
@@ -521,3 +522,165 @@ class ViewsMixin:
         list_view.focus()
 
         self._speak_ui(f"Help screen. {len(shortcuts)} shortcuts.")
+
+    @_safe_action
+    def action_view_system_logs(self: "IoMcpApp") -> None:
+        """Show system logs: TUI errors, proxy logs, and speech history.
+
+        Reads from /tmp/io-mcp-tui-error.log, /tmp/io-mcp-proxy.log,
+        and the focused session's speech log. Displays entries in a
+        scrollable list. Press Enter or Escape to return.
+        """
+        # Toggle off if already in system logs mode
+        if getattr(self, '_system_logs_mode', False):
+            self._system_logs_mode = False
+            self._exit_settings()
+            return
+
+        session = self._focused()
+        if session and (session.input_mode or session.voice_recording):
+            return
+        if self._in_settings or self._filter_mode:
+            return
+
+        self._tts.stop()
+
+        # Collect logs from all sources
+        log_entries = []  # (section, text) tuples
+        flat_entries = []  # plain text for TTS on scroll
+
+        # TUI error log
+        tui_errors = []
+        try:
+            with open("/tmp/io-mcp-tui-error.log", "r") as f:
+                content = f.read().strip()
+            if content:
+                tui_errors = content.split("\n")[-50:]
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            tui_errors = [f"Error reading TUI log: {e}"]
+
+        # Proxy log
+        proxy_lines = []
+        try:
+            with open("/tmp/io-mcp-proxy.log", "r") as f:
+                content = f.read().strip()
+            if content:
+                proxy_lines = content.split("\n")[-30:]
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            proxy_lines = [f"Error reading proxy log: {e}"]
+
+        # Speech log from focused session
+        speech_lines = []
+        if session:
+            import time as _time
+            now = _time.time()
+            for entry in session.speech_log[-30:]:
+                elapsed = now - entry.timestamp
+                if elapsed < 60:
+                    age = f"{int(elapsed)}s ago"
+                elif elapsed < 3600:
+                    age = f"{int(elapsed)//60}m ago"
+                else:
+                    age = f"{int(elapsed)//3600}h ago"
+                speech_lines.append((age, entry.text[:200]))
+
+        # Build display entries
+        s = self._cs
+
+        if tui_errors:
+            log_entries.append(("header", "TUI Errors", f"{len(tui_errors)} lines"))
+            for line in tui_errors:
+                log_entries.append(("tui_error", line.strip(), ""))
+                flat_entries.append(line.strip())
+        else:
+            log_entries.append(("header", "TUI Errors", "none"))
+
+        if proxy_lines:
+            log_entries.append(("header", "Proxy Log", f"{len(proxy_lines)} lines"))
+            for line in proxy_lines:
+                log_entries.append(("proxy", line.strip(), ""))
+                flat_entries.append(line.strip())
+        else:
+            log_entries.append(("header", "Proxy Log", "none"))
+
+        if speech_lines:
+            log_entries.append(("header", "Speech History", f"{len(speech_lines)} entries"))
+            for age, text in speech_lines:
+                log_entries.append(("speech", text, age))
+                flat_entries.append(text)
+        else:
+            log_entries.append(("header", "Speech History", "none"))
+
+        # Store flat entries for TTS on scroll
+        self._system_log_entries = []
+
+        # Enter system logs mode (uses settings infrastructure for modal display)
+        self._in_settings = True
+        self._setting_edit_mode = False
+        self._spawn_options = None
+        self._quick_action_options = None
+        self._dashboard_mode = False
+        self._log_viewer_mode = False
+        self._system_logs_mode = True
+        self._help_mode = False
+
+        preamble_widget = self.query_one("#preamble", Label)
+        total = len(tui_errors) + len(proxy_lines) + len(speech_lines)
+        preamble_widget.update(
+            f"[bold {s['accent']}]System Logs[/bold {s['accent']}] — "
+            f"{total} entr{'y' if total == 1 else 'ies'}  "
+            f"[dim](enter/esc to close)[/dim]"
+        )
+        preamble_widget.display = True
+
+        # Ensure main content is visible, hide inbox pane in modal views
+        self._ensure_main_content_visible(show_inbox=False)
+
+        list_view = self.query_one("#choices", ListView)
+        list_view.clear()
+
+        display_idx = 0
+        for entry_type, text, detail in log_entries:
+            if entry_type == "header":
+                # Section header — bold with accent color
+                label = f"[bold {s['accent']}]━━ {text}[/bold {s['accent']}]"
+                summary = f"[dim]{detail}[/dim]" if detail else ""
+                list_view.append(ChoiceItem(label, summary, index=display_idx + 1, display_index=display_idx))
+                self._system_log_entries.append(f"{text}: {detail}")
+            elif entry_type == "tui_error":
+                # Error lines — use error color for "---" delimiters
+                if text.startswith("---"):
+                    label = f"[{s['error']}]{text}[/{s['error']}]"
+                else:
+                    label = f"[{s['fg_dim']}]{text[:120]}[/{s['fg_dim']}]"
+                list_view.append(ChoiceItem(label, "", index=display_idx + 1, display_index=display_idx))
+                self._system_log_entries.append(text[:120])
+            elif entry_type == "proxy":
+                label = f"[{s['fg_dim']}]{text[:120]}[/{s['fg_dim']}]"
+                list_view.append(ChoiceItem(label, "", index=display_idx + 1, display_index=display_idx))
+                self._system_log_entries.append(text[:120])
+            elif entry_type == "speech":
+                label = f"[{s['blue']}]>[/{s['blue']}] {text[:100]}"
+                summary = f"[{s['fg_dim']}]{detail}[/{s['fg_dim']}]" if detail else ""
+                list_view.append(ChoiceItem(label, summary, index=display_idx + 1, display_index=display_idx))
+                self._system_log_entries.append(text[:100])
+            display_idx += 1
+
+        list_view.display = True
+        list_view.index = 0
+        list_view.focus()
+
+        # Narrate summary
+        parts = []
+        if tui_errors:
+            parts.append(f"{len(tui_errors)} TUI errors")
+        if proxy_lines:
+            parts.append(f"{len(proxy_lines)} proxy log lines")
+        if speech_lines:
+            parts.append(f"{len(speech_lines)} speech entries")
+        summary = ", ".join(parts) if parts else "No logs found"
+        self._speak_ui(f"System logs. {summary}.")
