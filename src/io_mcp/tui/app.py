@@ -2673,9 +2673,13 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 else:
                     text = ""
             if text:
-                # Deduplicate — don't repeat the same text twice in a row
-                if text != self._last_spoken_text:
+                # Deduplicate with cooldown — skip if same text was spoken very recently
+                # but allow re-reading after a brief pause (e.g. scrolling away and back)
+                now = time.time()
+                last_time = getattr(self, '_last_spoken_time', 0.0)
+                if text != self._last_spoken_text or (now - last_time) > 0.5:
                     self._last_spoken_text = text
+                    self._last_spoken_time = now
                     # Use espeak fallback for instant readout when scrolling options
                     self._tts.speak_with_espeak_fallback(text)
 
