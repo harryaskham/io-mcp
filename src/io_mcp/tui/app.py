@@ -1923,6 +1923,28 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
     # ─── Inbox list (left pane of two-column layout) ───────────────
 
+    @staticmethod
+    def _dedup_done_items(done: list) -> list:
+        """Deduplicate done inbox items by preamble.
+
+        When agents repeatedly present choices with the same preamble
+        (e.g. "What would you like to do next?"), the done list accumulates
+        many visually identical entries.  This keeps only the most recent
+        item for each unique preamble, preserving chronological order.
+        """
+        seen: dict[str, int] = {}  # preamble → index of kept item
+        deduped: list = []
+        for item in done:
+            key = item.preamble
+            if key in seen:
+                # Replace the earlier item with this newer one
+                deduped[seen[key]] = item
+            else:
+                seen[key] = len(deduped)
+                deduped.append(item)
+        # Remove any None placeholders (shouldn't happen, but be safe)
+        return [i for i in deduped if i is not None]
+
     def _update_inbox_list(self) -> None:
         """Update the inbox list (left pane) with items from the focused session.
 
@@ -1943,8 +1965,11 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             pending = [item for item in session.inbox if not item.done and item.kind == "choices"]
             done = [item for item in session.inbox_done if item.kind == "choices"]
 
+            # Deduplicate done items — collapse entries with identical preambles
+            done_deduped = self._dedup_done_items(done)
+
             # Total displayable items
-            total = len(pending) + len(done)
+            total = len(pending) + len(done_deduped)
 
             # Always show inbox pane when agent is connected (even if empty/single)
             if total == 0 and not session.registered:
@@ -1970,7 +1995,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 ))
                 idx += 1
 
-            for item in reversed(done[-10:]):  # Show last 10 done items
+            for item in reversed(done_deduped[-10:]):  # Show last 10 done items
                 inbox_list.append(InboxListItem(
                     preamble=item.preamble,
                     is_done=True,
@@ -2001,8 +2026,11 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         pending = [item for item in session.inbox if not item.done and item.kind == "choices"]
         done = [item for item in session.inbox_done if item.kind == "choices"]
 
-        # Mirror the order in _update_inbox_list: reversed pending, then reversed done[-10:]
-        ordered = list(reversed(list(pending))) + list(reversed(done[-10:]))
+        # Deduplicate done items to match _update_inbox_list display
+        done_deduped = self._dedup_done_items(done)
+
+        # Mirror the order in _update_inbox_list: reversed pending, then reversed done_deduped[-10:]
+        ordered = list(reversed(list(pending))) + list(reversed(done_deduped[-10:]))
 
         if 0 <= idx < len(ordered):
             return ordered[idx]
