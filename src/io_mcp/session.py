@@ -3,10 +3,16 @@
 Each MCP client (streamable-http connection) gets a Session object that holds
 its own choices, selection event, speech inbox, and UI state.
 SessionManager handles routing between sessions and tab navigation.
+
+Inbox model: each session has a queue of InboxItem objects. Multiple
+present_choices/speak calls can be queued without clobbering each other.
+The TUI drains the queue in order — showing one choice set at a time,
+playing speech in sequence.
 """
 
 from __future__ import annotations
 
+import collections
 import threading
 import time
 from dataclasses import dataclass, field
@@ -29,6 +35,30 @@ class HistoryEntry:
     summary: str
     preamble: str
     timestamp: float = field(default_factory=time.time)
+
+
+@dataclass
+class InboxItem:
+    """A queued tool call waiting for TUI display/response.
+
+    Each present_choices call creates one InboxItem with its own
+    threading.Event, so the calling thread can block independently.
+    Speech calls also create InboxItems but resolve immediately
+    after playback.
+    """
+    kind: str  # "choices" or "speech"
+    # Choices fields
+    preamble: str = ""
+    choices: list[dict] = field(default_factory=list)
+    # Speech fields
+    text: str = ""
+    blocking: bool = False
+    priority: int = 0
+    # Resolution
+    result: Optional[dict] = None
+    event: threading.Event = field(default_factory=threading.Event)
+    timestamp: float = field(default_factory=time.time)
+    done: bool = False
 
 
 @dataclass
@@ -83,6 +113,10 @@ class Session:
     # ── User message inbox (queued for next MCP response) ─────────
     pending_messages: list[str] = field(default_factory=list)
 
+    # ── Tool call inbox (queued choices/speech for TUI display) ──
+    inbox: collections.deque = field(default_factory=collections.deque)
+    inbox_done: list[InboxItem] = field(default_factory=list)
+
     # ── Agent health monitoring ───────────────────────────────────
     health_status: str = "healthy"           # "healthy", "warning", "unresponsive"
     health_alert_spoken: bool = False        # True once we've spoken the warning alert
@@ -100,6 +134,39 @@ class Session:
     def touch(self) -> None:
         """Update the last_activity timestamp."""
         self.last_activity = time.time()
+
+    def enqueue(self, item: InboxItem) -> None:
+        """Add an item to the inbox queue."""
+        self.inbox.append(item)
+
+    def peek_inbox(self) -> Optional[InboxItem]:
+        """Get the next unresolved inbox item without removing it."""
+        while self.inbox:
+            front = self.inbox[0]
+            if front.done:
+                self.inbox_done.append(self.inbox.popleft())
+                continue
+            return front
+        return None
+
+    def resolve_front(self, result: dict) -> Optional[InboxItem]:
+        """Resolve the front inbox item with a result and move it to done.
+
+        Sets the result, marks done, and signals the event so the
+        blocking thread can return.
+        """
+        item = self.peek_inbox()
+        if item is None:
+            return None
+        item.result = result
+        item.done = True
+        item.event.set()
+        self.inbox_done.append(self.inbox.popleft())
+        return item
+
+    def inbox_choices_count(self) -> int:
+        """Number of pending choice items in the inbox."""
+        return sum(1 for item in self.inbox if item.kind == "choices" and not item.done)
 
     def drain_messages(self) -> str:
         """Drain and return all pending user messages as a formatted string.
