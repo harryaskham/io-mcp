@@ -119,6 +119,8 @@ class Session:
     # ── Tool call inbox (queued choices/speech for TUI display) ──
     inbox: collections.deque = field(default_factory=collections.deque)
     inbox_done: list[InboxItem] = field(default_factory=list)
+    # Kicked after resolving an inbox item so waiting threads wake immediately
+    drain_kick: threading.Event = field(default_factory=threading.Event)
 
     # ── Agent health monitoring ───────────────────────────────────
     health_status: str = "healthy"           # "healthy", "warning", "unresponsive"
@@ -147,8 +149,10 @@ class Session:
 
         Auto-cleans orphaned items whose owner thread has died (e.g. when
         the HTTP connection was dropped). These are moved to inbox_done
-        so the next live item can proceed.
+        so the next live item can proceed. Kicks drain_kick when cleaning
+        orphans so waiting threads wake immediately.
         """
+        kicked = False
         while self.inbox:
             front = self.inbox[0]
             if front.done:
@@ -161,15 +165,21 @@ class Session:
                 front.result = {"selected": "_restart", "summary": "Owner thread died"}
                 front.event.set()
                 self.inbox_done.append(self.inbox.popleft())
+                kicked = True
                 continue
+            if kicked:
+                self.drain_kick.set()
             return front
+        if kicked:
+            self.drain_kick.set()
         return None
 
     def resolve_front(self, result: dict) -> Optional[InboxItem]:
         """Resolve the front inbox item with a result and move it to done.
 
         Sets the result, marks done, and signals the event so the
-        blocking thread can return.
+        blocking thread can return. Kicks drain_kick so the next
+        queued item wakes immediately.
         """
         item = self.peek_inbox()
         if item is None:
@@ -178,6 +188,7 @@ class Session:
         item.done = True
         item.event.set()
         self.inbox_done.append(self.inbox.popleft())
+        self.drain_kick.set()
         return item
 
     def inbox_choices_count(self) -> int:

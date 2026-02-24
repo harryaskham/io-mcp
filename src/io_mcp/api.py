@@ -330,6 +330,8 @@ class FrontendAPIHandler(http.server.BaseHTTPRequestHandler):
         # Legacy path
         session.selection = result
         session.selection_event.set()
+        # Kick drain loop so next queued item presents immediately
+        session.drain_kick.set()
         self._send_json({"status": "selected", "label": label})
 
     def _handle_message(self, session_id: str, body: dict) -> None:
