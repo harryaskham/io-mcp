@@ -3081,7 +3081,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             count = len(msgs) if msgs else 1
             self._speak_ui(f"Message queued. {count} pending.")
             if session.active:
-                self._restore_choices()
+                self._show_choices()  # Rebuild — choices may have arrived during input
             else:
                 self._show_session_waiting(session)
             return
@@ -3106,7 +3106,12 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         self._freeform_tts.stop()
         inp = self.query_one("#freeform-input", SubmitTextArea)
         inp.styles.display = "none"
-        self._restore_choices()
+        if session and session.active:
+            self._show_choices()  # Rebuild — choices may have arrived during input
+        elif session:
+            self._show_session_waiting(session)
+        else:
+            self._restore_choices()
         self._speak_ui("Cancelled.")
 
     def on_key(self, event) -> None:

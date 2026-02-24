@@ -299,7 +299,17 @@ class VoiceMixin:
         threading.Thread(target=_process, daemon=True).start()
 
     def _restore_choices(self) -> None:
-        """Restore the choices UI after voice/settings mode."""
+        """Restore the choices UI after voice/settings/input mode.
+
+        If the focused session has active choices, rebuilds the choice list
+        via _show_choices() (choices may have arrived while input was open).
+        Otherwise just re-shows the existing list.
+        """
+        session = self._focused()
+        if session and session.active and session.choices:
+            self._show_choices()
+            return
+
         self.query_one("#status").display = False
         self.query_one("#choices").display = True
         list_view = self.query_one("#choices", ListView)
