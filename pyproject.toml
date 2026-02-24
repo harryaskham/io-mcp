@@ -23,3 +23,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/io_mcp"]
+
+[tool.uv.sources]
+ring-mods = { path = "../ring-mods", editable = true }
