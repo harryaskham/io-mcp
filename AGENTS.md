@@ -121,7 +121,7 @@ config:
   tts:
     model: gpt-4o-mini-tts
     speed: 1.3
-    emotion: happy
+    emotion: friendly
     localBackend: termux      # termux (Android TTS), espeak (espeak-ng), none
     uiVoice: ""             # separate voice for UI narration (settings, prompts)
     voiceRotation: []       # cycle voices across agent tabs
@@ -169,10 +169,16 @@ config:
     refresh: r
 
 emotionPresets:
-  shy: "Speak in a soft, quiet whisper. Hesitant and gentle."
-  happy: "Speak in a warm, cheerful tone."
-  calm: "Speak in a soothing, relaxed tone."
-  # ... plus excited, serious, friendly, neutral, storyteller, gentle
+  openai:                     # text instructions for OpenAI TTS
+    shy: "Speak in a soft, quiet whisper. Hesitant and gentle."
+    happy: "Speak in a warm, cheerful tone."
+    calm: "Speak in a soothing, relaxed tone."
+    # ... plus excited, serious, friendly, neutral, storyteller, gentle
+  azure-speech:               # SSML express-as style names for MAI Voice
+    friendly: friendly
+    happy: joy
+    excited: excitement
+    # ... plus empathetic, neutral, encouragement, confusion, sadness, surprise, curiosity
 
 extraOptions:               # project-local in .io-mcp.yml
   - title: Commit and push
