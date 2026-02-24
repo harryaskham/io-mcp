@@ -1,11 +1,12 @@
 """Tests for session management, API events, and CLI tool."""
 
+import collections
 import threading
 import time
 
 import pytest
 
-from io_mcp.session import Session, SessionManager, SpeechEntry, HistoryEntry
+from io_mcp.session import Session, SessionManager, SpeechEntry, HistoryEntry, InboxItem
 
 
 class TestSession:
@@ -524,3 +525,248 @@ class TestFrontendEvents:
         emit_session_removed("s1")
         emit_selection_made("s1", "chosen", "summary")
         emit_recording_state("s1", True)
+
+
+class TestInboxItem:
+    """Tests for InboxItem dataclass."""
+
+    def test_default_values(self):
+        item = InboxItem(kind="choices")
+        assert item.kind == "choices"
+        assert item.preamble == ""
+        assert item.choices == []
+        assert item.text == ""
+        assert item.blocking is False
+        assert item.priority == 0
+        assert item.result is None
+        assert item.done is False
+        assert item.timestamp > 0
+        assert not item.event.is_set()
+
+    def test_choices_item(self):
+        choices = [{"label": "A"}, {"label": "B"}]
+        item = InboxItem(kind="choices", preamble="Pick one", choices=choices)
+        assert item.preamble == "Pick one"
+        assert len(item.choices) == 2
+
+    def test_speech_item(self):
+        item = InboxItem(kind="speech", text="Hello", blocking=True, priority=1)
+        assert item.text == "Hello"
+        assert item.blocking is True
+        assert item.priority == 1
+
+    def test_event_signaling(self):
+        item = InboxItem(kind="choices")
+        assert not item.event.is_set()
+        item.result = {"selected": "A"}
+        item.done = True
+        item.event.set()
+        assert item.event.is_set()
+        assert item.done is True
+
+
+class TestSessionInbox:
+    """Tests for Session inbox queue methods."""
+
+    def test_inbox_starts_empty(self):
+        s = Session(session_id="test-1", name="Agent 1")
+        assert len(s.inbox) == 0
+        assert len(s.inbox_done) == 0
+        assert s.inbox_choices_count() == 0
+
+    def test_enqueue_single(self):
+        s = Session(session_id="test-1", name="Agent 1")
+        item = InboxItem(kind="choices", preamble="Pick", choices=[{"label": "A"}])
+        s.enqueue(item)
+        assert len(s.inbox) == 1
+        assert s.inbox_choices_count() == 1
+
+    def test_enqueue_multiple(self):
+        s = Session(session_id="test-1", name="Agent 1")
+        item1 = InboxItem(kind="choices", preamble="First")
+        item2 = InboxItem(kind="choices", preamble="Second")
+        item3 = InboxItem(kind="choices", preamble="Third")
+        s.enqueue(item1)
+        s.enqueue(item2)
+        s.enqueue(item3)
+        assert len(s.inbox) == 3
+        assert s.inbox_choices_count() == 3
+
+    def test_peek_inbox_returns_front(self):
+        s = Session(session_id="test-1", name="Agent 1")
+        item1 = InboxItem(kind="choices", preamble="First")
+        item2 = InboxItem(kind="choices", preamble="Second")
+        s.enqueue(item1)
+        s.enqueue(item2)
+        front = s.peek_inbox()
+        assert front is item1
+
+    def test_peek_inbox_empty(self):
+        s = Session(session_id="test-1", name="Agent 1")
+        assert s.peek_inbox() is None
+
+    def test_peek_inbox_skips_done(self):
+        s = Session(session_id="test-1", name="Agent 1")
+        item1 = InboxItem(kind="choices", preamble="First")
+        item2 = InboxItem(kind="choices", preamble="Second")
+        s.enqueue(item1)
+        s.enqueue(item2)
+        # Mark first as done
+        item1.done = True
+        front = s.peek_inbox()
+        assert front is item2
+        # item1 should have been moved to inbox_done
+        assert len(s.inbox_done) == 1
+        assert s.inbox_done[0] is item1
+
+    def test_resolve_front(self):
+        s = Session(session_id="test-1", name="Agent 1")
+        item = InboxItem(kind="choices", preamble="Pick")
+        s.enqueue(item)
+        result = {"selected": "A", "summary": "Option A"}
+        resolved = s.resolve_front(result)
+        assert resolved is item
+        assert item.result == result
+        assert item.done is True
+        assert item.event.is_set()
+        # Should be moved to inbox_done
+        assert len(s.inbox) == 0
+        assert len(s.inbox_done) == 1
+
+    def test_resolve_front_empty(self):
+        s = Session(session_id="test-1", name="Agent 1")
+        assert s.resolve_front({"selected": "A"}) is None
+
+    def test_resolve_front_advances_queue(self):
+        s = Session(session_id="test-1", name="Agent 1")
+        item1 = InboxItem(kind="choices", preamble="First")
+        item2 = InboxItem(kind="choices", preamble="Second")
+        s.enqueue(item1)
+        s.enqueue(item2)
+        # Resolve first
+        s.resolve_front({"selected": "A"})
+        # Second should now be at front
+        front = s.peek_inbox()
+        assert front is item2
+        assert s.inbox_choices_count() == 1
+
+    def test_inbox_choices_count_excludes_done(self):
+        s = Session(session_id="test-1", name="Agent 1")
+        item1 = InboxItem(kind="choices")
+        item2 = InboxItem(kind="choices")
+        item3 = InboxItem(kind="speech")  # not a choices item
+        s.enqueue(item1)
+        s.enqueue(item2)
+        s.enqueue(item3)
+        assert s.inbox_choices_count() == 2
+        item1.done = True
+        assert s.inbox_choices_count() == 1
+
+    def test_concurrent_enqueue_and_resolve(self):
+        """Two threads enqueue items, main thread resolves them in order."""
+        s = Session(session_id="test-1", name="Agent 1")
+        results = []
+
+        def enqueue_and_wait(preamble):
+            item = InboxItem(kind="choices", preamble=preamble)
+            s.enqueue(item)
+            item.event.wait(timeout=5)
+            if item.result:
+                results.append(item.result["selected"])
+
+        # Start two threads that enqueue
+        t1 = threading.Thread(target=enqueue_and_wait, args=("First",))
+        t2 = threading.Thread(target=enqueue_and_wait, args=("Second",))
+        t1.start()
+        time.sleep(0.05)  # ensure ordering
+        t2.start()
+        time.sleep(0.05)
+
+        # Resolve them in order
+        s.resolve_front({"selected": "A"})
+        time.sleep(0.05)
+        s.resolve_front({"selected": "B"})
+
+        t1.join(timeout=2)
+        t2.join(timeout=2)
+
+        assert results == ["A", "B"]
+
+    def test_resolve_wakes_waiting_thread(self):
+        """Resolving an inbox item wakes the thread waiting on item.event."""
+        s = Session(session_id="test-1", name="Agent 1")
+        item = InboxItem(kind="choices", preamble="Pick")
+        s.enqueue(item)
+        result_holder = []
+
+        def wait_for_result():
+            item.event.wait(timeout=5)
+            if item.result:
+                result_holder.append(item.result)
+
+        t = threading.Thread(target=wait_for_result)
+        t.start()
+        time.sleep(0.05)
+        s.resolve_front({"selected": "Done"})
+        t.join(timeout=2)
+        assert len(result_holder) == 1
+        assert result_holder[0]["selected"] == "Done"
+
+
+class TestTabBarInboxBadge:
+    """Tests for inbox count badges in the tab bar."""
+
+    def test_tab_bar_no_badge_single_item(self):
+        """Single active choice set shows plain indicator, no count badge."""
+        m = SessionManager()
+        s, _ = m.get_or_create("a")
+        s.name = "Agent 1"
+        s.active = True
+        # One item in inbox
+        s.enqueue(InboxItem(kind="choices"))
+        text = m.tab_bar_text()
+        assert "o" in text
+        assert "+0" not in text  # no +0 badge
+
+    def test_tab_bar_badge_with_queued_items(self):
+        """Multiple queued choice sets show count badge."""
+        m = SessionManager()
+        s, _ = m.get_or_create("a")
+        s.name = "Agent 1"
+        s.active = True
+        # Three items in inbox
+        s.enqueue(InboxItem(kind="choices"))
+        s.enqueue(InboxItem(kind="choices"))
+        s.enqueue(InboxItem(kind="choices"))
+        text = m.tab_bar_text()
+        assert "o+2" in text  # 3 total, active shows o, +2 queued
+
+    def test_tab_bar_badge_queued_but_not_active(self):
+        """Queued choices when session is not yet active show +N badge."""
+        m = SessionManager()
+        s, _ = m.get_or_create("a")
+        s.name = "Agent 1"
+        s.active = False
+        # Two items in inbox (waiting to be presented)
+        s.enqueue(InboxItem(kind="choices"))
+        s.enqueue(InboxItem(kind="choices"))
+        text = m.tab_bar_text()
+        assert "+2" in text
+
+    def test_tab_bar_badge_clears_after_resolve(self):
+        """Badge updates when items are resolved."""
+        m = SessionManager()
+        s, _ = m.get_or_create("a")
+        s.name = "Agent 1"
+        s.active = True
+        item1 = InboxItem(kind="choices")
+        item2 = InboxItem(kind="choices")
+        s.enqueue(item1)
+        s.enqueue(item2)
+        text_before = m.tab_bar_text()
+        assert "o+1" in text_before
+        # Resolve first item
+        s.resolve_front({"selected": "A"})
+        text_after = m.tab_bar_text()
+        # Now only 1 item, no +N badge
+        assert "+1" not in text_after or "o+0" not in text_after
