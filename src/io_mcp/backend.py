@@ -13,9 +13,20 @@ import json
 import logging
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from socketserver import ThreadingMixIn
 from typing import Any, Callable, Optional
 
 log = logging.getLogger("io-mcp.backend")
+
+
+class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
+    """HTTPServer that handles each request in a new thread.
+
+    Essential for io-mcp because present_choices blocks until the user
+    makes a selection. Without threading, all other tool calls from all
+    agents would be queued behind the blocking call.
+    """
+    daemon_threads = True
 
 
 class BackendHandler(BaseHTTPRequestHandler):
@@ -96,7 +107,7 @@ def start_backend_server(
         {"tool_dispatch": staticmethod(tool_dispatch)},
     )
 
-    server = HTTPServer((host, port), handler_class)
+    server = ThreadingHTTPServer((host, port), handler_class)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     log.info(f"Backend server started on {host}:{port}")
