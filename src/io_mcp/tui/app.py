@@ -1792,46 +1792,33 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             self._exit_settings()
 
     def _request_compact(self) -> None:
-        """Request context compaction by sending /compact directly to the agent's tmux pane."""
+        """Request context compaction by telling the agent to run /compact.
+
+        If the agent has active choices, resolves them with a compact
+        instruction. Otherwise, queues a message for the agent's next
+        tool response.
+        """
         session = self._focused()
         if not session:
             self._speak_ui("No active session to compact")
             return
 
-        # Need tmux pane to send the command
-        pane = session.tmux_pane
-        if not pane:
-            self._tts.speak_async("No tmux pane registered for this agent. Cannot send compact command.")
-            return
-
         self._tts.play_chime("select")
-        self._speak_ui("Sending compact command to agent")
 
-        # Send /compact directly to the agent's tmux pane
-        import subprocess as _sp
-        try:
-            # Determine if remote or local
-            import socket
-            local_hostname = socket.gethostname()
-            is_remote = session.hostname and session.hostname != local_hostname
+        compact_msg = "Please compact your context now. Run /compact via tmux-cli by sending '/compact' then Enter to your own pane, wait 60 seconds, then continue."
 
-            if is_remote:
-                cmd = ["ssh", "-o", "ConnectTimeout=3", session.hostname,
-                       "tmux", "send-keys", "-t", pane, "/compact", "Enter"]
-            else:
-                cmd = ["tmux", "send-keys", "-t", pane, "/compact", "Enter"]
-
-            _sp.Popen(cmd, stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
-
-            # If the agent had active choices, cancel them so it can process /compact
-            if session.active:
-                session.selection = {"selected": "Context compaction requested — /compact sent to your pane.", "summary": "(compact context)"}
-                session.selection_event.set()
-                self._show_waiting("Compact context")
-            else:
-                self._speak_ui("Compact command sent. Agent will process it when ready.")
-        except Exception as e:
-            self._tts.speak_async(f"Failed to send compact command: {e}")
+        if session.active:
+            # Resolve active choices with the compact instruction
+            session.selection = {"selected": compact_msg, "summary": "(compact context)"}
+            session.selection_event.set()
+            self._show_waiting("Compact context")
+            self._speak_ui("Compact command sent to agent")
+        else:
+            # Queue as a pending message for next tool response
+            msgs = getattr(session, 'pending_messages', None)
+            if msgs is not None:
+                msgs.append(compact_msg)
+            self._speak_ui("Compact request queued for agent")
 
     def _restart_tui(self) -> None:
         """Restart the TUI by exiting with a special code that triggers the restart loop.
