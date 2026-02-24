@@ -172,6 +172,21 @@ class TTSEngine:
         except Exception:
             pass
 
+    def _log_tts_error(self, message: str, text: str = "") -> None:
+        """Log a TTS generation error for diagnostics."""
+        preview = text[:80] + ("..." if len(text) > 80 else "")
+        try:
+            with open("/tmp/io-mcp-tui-error.log", "a") as f:
+                f.write(
+                    f"\n--- TTS generation failure ---\n"
+                    f"{message}\n"
+                    f"text: {preview}\n"
+                    f"PULSE_SERVER={self._env.get('PULSE_SERVER', 'unset')}\n"
+                    f"tts_bin={self._tts_bin}\n"
+                )
+        except Exception:
+            pass
+
     @property
     def tts_health(self) -> dict:
         """Return TTS health status for diagnostics.
@@ -215,19 +230,24 @@ class TTSEngine:
         try:
             if self._local:
                 if not self._espeak:
+                    self._log_tts_error("espeak-ng not available", text)
                     return None
                 # espeak-ng outputs WAV directly; scale WPM by speed
                 wpm = int(TTS_SPEED * self._speed)
                 cmd = [self._espeak, "--stdout", "-s", str(wpm), text]
                 with open(out_path, "wb") as f:
                     proc = subprocess.run(
-                        cmd, stdout=f, stderr=subprocess.DEVNULL,
+                        cmd, stdout=f, stderr=subprocess.PIPE,
                         env=self._env, timeout=10,
                     )
                 if proc.returncode != 0:
+                    stderr_out = (proc.stderr or b"").decode("utf-8", errors="replace").strip()
+                    self._log_tts_error(
+                        f"espeak-ng failed (code {proc.returncode}): {stderr_out}", text)
                     return None
             else:
                 if not self._tts_bin:
+                    self._log_tts_error("tts binary not available", text)
                     return None
                 # Build tts command from config (explicit flags)
                 if self._config:
@@ -240,20 +260,41 @@ class TTSEngine:
 
                 with open(out_path, "wb") as f:
                     proc = subprocess.run(
-                        cmd, stdout=f, stderr=subprocess.DEVNULL,
+                        cmd, stdout=f, stderr=subprocess.PIPE,
                         env=self._env, timeout=30,
                     )
                 if proc.returncode != 0:
+                    stderr_out = (proc.stderr or b"").decode("utf-8", errors="replace").strip()
+                    self._log_tts_error(
+                        f"tts CLI failed (code {proc.returncode}): {stderr_out}", text)
                     try:
                         os.unlink(out_path)
                     except OSError:
                         pass
                     return None
 
+                # Verify output file is a valid WAV (not empty or truncated)
+                try:
+                    fsize = os.path.getsize(out_path)
+                    if fsize < 44:  # WAV header is 44 bytes minimum
+                        self._log_tts_error(
+                            f"tts CLI produced invalid WAV ({fsize} bytes)", text)
+                        try:
+                            os.unlink(out_path)
+                        except OSError:
+                            pass
+                        return None
+                except OSError:
+                    pass
+
             self._cache[key] = out_path
             return out_path
 
-        except Exception:
+        except subprocess.TimeoutExpired:
+            self._log_tts_error("TTS generation timed out", text)
+            return None
+        except Exception as e:
+            self._log_tts_error(f"TTS generation exception: {e}", text)
             return None
 
     def pregenerate(self, texts: list[str]) -> None:
@@ -289,8 +330,9 @@ class TTSEngine:
             # Fast path: cached — kill current and play immediately
             self.stop()
             _time_mod.sleep(0.05)  # Brief pause to let PulseAudio settle
-            self._start_playback(path)
-            if block:
+            if not self._start_playback(path):
+                self._log_tts_error("paplay failed for cached audio", text)
+            elif block:
                 self._wait_for_playback()
         else:
             # Slow path: generate on demand
@@ -298,9 +340,13 @@ class TTSEngine:
             if p:
                 self.stop()
                 _time_mod.sleep(0.05)  # Brief pause to let PulseAudio settle
-                self._start_playback(p)
-                if block:
+                if not self._start_playback(p):
+                    self._log_tts_error("paplay failed after generation", text)
+                elif block:
                     self._wait_for_playback()
+            else:
+                # Generation failed — already logged by _generate_to_file
+                pass
 
     def _start_playback(self, path: str) -> bool:
         """Start paplay for a WAV file. Returns True if playback started ok.
@@ -394,7 +440,12 @@ class TTSEngine:
 
     def speak_async(self, text: str, voice_override: Optional[str] = None,
                     emotion_override: Optional[str] = None) -> None:
-        """Speak text without blocking. Used for scroll TTS.
+        """Speak text without blocking. Used for agent narration.
+
+        Uses streaming TTS when possible (API mode, uncached) to reduce
+        time-to-first-audio and avoid the generate-then-play race condition
+        where stop() from another thread could kill playback during the gap
+        between file generation and paplay startup.
 
         When in local mode, uses the configured local backend (termux-tts-speak
         or espeak-ng) rather than always falling back to espeak file generation.
@@ -404,8 +455,26 @@ class TTSEngine:
                 if self._local and self._local_backend == "termux" and self._termux_exec:
                     self._speak_termux(text)
                     return
-                self.play_cached(text, block=False, voice_override=voice_override,
-                               emotion_override=emotion_override)
+                # Use streaming for uncached API audio — pipes tts stdout
+                # directly to paplay, eliminating the file generation delay.
+                # For cached audio, play_cached is still faster.
+                key = self._cache_key(text, voice_override, emotion_override)
+                cached = self._cache.get(key)
+                if cached and os.path.isfile(cached):
+                    # Cache hit — use play_cached for instant playback
+                    self.play_cached(text, block=False, voice_override=voice_override,
+                                   emotion_override=emotion_override)
+                elif not self._local and self._tts_bin and self._config:
+                    # Cache miss with API backend — use streaming to avoid
+                    # the race condition where file generation takes seconds
+                    # and stop() kills playback before it starts.
+                    self.speak_streaming(text, voice_override=voice_override,
+                                       emotion_override=emotion_override,
+                                       block=False)
+                else:
+                    # Local mode or no config — fall back to play_cached
+                    self.play_cached(text, block=False, voice_override=voice_override,
+                                   emotion_override=emotion_override)
             except Exception as e:
                 try:
                     with open("/tmp/io-mcp-tui-error.log", "a") as f:
@@ -575,7 +644,7 @@ class TTSEngine:
                 tts_proc = subprocess.Popen(
                     cmd,
                     stdout=subprocess.PIPE,
-                    stderr=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
                     env=self._env,
                     preexec_fn=os.setsid,
                 )
@@ -612,10 +681,58 @@ class TTSEngine:
                     self._record_failure("paplay (streaming) timed out after 60s")
                 except Exception:
                     pass
+                # Check if tts itself failed (e.g. API error)
                 try:
-                    tts_proc.wait(timeout=5)
+                    tts_retcode = tts_proc.wait(timeout=5)
+                    if tts_retcode != 0:
+                        tts_stderr = ""
+                        try:
+                            tts_stderr = (tts_proc.stderr.read() or b"").decode("utf-8", errors="replace").strip()
+                        except Exception:
+                            pass
+                        if tts_stderr:
+                            self._log_tts_error(
+                                f"tts CLI (streaming) failed (code {tts_retcode}): {tts_stderr}",
+                                text)
                 except Exception:
                     pass
+            else:
+                # Non-blocking: monitor in background thread for error reporting
+                def _monitor():
+                    try:
+                        retcode = play_proc.wait(timeout=60)
+                        if retcode != 0:
+                            stderr_out = ""
+                            try:
+                                stderr_out = (play_proc.stderr.read() or b"").decode("utf-8", errors="replace").strip()
+                            except Exception:
+                                pass
+                            self._record_failure(
+                                f"paplay (streaming async) exited with code {retcode}: {stderr_out or 'no stderr'}"
+                            )
+                        else:
+                            self._total_plays += 1
+                            self._consecutive_failures = 0
+                    except subprocess.TimeoutExpired:
+                        self._record_failure("paplay (streaming async) timed out after 60s")
+                    except Exception:
+                        pass
+                    # Check if tts itself failed
+                    try:
+                        tts_retcode = tts_proc.wait(timeout=5)
+                        if tts_retcode != 0:
+                            tts_stderr = ""
+                            try:
+                                tts_stderr = (tts_proc.stderr.read() or b"").decode("utf-8", errors="replace").strip()
+                            except Exception:
+                                pass
+                            if tts_stderr:
+                                self._log_tts_error(
+                                    f"tts CLI (streaming async) failed (code {tts_retcode}): {tts_stderr}",
+                                    text)
+                    except Exception:
+                        pass
+                threading.Thread(target=_monitor, daemon=True).start()
         except Exception as e:
             self._record_failure(f"Streaming TTS setup failed: {e}")
             # Fall back to non-streaming on any error
