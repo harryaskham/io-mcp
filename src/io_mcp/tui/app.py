@@ -1166,7 +1166,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         Updates both the inbox item (if present) and the legacy
         session.selection + session.selection_event for backward compat.
-        After resolution, updates the inbox list to reflect the change.
+        After resolution, updates the inbox list to reflect the change
+        and kicks the drain loop so the next queued item presents immediately.
         """
         # Resolve inbox item first
         item = getattr(session, '_active_inbox_item', None)
@@ -1178,6 +1179,9 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         # Legacy path (backward compat)
         session.selection = result
         session.selection_event.set()
+
+        # Kick the drain loop so the next queued item wakes immediately
+        session.drain_kick.set()
 
         # Update inbox list to show item as done
         self._safe_call(self._update_inbox_list)
@@ -1245,6 +1249,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         # Only cancel pending items with identical preamble+choices (MCP retries).
         # Genuinely new choices from different calls queue normally.
         new_labels = tuple(c.get("label", "") for c in choices)
+        cancelled = False
         for existing in list(session.inbox):
             if existing.done:
                 continue
@@ -1253,6 +1258,9 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 existing.result = {"selected": "_restart", "summary": "Superseded by retry"}
                 existing.done = True
                 existing.event.set()
+                cancelled = True
+        if cancelled:
+            session.drain_kick.set()
 
         # Create and enqueue our inbox item
         item = InboxItem(kind="choices", preamble=preamble, choices=list(choices))
@@ -1277,14 +1285,18 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 # Drain completed item
                 session.peek_inbox()  # moves done items to inbox_done
 
-                # Wake up the next queued item (if any) by re-checking
-                # The next item's thread will see itself at the front
+                # Wake up the next queued item (if any) immediately
+                session.drain_kick.set()
                 self._safe_call(self._update_tab_bar)
 
                 return result
 
-            # Not at front — wait for our turn
-            item.event.wait(timeout=0.5)
+            # Not at front — wait for our turn via drain_kick or item event
+            session.drain_kick.clear()
+            # Check if we were resolved while checking the queue
+            if item.done:
+                return item.result or {"selected": "timeout", "summary": ""}
+            session.drain_kick.wait(timeout=0.5)
             if item.done:
                 # We were resolved externally (e.g. quit, restart)
                 return item.result or {"selected": "timeout", "summary": ""}
