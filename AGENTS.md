@@ -89,7 +89,7 @@ android/
 | `set_emotion(emotion)` | Set emotion preset or custom instructions |
 | `get_settings()` | Read current settings as JSON |
 | `reload_config()` | Re-read config from disk, clear TTS cache |
-| `pull_latest()` | Git pull --rebase + hot reload |
+| `pull_latest()` | Git pull --rebase + config refresh (restart TUI for code changes) |
 | `request_restart()` | Restart backend (TUI reloads, proxy stays) |
 | `request_proxy_restart()` | Restart proxy (breaks MCP connections) |
 | `check_inbox()` | Poll for queued user messages without waiting |
@@ -164,7 +164,7 @@ config:
     settings: s
     nextTab: l
     prevTab: h
-    hotReload: r
+    refresh: r
 
 emotionPresets:
   shy: "Speak in a soft, quiet whisper. Hesitant and gentle."
@@ -211,7 +211,7 @@ quickActions:               # macros accessible via 'x' key
 | `space` | Voice input (toggle recording) |
 | `s` | Settings menu |
 | `p`/`P` | Replay prompt / all options |
-| `r` | Hot reload |
+| `r` | Refresh (config, tab bar, UI state) |
 | `?` | Help (keyboard shortcut reference) |
 | `q` | Quit |
 

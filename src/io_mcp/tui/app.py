@@ -77,7 +77,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         Binding("v", "pane_view", "Pane", show=False),
         Binding("g", "agent_log", "Log", show=False),
         Binding("question_mark", "show_help", "Help", show=False),
-        Binding("r", "hot_reload", "Reload", show=False),
+        Binding("r", "hot_reload", "Refresh", show=False),
         Binding("1", "pick_1", "", show=False),
         Binding("2", "pick_2", "", show=False),
         Binding("3", "pick_3", "", show=False),
@@ -125,7 +125,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         pane_key = kb.get("paneView", "v")
         log_key = kb.get("agentLog", "g")
         help_key = kb.get("help", "question_mark")
-        reload_key = kb.get("hotReload", "r")
+        reload_key = kb.get("refresh", kb.get("hotReload", "r"))
         quit_key = kb.get("quit", "q")
 
         voice_message_key = kb.get("voiceMessage", "M")
@@ -153,7 +153,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             Binding(pane_key, "pane_view", "Pane", show=False),
             Binding(log_key, "agent_log", "Log", show=False),
             Binding(help_key, "show_help", "Help", show=False),
-            Binding(reload_key, "hot_reload", "Reload", show=False),
+            Binding(reload_key, "hot_reload", "Refresh", show=False),
         ] + [Binding(str(i), f"pick_{i}", "", show=False) for i in range(1, 10)]
         if quit_key:
             self._bindings.append(Binding(quit_key, "quit", "Quit", show=False))
@@ -3472,57 +3472,36 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         )
 
     def action_hot_reload(self) -> None:
-        """Hot-reload the tui module, monkey-patching methods onto this app.
+        """Refresh the TUI state — config, tab bar, activity feeds, inboxes.
 
-        Reimports io_mcp.tui and copies all methods from the fresh IoMcpApp
-        class onto this instance's class. Sessions, MCP server, and
-        connections stay alive — only method implementations change.
-        Also reloads EXTRA_OPTIONS.
+        Does NOT monkey-patch code. For code changes, restart the TUI instead.
+        Reloads config from disk, clears TTS cache, refreshes the UI.
         """
-        import importlib
-        import inspect
         self._tts.stop()
 
         try:
-            # Reload the modules
-            import io_mcp.tts as tts_mod
-            import io_mcp.tui as tui_mod
-            importlib.reload(tts_mod)
-            importlib.reload(tui_mod)
-
-            # Update EXTRA_OPTIONS global
-            global EXTRA_OPTIONS
-            EXTRA_OPTIONS = tui_mod.EXTRA_OPTIONS
-
-            # Monkey-patch only methods defined directly on IoMcpApp
-            # (not inherited from Textual App/Widget/etc.)
-            fresh_cls = tui_mod.IoMcpApp
-            for name, method in inspect.getmembers(fresh_cls, predicate=inspect.isfunction):
-                # Only patch methods defined in our module
-                if method.__module__ and "io_mcp" in method.__module__:
-                    try:
-                        setattr(self.__class__, name, method)
-                    except (AttributeError, TypeError):
-                        pass
-
-            # Also update class-level constants we control
-            for attr in ("CSS", "BINDINGS"):
-                if hasattr(fresh_cls, attr):
-                    try:
-                        setattr(self.__class__, attr, getattr(fresh_cls, attr))
-                    except (AttributeError, TypeError):
-                        pass
-
-            # Ensure TTS is unmuted after reload
+            # Ensure TTS is unmuted
             self._tts._muted = False
 
             # Reload config from disk
             if self._config:
                 self._config.reload()
+                self._tts.clear_cache()
 
-            self._speak_ui("Reloaded")
+            # Refresh the tab bar
+            self._update_tab_bar()
+
+            # Refresh the current view
+            session = self._focused()
+            if session:
+                if session.active:
+                    self._show_choices()
+                else:
+                    self._show_session_waiting(session)
+
+            self._speak_ui("Refreshed")
         except Exception as e:
-            self._tts.speak_async(f"Reload failed: {str(e)[:80]}")
+            self._tts.speak_async(f"Refresh failed: {str(e)[:80]}")
 
     def _do_select(self) -> None:
         """Finalize the current selection."""

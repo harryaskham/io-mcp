@@ -95,7 +95,7 @@ class Frontend(Protocol):
         ...
 
     def hot_reload(self) -> None:
-        """Trigger a hot reload of code and config."""
+        """Refresh config and UI state (no code reload — restart TUI for that)."""
         ...
 
 
@@ -697,9 +697,11 @@ def create_mcp_server(
 
             try:
                 frontend.hot_reload()
-                return json.dumps({"status": "pulled_and_reloaded", "output": output})
+                return json.dumps({"status": "pulled_and_refreshed", "output": output,
+                                   "note": "Config refreshed. Restart TUI for code changes."})
             except Exception:
-                return json.dumps({"status": "pulled", "output": output, "note": "Hot reload failed"})
+                return json.dumps({"status": "pulled", "output": output,
+                                   "note": "Restart TUI for code changes."})
 
         except sp.TimeoutExpired:
             return json.dumps({"status": "error", "error": "Git pull timed out after 30s"})

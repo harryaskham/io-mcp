@@ -717,9 +717,11 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
                 return json.dumps({"status": "error", "output": output, "error": result.stderr.strip()})
             try:
                 frontend.hot_reload()
-                return json.dumps({"status": "pulled_and_reloaded", "output": output})
+                return json.dumps({"status": "pulled_and_refreshed", "output": output,
+                                   "note": "Config refreshed. Restart TUI for code changes."})
             except Exception:
-                return json.dumps({"status": "pulled", "output": output, "note": "Hot reload failed"})
+                return json.dumps({"status": "pulled", "output": output,
+                                   "note": "Restart TUI for code changes."})
         except subprocess.TimeoutExpired:
             return json.dumps({"status": "error", "error": "Git pull timed out"})
         except Exception as e:
