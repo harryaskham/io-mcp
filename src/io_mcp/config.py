@@ -291,6 +291,13 @@ class IoMcpConfig:
         expanded = _expand_config(raw)
         cfg = cls(raw=raw, expanded=expanded, config_path=path)
         cfg._validate()
+
+        # Always write back the full config (defaults + user overrides)
+        # so the user can see all available options in config.yml
+        try:
+            cfg.save()
+        except Exception:
+            pass
         return cfg
 
     def _validate(self) -> None:
