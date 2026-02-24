@@ -461,6 +461,8 @@ class TestAllEventTypes:
             "agent_connected",
             "agent_disconnected",
             "error",
+            "pulse_down",
+            "pulse_recovered",
         }
         assert ALL_EVENT_TYPES == expected
 

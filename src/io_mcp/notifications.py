@@ -37,6 +37,8 @@ Event types:
     agent_connected      New agent session registered
     agent_disconnected   Agent session cleaned up
     error                An error occurred in the TUI or MCP server
+    pulse_down           PulseAudio is down and auto-reconnect failed
+    pulse_recovered      PulseAudio connection was restored
     all                  Catch-all: receive every event type
 """
 
@@ -63,6 +65,8 @@ ALL_EVENT_TYPES = frozenset({
     "agent_connected",
     "agent_disconnected",
     "error",
+    "pulse_down",
+    "pulse_recovered",
 })
 
 
@@ -259,6 +263,8 @@ class NotificationDispatcher:
             "choices_timeout": 0xD08770,      # orange
             "agent_connected": 0xA3BE8C,      # green
             "agent_disconnected": 0x4C566A,   # gray
+            "pulse_down": 0xBF616A,           # red
+            "pulse_recovered": 0xA3BE8C,      # green
         }
 
         embed = {
@@ -330,6 +336,8 @@ def _event_emoji(event_type: str) -> str:
         "agent_connected": "🟢",
         "agent_disconnected": "⚪",
         "error": "❌",
+        "pulse_down": "🔇",
+        "pulse_recovered": "🔊",
     }.get(event_type, "📋")
 
 
