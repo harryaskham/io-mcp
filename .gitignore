@@ -13,3 +13,4 @@ result
 .bv/
 .djent/
 # </djent-init>
+.djent/bin/
