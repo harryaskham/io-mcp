@@ -1915,6 +1915,40 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             callback=_on_confirm,
         )
 
+    def _restart_proxy_from_tui(self) -> None:
+        """Restart the MCP proxy from the TUI.
+
+        Kills the proxy, restarts it, and reports the result via TTS.
+        Agents will need to reconnect.
+        """
+        def _on_confirm(label: str):
+            if label.lower().startswith("restart"):
+                self._speak_ui("Restarting MCP proxy")
+
+                def _do():
+                    from . import __main__ as main_mod
+                    dev_mode = "--dev" in sys.argv
+                    success = main_mod._restart_proxy(dev=dev_mode)
+                    if success:
+                        self._tts.speak_async("Proxy restarted. Agents need to reconnect.")
+                    else:
+                        self._tts.speak_async("Proxy restart failed.")
+                    self.call_from_thread(self._update_tab_bar)
+
+                threading.Thread(target=_do, daemon=True).start()
+            else:
+                self._exit_settings()
+
+        self._show_dialog(
+            title="Restart MCP Proxy?",
+            message="All agent MCP connections will drop. They must reconnect.",
+            buttons=[
+                {"label": "Restart proxy", "summary": "Kill and restart the MCP proxy"},
+                {"label": "Cancel", "summary": "Go back"},
+            ],
+            callback=_on_confirm,
+        )
+
     def _enter_worktree_mode(self) -> None:
         """Start worktree creation flow.
 
@@ -2794,7 +2828,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                     return
                 # Check if we're in quick settings submenu
                 if getattr(self, '_quick_settings_mode', False):
-                    items = ["Fast toggle", "Voice toggle", "Notifications", "Settings", "Restart TUI", "Back"]
+                    items = ["Fast toggle", "Voice toggle", "Notifications", "Settings", "Restart proxy", "Restart TUI", "Back"]
                     if idx < len(items):
                         self._handle_quick_settings_select(items[idx])
                     return
@@ -3236,7 +3270,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         # Quick settings submenu — dispatch by number
         if getattr(self, '_quick_settings_mode', False):
-            items = ["Fast toggle", "Voice toggle", "Notifications", "Settings", "Restart TUI", "Back"]
+            items = ["Fast toggle", "Voice toggle", "Notifications", "Settings", "Restart proxy", "Restart TUI", "Back"]
             if 1 <= n <= len(items):
                 self._handle_quick_settings_select(items[n - 1])
             return
@@ -3628,6 +3662,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             {"label": "Voice toggle", "summary": f"Quick-switch voice (current: {self.settings.voice})"},
             {"label": "Notifications", "summary": "Check Android notifications"},
             {"label": "Settings", "summary": "Open full settings menu"},
+            {"label": "Restart proxy", "summary": "Kill and restart MCP proxy (agents reconnect)"},
             {"label": "Restart TUI", "summary": "Restart the TUI backend"},
             {"label": "Back", "summary": "Return to choices"},
         ]
@@ -3665,6 +3700,9 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         elif label == "Settings":
             self._in_settings = False
             self._enter_settings()
+        elif label == "Restart proxy":
+            self._in_settings = False
+            self._restart_proxy_from_tui()
         elif label == "Restart TUI":
             self._in_settings = False
             self._restart_tui()

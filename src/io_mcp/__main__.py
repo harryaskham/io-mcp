@@ -750,21 +750,43 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
         session = _get_session(session_id)
         session.last_tool_name = "request_restart"
         result = frontend.present_choices(session,
-            "Agent requests backend restart. TUI/config/code reloads. MCP connection stays alive.",
-            [{"label": "Approve restart", "summary": "Restart io-mcp backend now"},
+            "Agent requests TUI restart. Sessions reset, MCP proxy stays alive.",
+            [{"label": "Approve restart", "summary": "Restart io-mcp TUI now"},
              {"label": "Deny", "summary": "Keep running"}])
         if result.get("selected", "").lower() != "approve restart":
             return json.dumps({"status": "rejected", "message": "User denied restart"})
 
+        # Use the TUI restart loop (not os.execv which kills everything)
         def _do_restart():
             import time as _t
             _t.sleep(0.5)
-            frontend.tts.speak_async("Restarting backend...")
+            frontend.tts.speak_async("Restarting TUI...")
             _t.sleep(1.0)
-            os.execv(sys.executable, [sys.executable, "-m", "io_mcp"] + sys.argv[1:])
+            # Unblock all pending selections
+            for sess in frontend.manager.all_sessions():
+                if sess.active:
+                    frontend.present_choices  # access to verify app is alive
+                    app = frontend._app
+                    app._restart_requested = True
+                    # Resolve all active sessions
+                    sess_result = {"selected": "_restart", "summary": "TUI restarting"}
+                    _item = getattr(sess, '_active_inbox_item', None)
+                    if _item and not _item.done:
+                        _item.result = sess_result
+                        _item.done = True
+                        _item.event.set()
+                    sess.selection = sess_result
+                    sess.selection_event.set()
+            # Trigger TUI exit with restart code
+            try:
+                app = frontend._app
+                app._restart_requested = True
+                app.call_from_thread(lambda: app.exit(return_code=42))
+            except Exception:
+                pass
 
         threading.Thread(target=_do_restart, daemon=True).start()
-        return json.dumps({"status": "accepted", "message": "Backend will restart in ~1.5 seconds"})
+        return json.dumps({"status": "accepted", "message": "TUI will restart in ~1.5 seconds. Proxy stays alive."})
 
     def _tool_request_proxy_restart(args, session_id):
         session = _get_session(session_id)
@@ -775,7 +797,23 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
              {"label": "Deny", "summary": "Keep proxy running"}])
         if result.get("selected", "").lower() != "approve proxy restart":
             return json.dumps({"status": "rejected", "message": "User denied proxy restart"})
-        return json.dumps({"status": "accepted", "message": "Proxy will restart"})
+
+        # Actually restart the proxy in a background thread
+        def _do_proxy_restart():
+            import time as _t
+            _t.sleep(0.3)
+            frontend.tts.speak_async("Restarting MCP proxy...")
+            # Determine dev mode from sys.argv
+            dev_mode = "--dev" in sys.argv
+            proxy_addr = f"localhost:{DEFAULT_PROXY_PORT}"
+            success = _restart_proxy(proxy_addr, DEFAULT_BACKEND_PORT, dev=dev_mode)
+            if success:
+                frontend.tts.speak_async("Proxy restarted. Agents need to reconnect.")
+            else:
+                frontend.tts.speak_async("Proxy restart failed. Check logs.")
+
+        threading.Thread(target=_do_proxy_restart, daemon=True).start()
+        return json.dumps({"status": "accepted", "message": "Proxy restarting. Agents must reconnect."})
 
     def _tool_check_inbox(args, session_id):
         """Check for queued user messages without waiting for another tool call."""
@@ -958,6 +996,65 @@ def _run_status_command() -> None:
         print("  Partial — check logs at /tmp/io-mcp-*.log")
 
 
+def _restart_proxy(proxy_address: str = f"localhost:{DEFAULT_PROXY_PORT}",
+                   backend_port: int = DEFAULT_BACKEND_PORT,
+                   dev: bool = False) -> bool:
+    """Kill the MCP proxy and restart it. Returns True on success.
+
+    This can be called from the TUI (quick settings) or CLI (restart-proxy).
+    Agent MCP connections will drop but the proxy comes back immediately.
+    """
+    import time
+
+    print("  Proxy: killing...", flush=True)
+
+    # Kill by PID file
+    try:
+        with open(PROXY_PID_FILE, "r") as f:
+            pid = int(f.read().strip())
+        os.kill(pid, signal.SIGTERM)
+        time.sleep(0.3)
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+    except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError):
+        pass
+
+    # Also kill anything on the proxy port
+    _kill_port_holder(DEFAULT_PROXY_PORT)
+    time.sleep(0.5)
+
+    # Clean up PID file
+    try:
+        os.unlink(PROXY_PID_FILE)
+    except OSError:
+        pass
+
+    # Start fresh proxy
+    _ensure_proxy_running(proxy_address, backend_port, dev=dev)
+
+    # Verify it came up
+    time.sleep(1.0)
+    if _is_proxy_alive():
+        print("  Proxy: restarted successfully", flush=True)
+        return True
+    else:
+        print("  Proxy: failed to restart — check /tmp/io-mcp-server.log", flush=True)
+        return False
+
+
+def _restart_proxy_command() -> None:
+    """CLI subcommand: io-mcp restart-proxy"""
+    print("io-mcp restart-proxy")
+    print("─" * 40)
+    success = _restart_proxy()
+    if success:
+        print("  Done. Agents will need to reconnect.")
+    else:
+        print("  Failed. Check logs.")
+
+
 # ─── Main entry point ────────────────────────────────────────────
 
 def main() -> None:
@@ -976,6 +1073,10 @@ def main() -> None:
 
     if len(sys.argv) > 1 and sys.argv[1] == "status":
         _run_status_command()
+        return
+
+    if len(sys.argv) > 1 and sys.argv[1] == "restart-proxy":
+        _restart_proxy_command()
         return
 
     # ─── Main backend ─────────────────────────────────────────
