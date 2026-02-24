@@ -1260,6 +1260,7 @@ def main() -> None:
 
         def _ring_key(key: str):
             """Handle key events from the smart ring via UDP."""
+            log.info("Ring UDP event: key=%s", key)
             _app = app_ref[0]
             def _do():
                 try:
