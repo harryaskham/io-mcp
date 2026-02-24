@@ -381,15 +381,29 @@ class TTSEngine:
 
     def speak(self, text: str, voice_override: Optional[str] = None,
               emotion_override: Optional[str] = None) -> None:
-        """Speak text and BLOCK until playback finishes."""
+        """Speak text and BLOCK until playback finishes.
+
+        When in local mode, uses the configured local backend (termux-tts-speak
+        or espeak-ng) rather than always falling back to espeak file generation.
+        """
+        if self._local and self._local_backend == "termux" and self._termux_exec:
+            self._speak_termux(text)
+            return
         self.play_cached(text, block=True, voice_override=voice_override,
                         emotion_override=emotion_override)
 
     def speak_async(self, text: str, voice_override: Optional[str] = None,
                     emotion_override: Optional[str] = None) -> None:
-        """Speak text without blocking. Used for scroll TTS."""
+        """Speak text without blocking. Used for scroll TTS.
+
+        When in local mode, uses the configured local backend (termux-tts-speak
+        or espeak-ng) rather than always falling back to espeak file generation.
+        """
         def _do():
             try:
+                if self._local and self._local_backend == "termux" and self._termux_exec:
+                    self._speak_termux(text)
+                    return
                 self.play_cached(text, block=False, voice_override=voice_override,
                                emotion_override=emotion_override)
             except Exception as e:
@@ -538,7 +552,11 @@ class TTSEngine:
 
         # Streaming only works with API tts backend (not espeak-ng local)
         if self._local or not self._tts_bin or not self._config:
-            # Fall back to non-streaming
+            # Use configured local backend when in local mode
+            if self._local and self._local_backend == "termux" and self._termux_exec:
+                self._speak_termux(text)
+                return
+            # Fall back to non-streaming (espeak file generation)
             self.play_cached(text, block=block, voice_override=voice_override,
                            emotion_override=emotion_override)
             return
