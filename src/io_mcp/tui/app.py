@@ -1314,23 +1314,15 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         session._active_inbox_item = item  # Track for _do_select resolution
         self._last_spoken_text = ""  # Reset dedup for new choices
 
-        # Force-exit settings/menus if this is the focused session —
-        # incoming choices take priority over settings
+        # Force-exit ALL modals/menus if this is the focused session —
+        # incoming choices take priority over settings, dialogs, etc.
         is_fg = self._is_focused(session.session_id)
         if is_fg and self._in_settings:
-            self._in_settings = False
-            self._setting_edit_mode = False
-            self._spawn_options = None
-            self._quick_action_options = None
-            self._dashboard_mode = False
-            self._dashboard_action_mode = False
-            self._dashboard_action_target = None
-            self._log_viewer_mode = False
-            self._system_logs_mode = False
-            self._help_mode = False
-            self._history_mode = False
-            self._tab_picker_mode = False
-            self._quick_settings_mode = False
+            self._clear_all_modal_state(session=session)
+            # Guard: prevent any pending Enter/selection from leaking into
+            # the freshly-presented choices (same guard as _exit_settings).
+            self._settings_just_closed = True
+            self.set_timer(0.3, self._clear_settings_guard)
 
         # Emit event for remote frontends
         try:
@@ -2062,6 +2054,10 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             except Exception:
                 pass
             old_session.inbox_pane_focused = self._inbox_pane_focused
+            # Clear per-session settings state on the old session so it
+            # doesn't linger when switching back later.
+            old_session.in_settings = False
+            old_session.reading_options = False
 
         # Stop current TTS
         self._tts.stop()
@@ -2230,9 +2226,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             return
 
         # Exit dialog
-        self._in_settings = False
-        self._dialog_callback = None
-        self._dialog_buttons = []
+        session = self._focused()
+        self._clear_all_modal_state(session=session)
 
         if btn_idx < len(buttons) and callback:
             label = buttons[btn_idx]["label"]
@@ -2418,10 +2413,9 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             return
 
         action = opts[idx].get("_action", "cancel")
-        self._worktree_options = None
-        self._in_settings = False
-
         session = self._focused()
+        self._clear_all_modal_state(session=session)
+
         if not session:
             return
 
@@ -3245,9 +3239,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 # Check if we're in spawn menu
                 spawn_opts = getattr(self, '_spawn_options', None)
                 if spawn_opts and idx < len(spawn_opts):
-                    self._in_settings = False
+                    self._clear_all_modal_state(session=session)
                     self._do_spawn(spawn_opts[idx])
-                    self._spawn_options = None
                     return
                 # Check if we're in log viewer mode (Enter closes it)
                 if getattr(self, '_log_viewer_mode', False):
@@ -3271,9 +3264,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                     return
                 # Check if we're in tab picker mode
                 if getattr(self, '_tab_picker_mode', False):
-                    self._tab_picker_mode = False
-                    self._in_settings = False
                     sessions = getattr(self, '_tab_picker_sessions', [])
+                    self._clear_all_modal_state(session=session)
                     if idx < len(sessions):
                         self._switch_to_session(sessions[idx])
                     return
@@ -3298,9 +3290,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 # Check if we're in quick action menu
                 qa_opts = getattr(self, '_quick_action_options', None)
                 if qa_opts and idx < len(qa_opts):
-                    self._in_settings = False
                     action = qa_opts[idx].get("_action")
-                    self._quick_action_options = None
+                    self._clear_all_modal_state(session=session)
                     if action is None:
                         self._exit_settings()
                     else:
@@ -3822,8 +3813,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             if getattr(self, '_tab_picker_mode', False):
                 sessions = getattr(self, '_tab_picker_sessions', [])
                 if 1 <= n <= len(sessions):
-                    self._tab_picker_mode = False
-                    self._in_settings = False
+                    session = self._focused()
+                    self._clear_all_modal_state(session=session)
                     self._switch_to_session(sessions[n - 1])
                 return
 
@@ -3831,18 +3822,18 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             spawn_opts = getattr(self, '_spawn_options', None)
             if spawn_opts:
                 if 1 <= n <= len(spawn_opts):
-                    self._in_settings = False
+                    session = self._focused()
+                    self._clear_all_modal_state(session=session)
                     self._do_spawn(spawn_opts[n - 1])
-                    self._spawn_options = None
                 return
 
             # Quick action menu
             qa_opts = getattr(self, '_quick_action_options', None)
             if qa_opts:
                 if 1 <= n <= len(qa_opts):
-                    self._in_settings = False
                     action = qa_opts[n - 1].get("_action")
-                    self._quick_action_options = None
+                    session = self._focused()
+                    self._clear_all_modal_state(session=session)
                     if action is None:
                         self._exit_settings()
                     else:
@@ -4218,19 +4209,23 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             self._speak_ui(msg)
             self._enter_quick_settings()  # Stay in submenu
         elif label == "Notifications":
-            self._in_settings = False
+            session = self._focused()
+            self._clear_all_modal_state(session=session)
             self._show_notifications()
         elif label == "View logs":
             self._in_settings = False
             self.action_view_system_logs()
         elif label == "Settings":
-            self._in_settings = False
+            session = self._focused()
+            self._clear_all_modal_state(session=session)
             self._enter_settings()
         elif label == "Restart proxy":
-            self._in_settings = False
+            session = self._focused()
+            self._clear_all_modal_state(session=session)
             self._restart_proxy_from_tui()
         elif label == "Restart TUI":
-            self._in_settings = False
+            session = self._focused()
+            self._clear_all_modal_state(session=session)
             self._restart_tui()
         else:
             # "Back" or unknown

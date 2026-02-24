@@ -222,7 +222,7 @@ class ViewsMixin:
         action = actions[action_idx]
 
         if action == "switch":
-            self._in_settings = False
+            self._clear_all_modal_state(session=target)
             self._switch_to_session(target)
         elif action == "close":
             self._close_session(target)
