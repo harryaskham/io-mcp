@@ -3643,7 +3643,9 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             chunk = text[self._freeform_spoken_pos:].strip()
             if chunk:
                 self._freeform_tts.stop()
-                self._freeform_tts.speak_with_local_fallback(chunk)
+                self._freeform_tts.speak_with_local_fallback(
+                    chunk, nonblocking=True,
+                )
             self._freeform_spoken_pos = len(text)
 
     @on(SubmitTextArea.Submitted, "#freeform-input")
