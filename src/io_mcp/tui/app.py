@@ -3359,6 +3359,19 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         # Regular choices mode
         if not session.active or self._in_settings:
             return
+
+        # Multi-select mode: toggle checkbox instead of selecting
+        if self._multi_select_mode:
+            # n is 1-based choice number
+            choice_idx = n - 1
+            if 0 <= choice_idx < len(self._multi_select_checked):
+                self._multi_select_checked[choice_idx] = not self._multi_select_checked[choice_idx]
+                label = session.choices[choice_idx].get("label", "")
+                state = "selected" if self._multi_select_checked[choice_idx] else "unselected"
+                self._tts.speak_async(f"{label} {state}")
+                self._refresh_multi_select()
+            return
+
         display_idx = session.extras_count + n - 1
         list_view = self.query_one("#choices", ListView)
         if display_idx < 0 or display_idx >= len(list_view.children):
