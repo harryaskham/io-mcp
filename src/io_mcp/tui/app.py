@@ -225,6 +225,11 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         # Daemon health status (rendered in tab bar RHS)
         self._daemon_status_text: str = ""
 
+        # PulseAudio auto-reconnect state
+        self._pulse_was_ok: bool = True  # assume healthy at start
+        self._pulse_reconnect_attempts: int = 0
+        self._pulse_last_reconnect: float = 0.0
+
         # Filter mode
         self._filter_mode = False
 
@@ -446,6 +451,9 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         Status is displayed in the right side of the tab bar via _update_tab_bar.
         Runs health checks in a background thread to avoid blocking the TUI.
+
+        When PulseAudio goes down and config.pulseAudio.autoReconnect is True,
+        attempts auto-reconnect via the TTS engine's reconnect_pulse() method.
         """
         def _check():
             import urllib.request
@@ -466,6 +474,29 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                     pls_ok = result.returncode == 0
                 except Exception:
                     pass
+
+            # ── PulseAudio auto-reconnect ───────────────────────────
+            if not pls_ok and self._pulse_was_ok:
+                # Transition from OK → down: attempt reconnect
+                self._try_pulse_reconnect()
+            elif not pls_ok and not self._pulse_was_ok:
+                # Still down: retry if cooldown has elapsed
+                self._try_pulse_reconnect()
+            elif pls_ok and not self._pulse_was_ok:
+                # Recovered! Reset counters
+                self._pulse_reconnect_attempts = 0
+                self._pulse_last_reconnect = 0.0
+                try:
+                    self._tts.play_chime("success")
+                except Exception:
+                    pass
+                try:
+                    with open("/tmp/io-mcp-tui-error.log", "a") as f:
+                        f.write(f"\n--- PulseAudio recovered ---\n")
+                except Exception:
+                    pass
+
+            self._pulse_was_ok = pls_ok
 
             # Check proxy via PID file
             proxy_ok = False
@@ -523,6 +554,80 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 pass
 
         threading.Thread(target=_check, daemon=True).start()
+
+    def _try_pulse_reconnect(self) -> None:
+        """Attempt PulseAudio auto-reconnect if enabled and within limits.
+
+        Respects config settings for max attempts and cooldown period.
+        Logs all attempts and plays appropriate chimes on success/failure.
+        """
+        # Check if auto-reconnect is enabled
+        if self._config and not self._config.pulse_auto_reconnect:
+            return
+
+        max_attempts = 3
+        cooldown = 30.0
+        if self._config:
+            max_attempts = self._config.pulse_max_reconnect_attempts
+            cooldown = self._config.pulse_reconnect_cooldown
+
+        # Check if we've exceeded max attempts
+        if self._pulse_reconnect_attempts >= max_attempts:
+            return
+
+        # Check cooldown
+        now = time.time()
+        if now - self._pulse_last_reconnect < cooldown:
+            return
+
+        self._pulse_reconnect_attempts += 1
+        self._pulse_last_reconnect = now
+        attempt = self._pulse_reconnect_attempts
+
+        try:
+            with open("/tmp/io-mcp-tui-error.log", "a") as f:
+                f.write(
+                    f"\n--- PulseAudio reconnect attempt {attempt}/{max_attempts} ---\n"
+                )
+        except Exception:
+            pass
+
+        # Play warning chime to indicate reconnect attempt
+        try:
+            self._tts.play_chime("warning")
+        except Exception:
+            pass
+
+        # Attempt reconnection via TTS engine
+        success = False
+        try:
+            success = self._tts.reconnect_pulse()
+        except Exception:
+            pass
+
+        if success:
+            self._pulse_was_ok = True
+            self._pulse_reconnect_attempts = 0
+            self._pulse_last_reconnect = 0.0
+            try:
+                self._tts.play_chime("success")
+            except Exception:
+                pass
+            try:
+                with open("/tmp/io-mcp-tui-error.log", "a") as f:
+                    f.write(f"  → PulseAudio reconnected successfully!\n")
+            except Exception:
+                pass
+        else:
+            remaining = max_attempts - attempt
+            try:
+                with open("/tmp/io-mcp-tui-error.log", "a") as f:
+                    f.write(
+                        f"  → PulseAudio reconnect failed "
+                        f"({remaining} attempts remaining)\n"
+                    )
+            except Exception:
+                pass
 
     def _cleanup_stale_sessions(self) -> None:
         """Remove sessions that have been inactive past the configured timeout.

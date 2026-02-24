@@ -649,6 +649,72 @@ class TTSEngine:
         except Exception:
             pass
 
+    def reconnect_pulse(self) -> bool:
+        """Attempt to reconnect PulseAudio.
+
+        Tries several strategies in order:
+        1. pactl info (just check if it's already back)
+        2. pactl load-module module-native-protocol-tcp (ensure TCP module loaded)
+        3. pulseaudio --start (restart daemon if needed)
+
+        Returns True if PulseAudio is reachable after reconnection attempts.
+        """
+        env = self._env.copy()
+        pactl = _find_binary("pactl")
+        pulseaudio = _find_binary("pulseaudio")
+
+        # Strategy 1: Check if PulseAudio is already back
+        if pactl:
+            try:
+                result = subprocess.run(
+                    [pactl, "info"],
+                    env=env, capture_output=True, timeout=3,
+                )
+                if result.returncode == 0:
+                    return True
+            except Exception:
+                pass
+
+        # Strategy 2: Try to start PulseAudio daemon
+        if pulseaudio:
+            try:
+                subprocess.run(
+                    [pulseaudio, "--start"],
+                    env=env, capture_output=True, timeout=5,
+                )
+            except Exception:
+                pass
+
+        # Strategy 3: Try reconnecting by suspending and resuming sinks
+        if pactl:
+            try:
+                # Suspend-unsuspend to force reconnect
+                subprocess.run(
+                    [pactl, "suspend-sink", "", "1"],
+                    env=env, capture_output=True, timeout=2,
+                )
+                import time as _t
+                _t.sleep(0.2)
+                subprocess.run(
+                    [pactl, "suspend-sink", "", "0"],
+                    env=env, capture_output=True, timeout=2,
+                )
+            except Exception:
+                pass
+
+        # Final check: is PulseAudio back?
+        if pactl:
+            try:
+                result = subprocess.run(
+                    [pactl, "info"],
+                    env=env, capture_output=True, timeout=3,
+                )
+                return result.returncode == 0
+            except Exception:
+                pass
+
+        return False
+
     def cleanup(self) -> None:
         self.stop()
         self.clear_cache()

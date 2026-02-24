@@ -143,6 +143,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "initialDelaySecs": 30,
             "repeatIntervalSecs": 45,
         },
+        "pulseAudio": {
+            "autoReconnect": True,             # attempt auto-reconnect when PulseAudio goes down
+            "maxReconnectAttempts": 3,          # max consecutive reconnect attempts before giving up
+            "reconnectCooldownSecs": 30,       # min seconds between reconnect attempts
+        },
         "healthMonitor": {
             "enabled": True,
             "warningThresholdSecs": 300,      # 5 minutes with no tool call → warning
@@ -707,6 +712,35 @@ class IoMcpConfig:
             self.expanded.get("config", {})
             .get("ringReceiver", {})
             .get("port", 5555)
+        )
+
+    # ─── PulseAudio settings ────────────────────────────────────
+
+    @property
+    def pulse_auto_reconnect(self) -> bool:
+        """Whether to attempt auto-reconnect when PulseAudio goes down."""
+        return bool(
+            self.expanded.get("config", {})
+            .get("pulseAudio", {})
+            .get("autoReconnect", True)
+        )
+
+    @property
+    def pulse_max_reconnect_attempts(self) -> int:
+        """Max consecutive reconnect attempts before giving up."""
+        return int(
+            self.expanded.get("config", {})
+            .get("pulseAudio", {})
+            .get("maxReconnectAttempts", 3)
+        )
+
+    @property
+    def pulse_reconnect_cooldown(self) -> float:
+        """Minimum seconds between reconnect attempts."""
+        return float(
+            self.expanded.get("config", {})
+            .get("pulseAudio", {})
+            .get("reconnectCooldownSecs", 30)
         )
 
     # ─── Health monitor settings ─────────────────────────────────
