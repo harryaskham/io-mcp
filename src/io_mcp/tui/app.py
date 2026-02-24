@@ -2838,6 +2838,12 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 event.stop()
 
     def action_select(self) -> None:
+        """Handle Enter key for non-ListView contexts.
+
+        ListView selections are handled by on_list_selected (ListView.Selected event).
+        This method only handles cases where Enter has meaning outside the list:
+        voice recording stop, setting edit apply.
+        """
         if self._setting_edit_mode:
             self._apply_setting_edit()
             return
@@ -2846,54 +2852,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         if session and session.voice_recording:
             self._stop_voice_recording()
             return
-        # Multi-select mode: toggle or confirm
-        if self._multi_select_mode:
-            list_view = self.query_one("#choices", ListView)
-            idx = list_view.index or 0
-            self._handle_multi_select_enter(idx)
-            return
-        if self._in_settings:
-            list_view = self.query_one("#choices", ListView)
-            idx = list_view.index or 0
-            # Check if we're in spawn menu
-            spawn_opts = getattr(self, '_spawn_options', None)
-            if spawn_opts and idx < len(spawn_opts):
-                self._in_settings = False
-                self._do_spawn(spawn_opts[idx])
-                self._spawn_options = None
-                return
-            # Check if we're in dashboard action menu
-            if getattr(self, '_dashboard_action_mode', False):
-                self._handle_dashboard_action(idx)
-                return
-            # Check if we're in dashboard mode
-            if getattr(self, '_dashboard_mode', False):
-                self._dashboard_session_actions(idx)
-                return
-            # Check if we're in quick action menu
-            qa_opts = getattr(self, '_quick_action_options', None)
-            if qa_opts and idx < len(qa_opts):
-                self._in_settings = False
-                action = qa_opts[idx].get("_action")
-                self._quick_action_options = None
-                if action is None:
-                    self._exit_settings()
-                else:
-                    self._execute_quick_action(action)
-                return
-            if idx < len(self._settings_items):
-                key = self._settings_items[idx]["key"]
-                if key == "close":
-                    self._exit_settings()
-                else:
-                    self._enter_setting_edit(key)
-            return
-        if session and not session.active and not self._in_settings:
-            # Activity feed — allow selecting actionable items even when agent is working
-            self._do_select()
-            return
-        if session and session.active and not session.input_mode and not session.voice_recording:
-            self._do_select()
+        # All other Enter handling (choices, settings menu, activity feed, etc.)
+        # is done by on_list_selected via the ListView.Selected event.
 
     def action_freeform_input(self) -> None:
         """Switch to freeform text input mode."""
