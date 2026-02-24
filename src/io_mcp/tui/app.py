@@ -542,6 +542,19 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 except Exception:
                     pass
 
+            # Check termux-exec daemon via 'termux-exec true'
+            tx_ok = False
+            termux_exec = shutil.which("termux-exec")
+            if termux_exec:
+                try:
+                    result = subprocess.run(
+                        [termux_exec, "true"],
+                        capture_output=True, timeout=2,
+                    )
+                    tx_ok = result.returncode == 0
+                except Exception:
+                    pass
+
             # Build compact status text for tab bar RHS
             s = self._cs
 
@@ -554,6 +567,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 f"{_dot(proxy_ok)}mcp",
                 f"{_dot(backend_ok)}tui",
                 f"{_dot(api_ok)}api",
+                f"{_dot(tx_ok)}tx",
             ]
 
             self._daemon_status_text = " ".join(parts)
