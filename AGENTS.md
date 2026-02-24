@@ -1,5 +1,7 @@
 # io-mcp — Agent Guide
 
+> **Note:** `CLAUDE.md` is a symlink to this file (`AGENTS.md`). Edit this file directly.
+
 MCP server providing hands-free Claude Code interaction via scroll wheel (smart ring) and earphones (TTS). Runs on Nix-on-Droid (Galaxy S24 Ultra, aarch64, Android 14). Native Android companion app available.
 
 ## Architecture

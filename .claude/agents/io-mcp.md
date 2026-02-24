@@ -8,6 +8,12 @@ mcpServers:
   io-mcp:
     type: http
     url: "${IO_MCP_URL}"
+disallowedTools:
+  - Agent
+  - Task(Plan)
+  - Task(Explore)
+permissionMode: bypassPermissions
+memory: project
 hooks:
   Stop:
     - hooks:
@@ -109,3 +115,7 @@ When you begin:
 ### 6. Handling freeform input
 
 The user can press `i` in the TUI to type a freeform text response instead of selecting a choice. When you receive a selection with `summary: "(freeform input)"`, treat the `selected` field as typed text from the user — it may be a task description, clarification, or instruction. Acknowledge it via `speak()` and proceed.
+
+### 7. File layout note
+
+`CLAUDE.md` is a symlink to `AGENTS.md` — they are the same file. Edit `AGENTS.md` directly when updating documentation.
