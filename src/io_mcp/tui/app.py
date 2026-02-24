@@ -1599,14 +1599,27 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 ))
                 di += 1
 
-            # Inbox queue indicator
+            # Inbox queue indicator — show each queued item's preamble
             inbox_count = session.inbox_choices_count()
             if inbox_count > 0:
                 list_view.append(ChoiceItem(
                     f"[{s['accent']}]{inbox_count} choice set{'s' if inbox_count != 1 else ''} queued[/{s['accent']}]",
-                    f"[{s['fg_dim']}]Will present in order when current choices resolve[/{s['fg_dim']}]",
+                    f"[{s['fg_dim']}]Will present when current task resolves[/{s['fg_dim']}]",
                     index=-993, display_index=di,
                 ))
+                di += 1
+                # Show preambles of queued items
+                for qi, q_item in enumerate(session.inbox):
+                    if q_item.done or q_item.kind != "choices":
+                        continue
+                    preamble_preview = q_item.preamble[:80] if q_item.preamble else "(no preamble)"
+                    n_choices = len(q_item.choices)
+                    list_view.append(ChoiceItem(
+                        f"  [{s['fg_dim']}]› {preamble_preview}[/{s['fg_dim']}]",
+                        f"[{s['fg_dim']}]{n_choices} option{'s' if n_choices != 1 else ''}[/{s['fg_dim']}]",
+                        index=-992 + qi, display_index=di,
+                    ))
+                    di += 1
                 di += 1
 
             # ── Recent speech log ──────────────────────────────────
