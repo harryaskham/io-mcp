@@ -465,7 +465,11 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
         On TUI restart, persisted sessions create placeholder tabs (IDs start
         with 'persisted-'). When a real agent connects, we match it to a
         placeholder and transfer the name, registration data, and activity.
-        If only one placeholder exists, we always match (single-agent case).
+
+        Matching strategy:
+        1. If only one placeholder exists → always match (single-agent case)
+        2. If multiple → try matching by name (from register_session)
+        3. If still no match → take the oldest placeholder (FIFO)
         """
         try:
             placeholders = [
@@ -481,8 +485,19 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
             if len(placeholders) == 1:
                 sid, placeholder = placeholders[0]
             else:
-                # Multiple placeholders — can't match without registration data
-                return None
+                # Multiple placeholders — try name matching if session has a name
+                matched = None
+                if session.name and not session.name.startswith("Agent "):
+                    for ph_sid, ph in placeholders:
+                        if ph.name == session.name:
+                            matched = (ph_sid, ph)
+                            break
+
+                if matched:
+                    sid, placeholder = matched
+                else:
+                    # Take the first (oldest) placeholder as FIFO fallback
+                    sid, placeholder = placeholders[0]
 
             # Transfer identity
             session.name = placeholder.name

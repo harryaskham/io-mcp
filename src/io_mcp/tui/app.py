@@ -592,19 +592,41 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 session.health_alert_spoken = True
 
         # ── Auto-prune dead sessions ─────────────────────────────
-        # Sessions with dead tmux panes that have been unresponsive
-        # get removed automatically (more aggressive than stale cleanup)
+        # Multiple heuristics for detecting dead sessions:
+        # 1. Dead tmux pane (immediate — don't wait for unresponsive timer)
+        # 2. Placeholder sessions that never reconnected (2 min timeout)
+        # 3. Unresponsive sessions without tmux info (no way to verify)
         dead_sessions = []
+        placeholder_timeout = 120.0  # 2 min for placeholders to reconnect
+
         for session in self.manager.all_sessions():
             if session.session_id == self.manager.active_session_id:
                 continue  # never auto-prune focused session
             if session.active:
                 continue  # has pending choices
-            pane_dead = self._is_tmux_pane_dead(session)
-            if pane_dead and session.health_status == "unresponsive":
-                dead_sessions.append(session)
 
-        for session in dead_sessions:
+            is_placeholder = session.session_id.startswith("persisted-")
+
+            # Heuristic 1: Dead tmux pane — immediate removal
+            pane_dead = self._is_tmux_pane_dead(session)
+            if pane_dead:
+                dead_sessions.append((session, "dead tmux pane"))
+                continue
+
+            # Heuristic 2: Placeholder that never reconnected
+            if is_placeholder:
+                elapsed = now - session.last_activity
+                if elapsed > placeholder_timeout:
+                    dead_sessions.append((session, "placeholder timeout"))
+                    continue
+
+            # Heuristic 3: Unresponsive without tmux info (can't verify liveness)
+            if session.health_status == "unresponsive":
+                has_tmux = bool(getattr(session, 'tmux_pane', ''))
+                if not has_tmux:
+                    dead_sessions.append((session, "unresponsive, no tmux"))
+
+        for session, reason in dead_sessions:
             name = session.name
             self.on_session_removed(session.session_id)
             tab_bar_dirty = True
@@ -625,21 +647,39 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         Returns True if the pane is confirmed dead (process exited or doesn't exist).
         Returns False if the pane is alive, not registered, or check fails.
 
+        Supports both local and remote tmux checks. For remote agents,
+        uses SSH to check the tmux pane on the remote host.
+
         Uses `tmux display-message -p -t <pane_id> "#{pane_dead}"` which outputs
         "1" if the pane's shell has exited (pane is in a "dead" state), "0" otherwise.
         """
         pane = getattr(session, 'tmux_pane', '')
-        tmux_session = getattr(session, 'tmux_session', '')
+        tmux_session_name = getattr(session, 'tmux_session', '')
 
-        if not pane and not tmux_session:
+        if not pane and not tmux_session_name:
             return False  # no tmux info, can't check
 
         try:
-            # Use tmux display-message to check pane_dead status
-            # pane_dead is 1 if the pane's process has exited
-            target = pane if pane else tmux_session
+            target = pane if pane else tmux_session_name
+            hostname = getattr(session, 'hostname', '')
+
+            # Check if this is a remote agent
+            is_remote = False
+            if hostname:
+                local_hostname = os.uname().nodename
+                is_remote = hostname not in ("", "localhost", local_hostname)
+
+            if is_remote:
+                cmd = [
+                    "ssh", "-o", "ConnectTimeout=2", "-o", "StrictHostKeyChecking=no",
+                    hostname,
+                    f"tmux display-message -p -t {target} '#{{pane_dead}}'",
+                ]
+            else:
+                cmd = ["tmux", "display-message", "-p", "-t", target, "#{pane_dead}"]
+
             result = subprocess.run(
-                ["tmux", "display-message", "-p", "-t", target, "#{pane_dead}"],
+                cmd,
                 capture_output=True,
                 text=True,
                 timeout=2,
@@ -2380,6 +2420,10 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                     session.restore_activity(saved)
                     # Mark as unhealthy since agent hasn't reconnected yet
                     session.health_status = "warning"
+
+            # Reset counter so new agents don't get inflated numbers
+            # (placeholders increment counter, but they'll be claimed/removed)
+            self.manager._counter = 0
 
             self._update_tab_bar()
             # Show the first persisted session's activity feed
