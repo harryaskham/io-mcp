@@ -1253,10 +1253,10 @@ def main() -> None:
         except Exception as e:
             print(f"  Android API: failed — {e}", flush=True)
 
-    # Start ring receiver (optional — graceful if ring-mods not installed)
+    # Start ring receiver (UDP listener for ring-mods smart ring events)
     ring_receiver = None
     try:
-        from ring_mods.receiver import RingReceiver
+        from .ring_receiver import RingReceiver
 
         def _ring_key(key: str):
             """Handle key events from the smart ring via UDP."""
@@ -1283,8 +1283,6 @@ def main() -> None:
         ring_receiver = RingReceiver(callback=_ring_key, port=ring_port)
         ring_receiver.start()
         print(f"  Ring receiver: UDP :{ring_port} (ring-mods input)", flush=True)
-    except ImportError:
-        pass  # ring-mods not installed, skip
     except Exception as e:
         print(f"  Ring receiver: failed — {e}", flush=True)
 
