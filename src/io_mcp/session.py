@@ -128,6 +128,10 @@ class Session:
     # ── Tool call inbox (queued choices/speech for TUI display) ──
     inbox: collections.deque = field(default_factory=collections.deque)
     inbox_done: list[InboxItem] = field(default_factory=list)
+    _inbox_done_max: int = 50  # cap to prevent unbounded growth
+    # Generation counter — bumped on every inbox mutation so the TUI can
+    # skip redundant _update_inbox_list() rebuilds.
+    _inbox_generation: int = 0
     # Kicked after resolving an inbox item so waiting threads wake immediately
     drain_kick: threading.Event = field(default_factory=threading.Event)
 
@@ -152,6 +156,7 @@ class Session:
     def enqueue(self, item: InboxItem) -> None:
         """Add an item to the inbox queue."""
         self.inbox.append(item)
+        self._inbox_generation += 1
 
     def dedup_and_enqueue(self, item: InboxItem) -> bool:
         """Atomically check for duplicates and enqueue a choices item.
@@ -203,6 +208,7 @@ class Session:
             # ── Enqueue and record timestamp ──
             self._inbox_dedup_log[key] = now
             self.inbox.append(item)
+            self._inbox_generation += 1
 
             # Prune old dedup log entries (keep last 60 seconds)
             cutoff = now - 60.0
@@ -213,6 +219,29 @@ class Session:
             }
 
             return True
+
+    def _append_done(self, item: InboxItem) -> None:
+        """Move an item to inbox_done, skipping _restart items and capping size.
+
+        Items resolved with ``_restart`` (retries, duplicates, owner-died) are
+        not real user selections — they add noise to the inbox history and waste
+        memory.  We drop them entirely.
+
+        Also trims ``inbox_done`` to ``_inbox_done_max`` to prevent unbounded
+        growth that degrades TUI performance.
+        """
+        # Skip items that were never really presented to the user
+        result = item.result or {}
+        if result.get("selected") == "_restart":
+            return
+
+        self.inbox_done.append(item)
+        self._inbox_generation += 1
+
+        # Trim from the front when over the cap
+        overflow = len(self.inbox_done) - self._inbox_done_max
+        if overflow > 0:
+            del self.inbox_done[:overflow]
 
     def peek_inbox(self) -> Optional[InboxItem]:
         """Get the next unresolved inbox item without removing it.
@@ -226,7 +255,7 @@ class Session:
         while self.inbox:
             front = self.inbox[0]
             if front.done:
-                self.inbox_done.append(self.inbox.popleft())
+                self._append_done(self.inbox.popleft())
                 continue
             # Check if the owner thread died (orphaned item)
             owner = getattr(front, 'owner_thread', None)
@@ -234,7 +263,7 @@ class Session:
                 front.done = True
                 front.result = {"selected": "_restart", "summary": "Owner thread died"}
                 front.event.set()
-                self.inbox_done.append(self.inbox.popleft())
+                self._append_done(self.inbox.popleft())
                 kicked = True
                 continue
             if kicked:
@@ -257,7 +286,7 @@ class Session:
         item.result = result
         item.done = True
         item.event.set()
-        self.inbox_done.append(self.inbox.popleft())
+        self._append_done(self.inbox.popleft())
         self.drain_kick.set()
         return item
 
