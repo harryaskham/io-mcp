@@ -668,6 +668,26 @@ class IoMcpConfig:
             .get("repeatIntervalSecs", 45)
         )
 
+    # ─── Ring receiver settings ───────────────────────────────────
+
+    @property
+    def ring_receiver_enabled(self) -> bool:
+        """Whether the UDP ring receiver is enabled (listens for ring-mods events)."""
+        return bool(
+            self.expanded.get("config", {})
+            .get("ringReceiver", {})
+            .get("enabled", False)
+        )
+
+    @property
+    def ring_receiver_port(self) -> int:
+        """UDP port for the ring receiver."""
+        return int(
+            self.expanded.get("config", {})
+            .get("ringReceiver", {})
+            .get("port", 5555)
+        )
+
     # ─── Health monitor settings ─────────────────────────────────
 
     @property

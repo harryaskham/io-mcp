@@ -1254,37 +1254,39 @@ def main() -> None:
             print(f"  Android API: failed — {e}", flush=True)
 
     # Start ring receiver (UDP listener for ring-mods smart ring events)
+    # Disabled by default — enable in config.yml: config.ringReceiver.enabled: true
     ring_receiver = None
-    try:
-        from .ring_receiver import RingReceiver
+    if config.ring_receiver_enabled:
+        try:
+            from .ring_receiver import RingReceiver
 
-        def _ring_key(key: str):
-            """Handle key events from the smart ring via UDP."""
-            log.info("Ring UDP event: key=%s", key)
-            _app = app_ref[0]
-            def _do():
+            def _ring_key(key: str):
+                """Handle key events from the smart ring via UDP."""
+                log.info("Ring UDP event: key=%s", key)
+                _app = app_ref[0]
+                def _do():
+                    try:
+                        {"j": _app.action_cursor_down, "k": _app.action_cursor_up,
+                         "enter": _app.action_select, "space": _app.action_voice_input,
+                         "u": _app.action_undo_selection,
+                         "h": _app.action_prev_tab, "l": _app.action_next_tab,
+                         "s": _app.action_toggle_settings, "d": _app.action_dashboard,
+                         "n": _app.action_next_choices_tab,
+                         "m": _app.action_queue_message, "i": _app.action_freeform_input,
+                        }.get(key, lambda: None)()
+                    except Exception:
+                        pass
                 try:
-                    {"j": _app.action_cursor_down, "k": _app.action_cursor_up,
-                     "enter": _app.action_select, "space": _app.action_voice_input,
-                     "u": _app.action_undo_selection,
-                     "h": _app.action_prev_tab, "l": _app.action_next_tab,
-                     "s": _app.action_toggle_settings, "d": _app.action_dashboard,
-                     "n": _app.action_next_choices_tab,
-                     "m": _app.action_queue_message, "i": _app.action_freeform_input,
-                    }.get(key, lambda: None)()
+                    _app.call_from_thread(_do)
                 except Exception:
                     pass
-            try:
-                _app.call_from_thread(_do)
-            except Exception:
-                pass
 
-        ring_port = config.ring_receiver_port if hasattr(config, 'ring_receiver_port') else 5555
-        ring_receiver = RingReceiver(callback=_ring_key, port=ring_port)
-        ring_receiver.start()
-        print(f"  Ring receiver: UDP :{ring_port} (ring-mods input)", flush=True)
-    except Exception as e:
-        print(f"  Ring receiver: failed — {e}", flush=True)
+            ring_port = config.ring_receiver_port
+            ring_receiver = RingReceiver(callback=_ring_key, port=ring_port)
+            ring_receiver.start()
+            print(f"  Ring receiver: UDP :{ring_port} (ring-mods input)", flush=True)
+        except Exception as e:
+            print(f"  Ring receiver: failed — {e}", flush=True)
 
     # Run the TUI in a restart loop.
     # Exit code 42 means "restart", anything else means "quit for real".
