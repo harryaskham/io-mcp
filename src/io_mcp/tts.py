@@ -259,6 +259,67 @@ class TTSEngine:
                            emotion_override=emotion_override)
         threading.Thread(target=_do, daemon=True).start()
 
+    def is_cached(self, text: str, voice_override: Optional[str] = None,
+                  emotion_override: Optional[str] = None) -> bool:
+        """Check if audio for this text is already generated."""
+        key = self._cache_key(text, voice_override, emotion_override)
+        path = self._cache.get(key)
+        return path is not None and os.path.isfile(path)
+
+    def speak_with_espeak_fallback(self, text: str,
+                                   voice_override: Optional[str] = None,
+                                   emotion_override: Optional[str] = None) -> None:
+        """Speak text instantly: use cache if available, else espeak fallback.
+
+        For scroll-through option readout where latency matters more than
+        voice quality. If the API TTS is cached, plays the nice version.
+        If not, plays espeak immediately and kicks off background generation
+        so the next visit to this option will use the full TTS.
+        """
+        if self._muted:
+            return
+
+        key = self._cache_key(text, voice_override, emotion_override)
+        path = self._cache.get(key)
+
+        if path and os.path.isfile(path):
+            # Cache hit — play the full quality version
+            self.stop()
+            import time as _t
+            _t.sleep(0.05)
+            self._start_playback(path)
+            return
+
+        # Cache miss — play espeak fallback immediately
+        if self._espeak and self._paplay:
+            def _espeak_play():
+                try:
+                    wpm = int(TTS_SPEED * self._speed)
+                    # Generate espeak audio to a temp file and play it
+                    tmp = os.path.join(CACHE_DIR, f"_espeak_{hashlib.md5(text.encode()).hexdigest()[:8]}.wav")
+                    with open(tmp, "wb") as f:
+                        subprocess.run(
+                            [self._espeak, "--stdout", "-s", str(wpm), text],
+                            stdout=f, stderr=subprocess.DEVNULL,
+                            env=self._env, timeout=5,
+                        )
+                    self.stop()
+                    import time as _t
+                    _t.sleep(0.05)
+                    self._start_playback(tmp)
+                except Exception:
+                    pass
+            threading.Thread(target=_espeak_play, daemon=True).start()
+
+            # Also kick off background API generation for next time
+            if not self._local:
+                def _gen():
+                    self._generate_to_file(text, voice_override, emotion_override)
+                threading.Thread(target=_gen, daemon=True).start()
+        else:
+            # No espeak — fall back to normal async (will generate and play)
+            self.speak_async(text, voice_override, emotion_override)
+
     def speak_streaming(self, text: str, voice_override: Optional[str] = None,
                         emotion_override: Optional[str] = None,
                         block: bool = True) -> None:

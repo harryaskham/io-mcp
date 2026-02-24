@@ -2672,7 +2672,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 # Deduplicate — don't repeat the same text twice in a row
                 if text != self._last_spoken_text:
                     self._last_spoken_text = text
-                    self._tts.speak_async(text)
+                    # Use espeak fallback for instant readout when scrolling options
+                    self._tts.speak_with_espeak_fallback(text)
 
             if self._dwell_time > 0:
                 self._start_dwell()
