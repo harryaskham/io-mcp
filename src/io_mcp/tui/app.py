@@ -247,6 +247,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         # Inbox pane focus state (two-column layout)
         self._inbox_pane_focused = False
         self._inbox_scroll_index = 0  # cursor position in inbox list
+        self._inbox_was_visible = False  # saved inbox state for message mode
 
         # Notification webhooks
         self._notifier = create_dispatcher(config)
@@ -3420,6 +3421,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             return
         self._message_mode = True
         self._freeform_spoken_pos = 0
+        self._inbox_was_visible = self._inbox_pane_visible()
 
         # UI
         self.query_one("#main-content").display = False
@@ -3445,6 +3447,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             return
         self._message_mode = True
         self._freeform_spoken_pos = 0
+        self._inbox_was_visible = self._inbox_pane_visible()
         self._tts.stop()
         self._speak_ui("Recording voice message")
         self._start_voice_recording()
@@ -3599,7 +3602,9 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         # Message queue mode — queue the message, don't select
         if self._message_mode:
+            inbox_was_visible = self._inbox_was_visible
             self._message_mode = False
+            self._inbox_was_visible = False
             inp.styles.display = "none"
             msgs = getattr(session, 'pending_messages', None)
             if msgs is not None:
@@ -3611,6 +3616,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             if session.active:
                 self._show_choices()  # Rebuild — choices may have arrived during input
             else:
+                # Restore inbox view if it was visible before entering message mode
+                self._ensure_main_content_visible(show_inbox=inbox_was_visible)
                 self._show_session_waiting(session)
             return
 
@@ -3629,13 +3636,17 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         session = self._focused()
         if session:
             session.input_mode = False
+        inbox_was_visible = self._inbox_was_visible
         self._message_mode = False
+        self._inbox_was_visible = False
         self._freeform_tts.stop()
         inp = self.query_one("#freeform-input", SubmitTextArea)
         inp.styles.display = "none"
         if session and session.active:
             self._show_choices()  # Rebuild — choices may have arrived during input
         elif session:
+            # Restore inbox view if it was visible before entering message mode
+            self._ensure_main_content_visible(show_inbox=inbox_was_visible)
             self._show_session_waiting(session)
         else:
             self._restore_choices()
