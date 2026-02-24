@@ -219,6 +219,9 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         # TTS deduplication — track last spoken text to avoid repeats
         self._last_spoken_text: str = ""
 
+        # Daemon health status (rendered in tab bar RHS)
+        self._daemon_status_text: str = ""
+
         # Filter mode
         self._filter_mode = False
 
@@ -380,11 +383,9 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             pass
 
     def _update_daemon_status(self) -> None:
-        """Check proxy/backend/API health and update the status bar.
+        """Check proxy/backend/API health and store as a status string.
 
-        Shows: proxy/backend/api status dots, session count, health
-        summary, notification channel count, and TTS queue info.
-
+        Status is displayed in the right side of the tab bar via _update_tab_bar.
         Runs health checks in a background thread to avoid blocking the TUI.
         """
         def _check():
@@ -425,23 +426,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 except Exception:
                     pass
 
-            # Session count and health summary
-            sessions = self.manager.all_sessions() if hasattr(self.manager, 'all_sessions') else []
-            session_count = len(sessions)
-            warning_count = sum(1 for s in sessions if getattr(s, 'health_status', 'healthy') == 'warning')
-            unresponsive_count = sum(1 for s in sessions if getattr(s, 'health_status', 'healthy') == 'unresponsive')
-            choices_count = sum(1 for s in sessions if s.active)
-
-            # Notification info
-            notif_channels = 0
-            notif_enabled = False
-            try:
-                notif_channels = self._notifier.channel_count
-                notif_enabled = self._notifier.enabled
-            except Exception:
-                pass
-
-            # Build status text
+            # Build compact status text for tab bar RHS
             s = self._cs
 
             def _dot(ok: bool) -> str:
@@ -449,32 +434,15 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 return f"[{color}]o[/{color}]"
 
             parts = [
-                f"{_dot(proxy_ok)} proxy",
-                f"{_dot(backend_ok)} backend",
-                f"{_dot(api_ok)} api",
+                f"{_dot(proxy_ok)}mcp",
+                f"{_dot(backend_ok)}tui",
+                f"{_dot(api_ok)}api",
             ]
 
-            # Session info
-            session_parts = [f"{session_count} session{'s' if session_count != 1 else ''}"]
-            if choices_count > 0:
-                session_parts.append(f"[{s['success']}]{choices_count} waiting[/{s['success']}]")
-            if warning_count > 0:
-                session_parts.append(f"[{s['warning']}]{warning_count} warn[/{s['warning']}]")
-            if unresponsive_count > 0:
-                session_parts.append(f"[{s['error']}]{unresponsive_count} dead[/{s['error']}]")
-
-            parts.append("[dim]|[/dim] [dim]" + " ".join(session_parts) + "[/dim]")
-
-            # Notification channels
-            if notif_enabled and notif_channels > 0:
-                parts.append(f"[dim]|[/dim] [{s['purple']}]{notif_channels} notif[/{s['purple']}]")
-
-            status_text = "  ".join(parts)
+            self._daemon_status_text = " ".join(parts)
 
             try:
-                self.call_from_thread(
-                    lambda: self.query_one("#daemon-status", Static).update(status_text)
-                )
+                self.call_from_thread(self._update_tab_bar)
             except Exception:
                 pass
 
@@ -892,48 +860,65 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         Always visible — shows 'io-mcp' branding when no sessions,
         agent name for single sessions, and full tab bar for multiple.
+        Right side shows daemon status indicators (mcp/tui/api) and
+        inbox queue count.
         """
         tab_bar = self.query_one("#tab-bar", Static)
         s = get_scheme(getattr(self, '_color_scheme', DEFAULT_SCHEME))
 
-        if self.manager.count() <= 0:
-            # No agents — show branding
-            tab_bar.update(f"[bold {s['accent']}]io-mcp[/bold {s['accent']}]  [dim]waiting for agent...[/dim]")
-            tab_bar.display = True
-            return
+        # Build right-hand side status
+        rhs_parts = []
+        # Inbox queue count across all sessions
+        total_inbox = sum(
+            sess.inbox_choices_count()
+            for sess in self.manager.all_sessions()
+        )
+        if total_inbox > 0:
+            rhs_parts.append(f"[{s['accent']}]inbox:{total_inbox}[/{s['accent']}]")
+        # Daemon health dots
+        daemon_status = getattr(self, '_daemon_status_text', '')
+        if daemon_status:
+            rhs_parts.append(daemon_status)
+        rhs = f"  [{s['fg_dim']}]|[/{s['fg_dim']}]  " + " ".join(rhs_parts) if rhs_parts else ""
 
-        if self.manager.count() == 1:
-            # Single agent — show descriptive name prominently
+        # Build left-hand side (tabs/branding)
+        if self.manager.count() <= 0:
+            lhs = f"[bold {s['accent']}]io-mcp[/bold {s['accent']}]  [dim]waiting for agent...[/dim]"
+        elif self.manager.count() == 1:
             session = self._focused()
             if session:
                 name = session.name
-                # Health indicator for single agent
                 health = getattr(session, 'health_status', 'healthy')
                 health_icon = ""
                 if session.active:
-                    health_icon = f" [{s['success']}]o[/{s['success']}]"
+                    inbox_count = session.inbox_choices_count()
+                    if inbox_count > 1:
+                        health_icon = f" [{s['success']}]o+{inbox_count - 1}[/{s['success']}]"
+                    else:
+                        health_icon = f" [{s['success']}]o[/{s['success']}]"
                 elif health == "warning":
                     health_icon = f" [{s['warning']}]![/{s['warning']}]"
                 elif health == "unresponsive":
                     health_icon = f" [{s['error']}]x[/{s['error']}]"
-
-                tab_bar.update(
-                    f"[bold {s['accent']}]{name}[/bold {s['accent']}]{health_icon}"
-                    f"  [{s['fg_dim']}]|[/{s['fg_dim']}]  "
-                    f"[dim]io-mcp[/dim]"
-                )
+                lhs = f"[bold {s['accent']}]{name}[/bold {s['accent']}]{health_icon}"
             else:
-                tab_bar.update(f"[bold {s['accent']}]io-mcp[/bold {s['accent']}]")
+                lhs = f"[bold {s['accent']}]io-mcp[/bold {s['accent']}]"
         else:
-            # Multiple agents — full tab bar
-            tab_bar.update(self.manager.tab_bar_text(
+            lhs = self.manager.tab_bar_text(
                 accent=s['accent'],
                 success=s['success'],
                 warning=s['warning'],
                 error=s['error'],
-            ))
+            )
 
+        tab_bar.update(f"{lhs}{rhs}")
         tab_bar.display = True
+
+        # Hide the separate daemon-status widget (now merged into tab bar)
+        try:
+            self.query_one("#daemon-status", Static).display = False
+        except Exception:
+            pass
 
     # ─── Speech log rendering ──────────────────────────────────────
 
