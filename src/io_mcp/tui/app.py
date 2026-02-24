@@ -24,7 +24,7 @@ from textual.timer import Timer
 from textual.widget import Widget
 from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, RichLog, Static, TextArea
 
-from ..session import Session, SessionManager, SpeechEntry, HistoryEntry
+from ..session import Session, SessionManager, SpeechEntry, HistoryEntry, InboxItem
 from ..settings import Settings
 from ..tts import PORTAUDIO_LIB, TTSEngine, _find_binary
 from .. import api as frontend_api
