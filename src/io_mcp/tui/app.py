@@ -1139,13 +1139,28 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         session._active_inbox_item = item  # Track for _do_select resolution
         self._last_spoken_text = ""  # Reset dedup for new choices
 
+        # Force-exit settings/menus if this is the focused session —
+        # incoming choices take priority over settings
+        is_fg = self._is_focused(session.session_id)
+        if is_fg and self._in_settings:
+            self._in_settings = False
+            self._setting_edit_mode = False
+            self._spawn_options = None
+            self._quick_action_options = None
+            self._dashboard_mode = False
+            self._dashboard_action_mode = False
+            self._dashboard_action_target = None
+            self._log_viewer_mode = False
+            self._help_mode = False
+            self._history_mode = False
+            self._tab_picker_mode = False
+            self._quick_settings_mode = False
+
         # Emit event for remote frontends
         try:
             frontend_api.emit_choices_presented(session.session_id, preamble, choices)
         except Exception:
             pass
-
-        is_fg = self._is_focused(session.session_id)
 
         # ── Conversation mode: speak preamble then auto-record ──
         if self._conversation_mode and is_fg:
@@ -1210,8 +1225,6 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         titles_readout = " ".join(numbered_labels)
         full_intro = f"{preamble} Your options are: {titles_readout}"
-
-        is_fg = self._is_focused(session.session_id)
 
         # Show UI immediately if this is the focused session
         if is_fg:
