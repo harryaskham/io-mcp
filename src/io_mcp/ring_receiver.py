@@ -43,6 +43,17 @@ KEYCODE_MAP = {
     66: "enter",   # ENTER
     62: "space",   # SPACE
     67: "u",       # DEL → undo
+    # Letter keycodes (when ring is configured to send j/k etc.)
+    36: "j",       # KEYCODE_J
+    39: "k",       # KEYCODE_K
+    34: "h",       # KEYCODE_H
+    40: "l",       # KEYCODE_L
+    46: "s",       # KEYCODE_S
+    32: "d",       # KEYCODE_D
+    42: "n",       # KEYCODE_N
+    41: "m",       # KEYCODE_M
+    37: "i",       # KEYCODE_I
+    49: "u",       # KEYCODE_U
 }
 
 # Valid text key names that can be forwarded directly
