@@ -526,7 +526,8 @@ class TTSEngine:
 
     def speak_with_local_fallback(self, text: str,
                                    voice_override: Optional[str] = None,
-                                   emotion_override: Optional[str] = None) -> None:
+                                   emotion_override: Optional[str] = None,
+                                   nonblocking: bool = False) -> None:
         """Speak text instantly: use cache if available, else local fallback.
 
         For scroll-through option readout where latency matters more than
@@ -534,6 +535,12 @@ class TTSEngine:
         If not, uses the configured local backend (termux-tts-speak or espeak)
         immediately and kicks off background generation so the next visit
         to this option will use the full API TTS.
+
+        Args:
+            nonblocking: If True, avoid termux-tts-speak (which blocks until
+                speech finishes) and use espeak file-based TTS instead.
+                Use this for freeform text readback where rapid-fire calls
+                would otherwise hang the TUI.
         """
         if self._muted:
             return
@@ -548,8 +555,19 @@ class TTSEngine:
             self._start_playback(path)
             return
 
+        # Determine effective backend — skip termux when nonblocking requested
+        effective_backend = self._local_backend
+        if nonblocking and effective_backend == "termux":
+            # termux-tts-speak blocks until speech finishes which hangs the
+            # TUI during rapid freeform text readback.  Fall through to
+            # espeak (file-based, non-blocking) if available, else "none".
+            if self._espeak and self._paplay:
+                effective_backend = "espeak"
+            else:
+                effective_backend = "none"
+
         # Cache miss — use configured local backend for instant readout
-        if self._local_backend == "termux" and self._termux_exec:
+        if effective_backend == "termux" and self._termux_exec:
             # termux-tts-speak: direct Android TTS, no PulseAudio needed
             def _termux_play():
                 self._speak_termux(text)
@@ -561,7 +579,7 @@ class TTSEngine:
                     self._generate_to_file(text, voice_override, emotion_override)
                 threading.Thread(target=_gen, daemon=True).start()
 
-        elif self._local_backend == "espeak" and self._espeak and self._paplay:
+        elif effective_backend == "espeak" and self._espeak and self._paplay:
             # espeak-ng: generate WAV and play via paplay
             def _espeak_play():
                 try:
