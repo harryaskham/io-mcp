@@ -74,6 +74,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         Binding("x", "multi_select_toggle", "Multi", show=False),
         Binding("c", "toggle_conversation", "Chat", show=False),
         Binding("d", "dashboard", "Dashboard", show=False),
+        Binding("a", "unified_inbox", "Inbox", show=False),
         Binding("v", "pane_view", "Pane", show=False),
         Binding("g", "agent_log", "Log", show=False),
         Binding("question_mark", "show_help", "Help", show=False),
@@ -122,6 +123,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         multi_select_key = kb.get("multiSelect", "x")
         convo_key = kb.get("conversationMode", "c")
         dashboard_key = kb.get("dashboard", "d")
+        unified_inbox_key = kb.get("unifiedInbox", "a")
         pane_key = kb.get("paneView", "v")
         log_key = kb.get("agentLog", "g")
         help_key = kb.get("help", "question_mark")
@@ -150,6 +152,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             Binding(multi_select_key, "multi_select_toggle", "Multi", show=False),
             Binding(convo_key, "toggle_conversation", "Chat", show=False),
             Binding(dashboard_key, "dashboard", "Dashboard", show=False),
+            Binding(unified_inbox_key, "unified_inbox", "Inbox", show=False),
             Binding(pane_key, "pane_view", "Pane", show=False),
             Binding(log_key, "agent_log", "Log", show=False),
             Binding(help_key, "show_help", "Help", show=False),
@@ -244,6 +247,10 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         # Help screen mode
         self._help_mode = False
+
+        # Unified inbox mode (cross-session)
+        self._unified_inbox_mode = False
+        self._unified_inbox_items: list[dict] = []
 
         # Tab picker mode
         self._tab_picker_mode = False
@@ -389,7 +396,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         yield RichLog(id="pane-view", markup=False, highlight=False, auto_scroll=True, max_lines=200)
         yield SubmitTextArea(id="freeform-input", soft_wrap=True, show_line_numbers=False, tab_behavior="focus")
         yield Input(placeholder="Filter choices...", id="filter-input")
-        yield Static("[dim]↕[/dim] Scroll  [dim]⏎[/dim] Select  [dim]x[/dim] Multi  [dim]u[/dim] Undo  [dim]i[/dim] Type  [dim]m[/dim] Msg  [dim]M[/dim] VoiceMsg  [dim]␣[/dim] Voice  [dim]/[/dim] Filter  [dim]s[/dim] Settings  [dim]q[/dim] Back/Quit", id="footer-help")
+        yield Static("[dim]↕[/dim] Scroll  [dim]⏎[/dim] Select  [dim]x[/dim] Multi  [dim]u[/dim] Undo  [dim]i[/dim] Type  [dim]m[/dim] Msg  [dim]M[/dim] VoiceMsg  [dim]␣[/dim] Voice  [dim]/[/dim] Filter  [dim]a[/dim] Inbox  [dim]s[/dim] Settings  [dim]q[/dim] Back/Quit", id="footer-help")
 
     def on_mount(self) -> None:
         self.title = "io-mcp"
@@ -3134,6 +3141,16 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                         text = f"{entry.label}. {entry.summary}" if entry.summary else entry.label
                         self._tts.speak_async(text)
                 return
+            # Unified inbox: read the session name and preamble
+            if getattr(self, '_unified_inbox_mode', False):
+                if isinstance(event.item, ChoiceItem):
+                    idx = event.item.display_index
+                    ui_items = getattr(self, '_unified_inbox_items', [])
+                    if idx < len(ui_items):
+                        item = ui_items[idx]
+                        text = f"{item['session_name']}. {item['preamble']}"
+                        self._tts.speak_async(text)
+                return
             # Tab picker: switch to the highlighted tab live
             if getattr(self, '_tab_picker_mode', False):
                 if isinstance(event.item, ChoiceItem):
@@ -3256,6 +3273,10 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 if getattr(self, '_help_mode', False):
                     self._help_mode = False
                     self._exit_settings()
+                    return
+                # Check if we're in unified inbox mode (Enter selects)
+                if getattr(self, '_unified_inbox_mode', False):
+                    self._handle_unified_inbox_select(idx)
                     return
                 # Check if we're in history mode (Enter closes it)
                 if getattr(self, '_history_mode', False):
@@ -3800,6 +3821,13 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             self._handle_dashboard_action(n - 1)
             return
 
+        # Unified inbox — select item by number
+        if getattr(self, '_unified_inbox_mode', False):
+            ui_items = getattr(self, '_unified_inbox_items', [])
+            if 1 <= n <= len(ui_items):
+                self._handle_unified_inbox_select(n - 1)
+            return
+
         # Dashboard — select session by number
         if getattr(self, '_dashboard_mode', False):
             sessions = self.manager.all_sessions()
@@ -4143,6 +4171,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             self.action_dashboard()
         elif label == "View logs":
             self.action_view_system_logs()
+        elif label == "Unified inbox":
+            self.action_unified_inbox()
         elif label == "Close tab":
             session = self._focused()
             if session:
