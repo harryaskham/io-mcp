@@ -595,8 +595,30 @@ class TestCLIArgs:
         args = c.tts_cli_args("hello", voice_override="en-US-Teo:MAI-Voice-1",
                               emotion_override="calm")
         assert "en-US-Teo:MAI-Voice-1" in args
-        # Should have instructions from the calm preset
+        # Azure speech: should pass the SSML style name, not the text description
         instructions_idx = args.index("--instructions")
+        assert args[instructions_idx + 1] == "calm"
+
+    def test_tts_args_azure_passes_style_name(self, config_with_defaults, monkeypatch):
+        """Azure speech provider should pass emotion preset name as SSML style."""
+        monkeypatch.setenv("AZURE_SPEECH_API_KEY", "test-key")
+        c = IoMcpConfig.load(config_with_defaults.config_path)
+        # Default emotion is "shy" (azure-speech provider via mai-voice-1)
+        args = c.tts_cli_args("hello world")
+        instructions_idx = args.index("--instructions")
+        # Should be the style name "shy", not the long text description
+        assert args[instructions_idx + 1] == "shy"
+
+    def test_tts_args_openai_passes_text_instructions(self, tmp_config, monkeypatch):
+        """OpenAI provider should pass full emotion text as instructions."""
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        custom = {"config": {"tts": {"model": "gpt-4o-mini-tts", "voice": "sage", "emotion": "calm"}}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        args = c.tts_cli_args("hello world")
+        instructions_idx = args.index("--instructions")
+        # OpenAI: should resolve preset name to full text description
         assert "soothing" in args[instructions_idx + 1].lower() or "relaxed" in args[instructions_idx + 1].lower()
 
     def test_stt_args_basic(self, config_with_defaults, monkeypatch):
