@@ -109,20 +109,20 @@ class DwellBar(Static):
 # ─── Submit-on-Enter TextArea ─────────────────────────────────────────────
 
 class SubmitTextArea(TextArea):
-    """TextArea that doesn't handle Enter — lets the app intercept it for submit.
+    """TextArea that submits on Enter instead of inserting a newline.
 
-    By default, TextArea inserts a newline on Enter. This subclass
-    removes that binding so Enter propagates up to the App's on_key
-    handler, which calls _submit_freeform().
+    Posts a SubmitTextArea.Submitted message that the app handles.
     """
 
-    BINDINGS = [
-        # Override TextArea's enter binding to do nothing at widget level.
-        # The app's on_key handler will intercept Enter for submission.
-    ]
+    class Submitted(TextArea.Changed):
+        """Posted when the user presses Enter."""
+        pass
 
     def _on_key(self, event) -> None:
-        """Let Enter pass through to the app instead of inserting a newline."""
+        """Intercept Enter to submit instead of inserting a newline."""
         if event.key == "enter":
-            return  # Don't process — let it bubble up to App.on_key
+            event.prevent_default()
+            event.stop()
+            self.post_message(self.Submitted(text_area=self))
+            return
         return super()._on_key(event)

@@ -3033,6 +3033,11 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 self._freeform_tts.speak_async(chunk)
             self._freeform_spoken_pos = len(text)
 
+    @on(SubmitTextArea.Submitted, "#freeform-input")
+    def on_freeform_submitted(self, event: SubmitTextArea.Submitted) -> None:
+        """Handle Enter in the freeform text area."""
+        self._submit_freeform()
+
     def _submit_freeform(self) -> None:
         """Submit the freeform text input (called on Enter key)."""
         session = self._focused()
@@ -3105,14 +3110,6 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         Also intercepts space in message mode to trigger voice recording.
         """
         session = self._focused()
-        # In freeform/message mode, Enter submits the text
-        if (session and (session.input_mode or self._message_mode)
-                and event.key == "enter"
-                and not session.voice_recording):
-            event.prevent_default()
-            event.stop()
-            self._submit_freeform()
-            return
         # In message mode, space triggers voice recording instead of typing
         if self._message_mode and event.key == "space" and not (session and session.voice_recording):
             event.prevent_default()
@@ -3848,21 +3845,23 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                     remote_cmd = (
                         f"cd {workdir_resolved} && "
                         f"IO_MCP_URL={io_mcp_url} "
-                        f"claude -a io-mcp --dangerously-skip-permissions"
+                        f'claude --agent io-mcp "connect to io-mcp and greet the user"'
                     )
                     cmd = [
-                        tmux, "new-window", "-n", session_name,
+                        tmux, "new-session", "-d", "-s", session_name,
                         f"ssh -t {host} '{remote_cmd}'"
                     ]
                 else:
-                    # Local spawn in tmux
+                    # Local spawn in new tmux session
                     workdir_resolved = workdir or (
                         self._config.agent_default_workdir if self._config else "~"
                     )
                     workdir_expanded = os.path.expanduser(workdir_resolved)
                     cmd = [
-                        tmux, "new-window", "-n", session_name,
-                        f"cd {workdir_expanded} && IO_MCP_URL={io_mcp_url} claude -a io-mcp --dangerously-skip-permissions"
+                        tmux, "new-session", "-d", "-s", session_name,
+                        "-c", workdir_expanded,
+                        "bash", "-c",
+                        f'IO_MCP_URL={io_mcp_url} claude --agent io-mcp "connect to io-mcp and greet the user"',
                     ]
 
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
