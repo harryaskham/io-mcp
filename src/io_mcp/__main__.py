@@ -419,12 +419,23 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
 
     import time as _time
 
-    # Build config-based extra options
+    # Build set of TUI extra labels for deduplication.
+    # Options matching TUI extras shouldn't be appended as numbered choices
+    # since the TUI already displays them in its collapsed extras section.
+    from .tui.widgets import PRIMARY_EXTRAS, SECONDARY_EXTRAS, MORE_OPTIONS_ITEM
+    _tui_extra_labels: set[str] = set()
+    for e in PRIMARY_EXTRAS + SECONDARY_EXTRAS + [MORE_OPTIONS_ITEM]:
+        _tui_extra_labels.add(e["label"].lower().rstrip(" ›"))
+
+    # Build config-based extra options, filtering out any that duplicate TUI extras
     _config_extras: list[dict] = []
     if frontend.config:
         for opt in frontend.config.extra_options:
+            label = opt.get("title", "")
+            if label.lower().rstrip(" ›") in _tui_extra_labels:
+                continue  # skip — already handled by TUI extras
             _config_extras.append({
-                "label": opt.get("title", ""),
+                "label": label,
                 "summary": opt.get("description", ""),
                 "_silent": opt.get("silent", False),
             })
@@ -500,6 +511,9 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
                 title, desc = opt.split("::", 1)
             else:
                 title, desc = opt, ""
+            # Skip options that duplicate TUI extras (e.g. "More options")
+            if title.lower().rstrip(" ›") in _tui_extra_labels:
+                continue
             if not any(c.get("label", "").lower() == title.lower() for c in all_choices):
                 all_choices.append({"label": title, "summary": desc})
         for opt in append_silent_options:
@@ -507,6 +521,9 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
                 title, desc = opt.split("::", 1)
             else:
                 title, desc = opt, ""
+            # Skip options that duplicate TUI extras
+            if title.lower().rstrip(" ›") in _tui_extra_labels:
+                continue
             if not any(c.get("label", "").lower() == title.lower() for c in all_choices):
                 all_choices.append({"label": title, "summary": desc, "_silent": True})
         for opt in _config_extras:
@@ -1160,8 +1177,9 @@ def main() -> None:
     parser.add_argument("--djent", action="store_true")
     args = parser.parse_args()
 
-    if not args.append_option:
-        args.append_option = ["More options"]
+    # No default append options — "More options" is handled by the TUI's
+    # collapsed extras toggle and shouldn't appear as a numbered choice.
+    # (Previously defaulted to ["More options"] which duplicated the TUI toggle.)
 
     if args.default_config:
         # Use built-in defaults only — don't read or write user config
