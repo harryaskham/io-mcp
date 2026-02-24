@@ -238,6 +238,23 @@ def _deep_merge(base: dict, override: dict) -> dict:
     return result
 
 
+def _find_new_keys(defaults: dict, user: dict, prefix: str = "") -> list[str]:
+    """Find keys present in defaults but missing from user config.
+
+    Returns a list of dotted key paths (e.g. "config.tts.localBackend")
+    for keys that were added from defaults because the user's config
+    didn't have them.
+    """
+    new_keys: list[str] = []
+    for key, default_value in defaults.items():
+        path = f"{prefix}.{key}" if prefix else key
+        if key not in user:
+            new_keys.append(path)
+        elif isinstance(default_value, dict) and isinstance(user.get(key), dict):
+            new_keys.extend(_find_new_keys(default_value, user[key], path))
+    return new_keys
+
+
 @dataclass
 class IoMcpConfig:
     """Parsed and expanded io-mcp configuration."""
@@ -264,11 +281,14 @@ class IoMcpConfig:
         path = config_path or DEFAULT_CONFIG_FILE
         raw = copy.deepcopy(DEFAULT_CONFIG)
 
+        new_keys: list[str] = []
         if os.path.isfile(path):
             try:
                 with open(path, "r") as f:
                     user_config = yaml.safe_load(f)
                 if user_config and isinstance(user_config, dict):
+                    # Detect keys added from defaults before merging
+                    new_keys = _find_new_keys(raw, user_config)
                     raw = _deep_merge(raw, user_config)
             except Exception as e:
                 print(f"WARNING: Failed to load config from {path}: {e}", flush=True)
@@ -298,8 +318,19 @@ class IoMcpConfig:
         cfg = cls(raw=raw, expanded=expanded, config_path=path)
         cfg._validate()
 
+        # Log any new default keys that were added to the user's config
+        # Filter out provider/model keys — only report config-level keys
+        # that affect behavior and the user might want to customize.
+        config_new_keys = [k for k in new_keys if not k.startswith(("providers.", "models."))]
+        if config_new_keys:
+            print(f"  Config: added {len(config_new_keys)} new default key(s) to {path}:", flush=True)
+            for key in config_new_keys:
+                print(f"    + {key}", flush=True)
+
         # Always write back the full config (defaults + user overrides)
-        # so the user can see all available options in config.yml
+        # so the user can see all available options in config.yml.
+        # This is the auto-migration mechanism: new keys from DEFAULT_CONFIG
+        # are merged into the user's file on every load/reload.
         try:
             cfg.save()
         except Exception:

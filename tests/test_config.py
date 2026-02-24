@@ -12,7 +12,7 @@ import tempfile
 import pytest
 import yaml
 
-from io_mcp.config import IoMcpConfig, _expand_env, _deep_merge, DEFAULT_CONFIG
+from io_mcp.config import IoMcpConfig, _expand_env, _deep_merge, _find_new_keys, DEFAULT_CONFIG
 
 
 # ---------------------------------------------------------------------------
@@ -98,6 +98,47 @@ class TestDeepMerge:
 
 
 # ---------------------------------------------------------------------------
+# Finding new keys (config migration)
+# ---------------------------------------------------------------------------
+
+class TestFindNewKeys:
+    def test_empty_user_config(self):
+        defaults = {"a": 1, "b": 2}
+        user = {}
+        assert set(_find_new_keys(defaults, user)) == {"a", "b"}
+
+    def test_no_new_keys(self):
+        defaults = {"a": 1, "b": 2}
+        user = {"a": 10, "b": 20}
+        assert _find_new_keys(defaults, user) == []
+
+    def test_one_new_key(self):
+        defaults = {"a": 1, "b": 2, "c": 3}
+        user = {"a": 10, "b": 20}
+        assert _find_new_keys(defaults, user) == ["c"]
+
+    def test_nested_new_key(self):
+        defaults = {"x": {"a": 1, "b": 2}}
+        user = {"x": {"a": 10}}
+        assert _find_new_keys(defaults, user) == ["x.b"]
+
+    def test_deeply_nested_new_key(self):
+        defaults = {"config": {"tts": {"localBackend": "termux", "speed": 1.0}}}
+        user = {"config": {"tts": {"speed": 1.5}}}
+        assert _find_new_keys(defaults, user) == ["config.tts.localBackend"]
+
+    def test_new_entire_section(self):
+        defaults = {"config": {"tts": {"speed": 1.0}, "ambient": {"enabled": False}}}
+        user = {"config": {"tts": {"speed": 1.5}}}
+        assert _find_new_keys(defaults, user) == ["config.ambient"]
+
+    def test_user_extra_keys_ignored(self):
+        defaults = {"a": 1}
+        user = {"a": 10, "extra": "stuff"}
+        assert _find_new_keys(defaults, user) == []
+
+
+# ---------------------------------------------------------------------------
 # Config loading
 # ---------------------------------------------------------------------------
 
@@ -157,6 +198,40 @@ class TestConfigLoading:
         # Reload
         config2 = IoMcpConfig.load(tmp_config)
         assert config2.tts_speed == 2.5
+
+    def test_new_defaults_written_to_disk(self, tmp_config):
+        """When new default keys are added, they appear in config.yml on load."""
+        # Write a partial config missing a key that exists in defaults
+        partial = {"config": {"tts": {"speed": 1.5}}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(partial, f)
+
+        # Load — should auto-merge defaults and write back
+        config = IoMcpConfig.load(tmp_config)
+        assert config.tts_speed == 1.5  # user value preserved
+
+        # Read the file back — it should now contain default keys
+        with open(tmp_config, "r") as f:
+            on_disk = yaml.safe_load(f)
+
+        # The localBackend key from defaults should now be on disk
+        assert "localBackend" in on_disk.get("config", {}).get("tts", {})
+        # Ambient section from defaults should now be on disk
+        assert "ambient" in on_disk.get("config", {})
+        # Providers from defaults should be on disk
+        assert "openai" in on_disk.get("providers", {})
+
+    def test_new_defaults_logged(self, tmp_config, capsys):
+        """Loading a partial config logs which new keys were added."""
+        # Write a config missing the ambient section
+        partial = {"config": {"tts": {"speed": 1.5}}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(partial, f)
+
+        IoMcpConfig.load(tmp_config)
+        captured = capsys.readouterr()
+        # Should mention new default keys were added
+        assert "new default key" in captured.out
 
 
 # ---------------------------------------------------------------------------
