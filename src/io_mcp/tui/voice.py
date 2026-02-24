@@ -14,6 +14,8 @@ from typing import Optional, TYPE_CHECKING
 
 from textual.widgets import Input, Label, ListView
 
+from ..tts import _find_binary
+
 from .widgets import SubmitTextArea, _safe_action
 
 if TYPE_CHECKING:
