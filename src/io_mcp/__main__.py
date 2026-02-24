@@ -1109,13 +1109,24 @@ def main() -> None:
     parser.add_argument("--freeform-tts-delimiters", default=" .,;:!?")
     parser.add_argument("--invert", action="store_true")
     parser.add_argument("--config-file", default=None, metavar="PATH")
+    parser.add_argument("--default-config", action="store_true",
+                        help="Ignore user config, use built-in defaults (does not overwrite config file)")
     parser.add_argument("--djent", action="store_true")
     args = parser.parse_args()
 
     if not args.append_option:
         args.append_option = ["More options"]
 
-    config = IoMcpConfig.load(args.config_file)
+    if args.default_config:
+        # Use built-in defaults only — don't read or write user config
+        import copy
+        from .config import DEFAULT_CONFIG, _expand_config
+        raw = copy.deepcopy(DEFAULT_CONFIG)
+        expanded = _expand_config(raw)
+        config = IoMcpConfig(raw=raw, expanded=expanded, config_path="/dev/null")
+        print("  Config: using built-in defaults (--default-config)", flush=True)
+    else:
+        config = IoMcpConfig.load(args.config_file)
     if args.djent:
         config.djent_enabled = True
 

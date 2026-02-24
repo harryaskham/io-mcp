@@ -977,7 +977,9 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             return
 
         # Update agent activity line (most recent speech, truncated)
-        if activity and session.speech_log:
+        # Only show if ambient mode is enabled
+        ambient_on = self._config.ambient_enabled if self._config else False
+        if activity and session.speech_log and ambient_on:
             last = session.speech_log[-1].text
             activity.update(f"[bold {self._cs['blue']}]>[/bold {self._cs['blue']}] {last}")
             activity.display = True

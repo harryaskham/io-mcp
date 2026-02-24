@@ -59,6 +59,8 @@ class InboxItem:
     event: threading.Event = field(default_factory=threading.Event)
     timestamp: float = field(default_factory=time.time)
     done: bool = False
+    # Thread tracking — used to detect orphaned items when the HTTP thread dies
+    owner_thread: Optional[threading.Thread] = field(default_factory=lambda: threading.current_thread())
 
 
 @dataclass
@@ -140,10 +142,23 @@ class Session:
         self.inbox.append(item)
 
     def peek_inbox(self) -> Optional[InboxItem]:
-        """Get the next unresolved inbox item without removing it."""
+        """Get the next unresolved inbox item without removing it.
+
+        Auto-cleans orphaned items whose owner thread has died (e.g. when
+        the HTTP connection was dropped). These are moved to inbox_done
+        so the next live item can proceed.
+        """
         while self.inbox:
             front = self.inbox[0]
             if front.done:
+                self.inbox_done.append(self.inbox.popleft())
+                continue
+            # Check if the owner thread died (orphaned item)
+            owner = getattr(front, 'owner_thread', None)
+            if owner is not None and not owner.is_alive() and not front.done:
+                front.done = True
+                front.result = {"selected": "_restart", "summary": "Owner thread died"}
+                front.event.set()
                 self.inbox_done.append(self.inbox.popleft())
                 continue
             return front
