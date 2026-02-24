@@ -271,6 +271,171 @@ class ViewsMixin:
             self._exit_settings()
 
     @_safe_action
+    def action_unified_inbox(self: "IoMcpApp") -> None:
+        """Show a cross-session inbox with all pending choices across all agents.
+
+        Displays a scrollable list of all pending choice sets from every
+        agent tab. The user can select one to immediately switch to that
+        session and respond to those choices.
+        Press a or Escape to return.
+        """
+        # Toggle off if already in unified inbox
+        if getattr(self, '_unified_inbox_mode', False):
+            self._unified_inbox_mode = False
+            self._exit_settings()
+            return
+
+        session = self._focused()
+        if session and (session.input_mode or session.voice_recording):
+            return
+        if self._in_settings or self._filter_mode:
+            return
+
+        self._tts.stop()
+        sessions = self.manager.all_sessions()
+
+        # Collect all pending choices across all sessions
+        unified_items: list[dict] = []
+        for sess in sessions:
+            # Active front item
+            if sess.active and sess.choices:
+                unified_items.append({
+                    "session_id": sess.session_id,
+                    "session_name": sess.name,
+                    "preamble": sess.preamble,
+                    "choices": sess.choices,
+                    "n_choices": len(sess.choices),
+                    "is_front": True,
+                    "inbox_item": None,
+                })
+            # Queued inbox items (pending, not the front)
+            for item in sess.inbox:
+                if not item.done and item.kind == "choices":
+                    # Skip the front item (already active)
+                    if sess.active and item is getattr(sess, '_active_inbox_item', None):
+                        continue
+                    unified_items.append({
+                        "session_id": sess.session_id,
+                        "session_name": sess.name,
+                        "preamble": item.preamble,
+                        "choices": item.choices,
+                        "n_choices": len(item.choices),
+                        "is_front": False,
+                        "inbox_item": item,
+                    })
+
+        if not unified_items:
+            self._speak_ui("No pending choices across any agent")
+            return
+
+        # Enter unified inbox mode
+        self._in_settings = True
+        self._setting_edit_mode = False
+        self._spawn_options = None
+        self._quick_action_options = None
+        self._dashboard_mode = False
+        self._log_viewer_mode = False
+        self._help_mode = False
+        self._unified_inbox_mode = True
+        self._unified_inbox_items = unified_items
+
+        s = getattr(self, '_cs', get_scheme(DEFAULT_SCHEME))
+
+        preamble_widget = self.query_one("#preamble", Label)
+        n = len(unified_items)
+        n_agents = len(set(item["session_name"] for item in unified_items))
+        preamble_widget.update(
+            f"[bold {s['accent']}]Inbox[/bold {s['accent']}] — "
+            f"{n} pending across {n_agents} agent{'s' if n_agents != 1 else ''}  "
+            f"[dim](a/esc to close)[/dim]"
+        )
+        preamble_widget.display = True
+
+        # Ensure main content is visible, hide per-session inbox pane
+        self._ensure_main_content_visible(show_inbox=False)
+
+        list_view = self.query_one("#choices", ListView)
+        list_view.clear()
+
+        narration_parts = [f"{n} pending choice{'s' if n != 1 else ''} across {n_agents} agent{'s' if n_agents != 1 else ''}."]
+
+        for i, ui_item in enumerate(unified_items):
+            agent_name = ui_item["session_name"]
+            preamble = ui_item["preamble"]
+            n_choices = ui_item["n_choices"]
+
+            # Truncate preamble for display
+            preamble_display = preamble[:60] if preamble else "(no preamble)"
+            if len(preamble) > 60:
+                preamble_display += "…"
+
+            # Front (active) items get a filled indicator, queued get hollow
+            if ui_item["is_front"]:
+                indicator = f"[bold {s['success']}]●[/bold {s['success']}]"
+            else:
+                indicator = f"[{s['fg_dim']}]○[/{s['fg_dim']}]"
+
+            label = (
+                f"{indicator} [{s['accent']}]{agent_name}[/{s['accent']}]  "
+                f"{preamble_display}  "
+                f"[{s['fg_dim']}]({n_choices} option{'s' if n_choices != 1 else ''})[/{s['fg_dim']}]"
+            )
+            summary = ", ".join(c.get("label", "") for c in ui_item["choices"][:4])
+            if n_choices > 4:
+                summary += f" (+{n_choices - 4} more)"
+
+            list_view.append(ChoiceItem(label, summary, index=i + 1, display_index=i))
+
+        list_view.display = True
+        list_view.index = 0
+        list_view.focus()
+
+        self._speak_ui(" ".join(narration_parts))
+
+    def _handle_unified_inbox_select(self: "IoMcpApp", idx: int) -> None:
+        """Handle selection from the unified inbox view.
+
+        Switches to the selected session and activates its choices so
+        the user can respond directly.
+        """
+        items = getattr(self, '_unified_inbox_items', [])
+        if idx >= len(items):
+            self._exit_settings()
+            return
+
+        ui_item = items[idx]
+        target_session_id = ui_item["session_id"]
+        target = self.manager.get(target_session_id)
+
+        if not target:
+            self._speak_ui("Session no longer exists")
+            # Refresh the unified inbox
+            self.action_unified_inbox()
+            return
+
+        # Exit unified inbox mode
+        self._unified_inbox_mode = False
+        self._unified_inbox_items = []
+        self._in_settings = False
+
+        # If this is a queued inbox item (not the front/active one),
+        # activate it before switching
+        inbox_item = ui_item.get("inbox_item")
+        if inbox_item and not inbox_item.done:
+            from .widgets import EXTRA_OPTIONS
+            target.preamble = inbox_item.preamble
+            target.choices = list(inbox_item.choices)
+            target.selection = None
+            target.selection_event.clear()
+            target.active = True
+            target._active_inbox_item = inbox_item
+            target.extras_count = len(EXTRA_OPTIONS)
+            target.all_items = list(EXTRA_OPTIONS) + target.choices
+
+        # Switch to the session
+        self._switch_to_session(target)
+
+    @_safe_action
     def action_agent_log(self: "IoMcpApp") -> None:
         """Show a unified timeline of agent activity.
 
@@ -491,6 +656,7 @@ class ViewsMixin:
             (kb.get("multiSelect", "x"), "Enter/confirm multi-select mode"),
             (kb.get("conversationMode", "c"), "Toggle continuous voice conversation mode"),
             (kb.get("dashboard", "d"), "Show dashboard overview of all agents"),
+            (kb.get("unifiedInbox", "a"), "Unified inbox — all pending choices across agents"),
             (kb.get("paneView", "v"), "Show live tmux pane output"),
             (kb.get("agentLog", "g"), "Show timeline / agent log"),
             (kb.get("undoSelection", "u"), "Undo last selection"),

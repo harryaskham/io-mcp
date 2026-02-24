@@ -916,3 +916,165 @@ class TestDedupAndEnqueue:
         assert ("also_old", ("Y",)) not in s._inbox_dedup_log
         # New entry should exist
         assert ("New", ("Z",)) in s._inbox_dedup_log
+class TestUnifiedInboxDataCollection:
+    """Tests for cross-session inbox data collection logic.
+
+    These test the underlying session/inbox data model that the unified inbox
+    view relies on, without needing the TUI.
+    """
+
+    def test_collect_pending_choices_across_sessions(self):
+        """Can collect all pending choices from multiple sessions."""
+        m = SessionManager()
+        s1, _ = m.get_or_create("a")
+        s2, _ = m.get_or_create("b")
+        s3, _ = m.get_or_create("c")
+
+        s1.name = "Agent 1"
+        s2.name = "Agent 2"
+        s3.name = "Agent 3"
+
+        # s1 has active choices
+        s1.active = True
+        s1.preamble = "Choose action"
+        s1.choices = [{"label": "Fix bug"}, {"label": "Add feature"}]
+
+        # s2 has queued inbox items
+        item1 = InboxItem(kind="choices", preamble="Pick a file",
+                          choices=[{"label": "main.py"}, {"label": "test.py"}])
+        item2 = InboxItem(kind="choices", preamble="Select mode",
+                          choices=[{"label": "Debug"}, {"label": "Release"}])
+        s2.enqueue(item1)
+        s2.enqueue(item2)
+
+        # s3 has no pending choices
+        s3.active = False
+
+        # Collect all pending choices (mimics action_unified_inbox logic)
+        unified = []
+        for sess in m.all_sessions():
+            if sess.active and sess.choices:
+                unified.append({
+                    "session_name": sess.name,
+                    "preamble": sess.preamble,
+                    "n_choices": len(sess.choices),
+                })
+            for item in sess.inbox:
+                if not item.done and item.kind == "choices":
+                    unified.append({
+                        "session_name": sess.name,
+                        "preamble": item.preamble,
+                        "n_choices": len(item.choices),
+                    })
+
+        assert len(unified) == 3
+        assert unified[0]["session_name"] == "Agent 1"
+        assert unified[0]["preamble"] == "Choose action"
+        assert unified[1]["session_name"] == "Agent 2"
+        assert unified[1]["preamble"] == "Pick a file"
+        assert unified[2]["session_name"] == "Agent 2"
+        assert unified[2]["preamble"] == "Select mode"
+
+    def test_collect_no_pending_choices(self):
+        """Returns empty list when no sessions have pending choices."""
+        m = SessionManager()
+        s1, _ = m.get_or_create("a")
+        s1.active = False
+
+        unified = []
+        for sess in m.all_sessions():
+            if sess.active and sess.choices:
+                unified.append({"session_name": sess.name})
+            for item in sess.inbox:
+                if not item.done and item.kind == "choices":
+                    unified.append({"session_name": sess.name})
+
+        assert unified == []
+
+    def test_collect_excludes_done_items(self):
+        """Done inbox items are not included in unified collection."""
+        m = SessionManager()
+        s, _ = m.get_or_create("a")
+        s.name = "Agent 1"
+
+        item1 = InboxItem(kind="choices", preamble="Done item")
+        item2 = InboxItem(kind="choices", preamble="Pending item")
+        s.enqueue(item1)
+        s.enqueue(item2)
+
+        # Resolve the first item
+        s.resolve_front({"selected": "Done"})
+
+        unified = []
+        for sess in m.all_sessions():
+            for item in sess.inbox:
+                if not item.done and item.kind == "choices":
+                    unified.append({"preamble": item.preamble})
+
+        assert len(unified) == 1
+        assert unified[0]["preamble"] == "Pending item"
+
+    def test_collect_excludes_speech_items(self):
+        """Speech inbox items are not included in unified collection."""
+        m = SessionManager()
+        s, _ = m.get_or_create("a")
+
+        s.enqueue(InboxItem(kind="speech", text="Hello"))
+        s.enqueue(InboxItem(kind="choices", preamble="Pick one",
+                            choices=[{"label": "A"}]))
+
+        unified = []
+        for sess in m.all_sessions():
+            for item in sess.inbox:
+                if not item.done and item.kind == "choices":
+                    unified.append({"preamble": item.preamble})
+
+        assert len(unified) == 1
+        assert unified[0]["preamble"] == "Pick one"
+
+    def test_session_switch_after_unified_select(self):
+        """After selecting from unified inbox, the session manager can focus it."""
+        m = SessionManager()
+        s1, _ = m.get_or_create("a")
+        s2, _ = m.get_or_create("b")
+
+        s1.name = "Agent 1"
+        s2.name = "Agent 2"
+        s2.active = True
+        s2.preamble = "Pick"
+        s2.choices = [{"label": "X"}]
+
+        # Simulate selecting s2's choices from unified inbox
+        target = m.focus("b")
+        assert target is s2
+        assert m.focused() is s2
+
+    def test_multiple_agents_unique_session_count(self):
+        """Can count unique agents with pending choices."""
+        m = SessionManager()
+        s1, _ = m.get_or_create("a")
+        s2, _ = m.get_or_create("b")
+
+        s1.name = "Agent 1"
+        s2.name = "Agent 2"
+
+        s1.active = True
+        s1.choices = [{"label": "A"}]
+        s1.preamble = "First"
+
+        s2.enqueue(InboxItem(kind="choices", preamble="Second",
+                             choices=[{"label": "B"}]))
+        s2.enqueue(InboxItem(kind="choices", preamble="Third",
+                             choices=[{"label": "C"}]))
+
+        unified = []
+        for sess in m.all_sessions():
+            if sess.active and sess.choices:
+                unified.append({"session_name": sess.name})
+            for item in sess.inbox:
+                if not item.done and item.kind == "choices":
+                    unified.append({"session_name": sess.name})
+
+        n_agents = len(set(item["session_name"] for item in unified))
+        assert n_agents == 2
+        assert len(unified) == 3

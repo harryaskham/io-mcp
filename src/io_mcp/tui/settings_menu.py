@@ -115,6 +115,7 @@ class SettingsMixin:
         self._log_viewer_mode = False
         self._system_logs_mode = False
         self._help_mode = False
+        self._unified_inbox_mode = False
         self._history_mode = False
         self._tab_picker_mode = False
         self._quick_settings_mode = False

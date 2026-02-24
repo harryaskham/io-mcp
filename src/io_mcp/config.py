@@ -183,6 +183,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "multiSelect": "x",
             "conversationMode": "c",
             "dashboard": "d",
+            "unifiedInbox": "a",
             "agentLog": "g",
             "hotReload": "r",
             "quit": "q",
