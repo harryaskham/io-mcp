@@ -244,11 +244,16 @@ class TTSEngine:
                     [self._paplay, path],
                     env=self._env,
                     stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
                     preexec_fn=os.setsid,
                 )
-            except Exception:
+            except Exception as e:
                 self._process = None
+                try:
+                    with open("/tmp/io-mcp-tui-error.log", "a") as f:
+                        f.write(f"\n--- paplay error ---\nFailed to start paplay: {e}\nPath: {path}\n")
+                except Exception:
+                    pass
 
     def _wait_for_playback(self) -> None:
         """Wait for current playback to finish."""
@@ -269,8 +274,16 @@ class TTSEngine:
                     emotion_override: Optional[str] = None) -> None:
         """Speak text without blocking. Used for scroll TTS."""
         def _do():
-            self.play_cached(text, block=False, voice_override=voice_override,
-                           emotion_override=emotion_override)
+            try:
+                self.play_cached(text, block=False, voice_override=voice_override,
+                               emotion_override=emotion_override)
+            except Exception as e:
+                try:
+                    with open("/tmp/io-mcp-tui-error.log", "a") as f:
+                        import traceback
+                        f.write(f"\n--- speak_async error ---\n{traceback.format_exc()}\n")
+                except Exception:
+                    pass
         threading.Thread(target=_do, daemon=True).start()
 
     def is_cached(self, text: str, voice_override: Optional[str] = None,
