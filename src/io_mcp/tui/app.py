@@ -1970,6 +1970,9 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         Uses a generation counter from the session to skip rebuilds when the
         inbox hasn't changed — avoids expensive widget teardown/recreation on
         the ~1-second _update_speech_log timer.
+
+        In multi-agent mode (>1 connected agent), each item shows the
+        agent/session name so the user knows which agent is asking.
         """
         try:
             session = self._focused()
@@ -2010,6 +2013,11 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             # Show the inbox pane
             inbox_list.display = True
 
+            # In multi-agent mode, show agent name on each inbox item
+            multi_agent = self.manager.count() > 1
+            agent_name = session.name if multi_agent else ""
+            accent_color = getattr(self, '_cs', {}).get('accent', '#88c0d0') if multi_agent else ""
+
             # Determine which item is currently active
             active_item = getattr(session, '_active_inbox_item', None)
 
@@ -2023,6 +2031,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                     is_active=is_active,
                     inbox_index=idx,
                     n_choices=len(item.choices),
+                    session_name=agent_name,
+                    accent_color=accent_color,
                 ))
                 idx += 1
 
@@ -2033,6 +2043,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                     is_active=False,
                     inbox_index=idx,
                     n_choices=len(item.choices),
+                    session_name=agent_name,
+                    accent_color=accent_color,
                 ))
                 idx += 1
 
@@ -3261,7 +3273,9 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             preamble = event.item.inbox_preamble[:80] if event.item.inbox_preamble else "no preamble"
             n = event.item.n_choices
             status = "done" if event.item.is_done else f"{n} option{'s' if n != 1 else ''}"
-            text = f"{preamble}. {status}"
+            # Include agent name in TTS when in multi-agent mode
+            agent_prefix = f"{event.item.session_name}. " if event.item.session_name else ""
+            text = f"{agent_prefix}{preamble}. {status}"
             # Deduplicate with cooldown — skip if same text was spoken very recently
             now = time.time()
             last_time = getattr(self, '_last_inbox_spoken_time', 0.0)

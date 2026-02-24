@@ -321,6 +321,83 @@ async def test_inbox_list_visible_with_multiple_items():
 
 
 @pytest.mark.asyncio
+async def test_inbox_items_show_agent_name_in_multi_agent_mode():
+    """Inbox items show agent name prefix when multiple agents are connected."""
+    from io_mcp.session import InboxItem
+
+    app = make_app()
+    async with app.run_test() as pilot:
+        # Create two agent sessions (multi-agent mode)
+        session1, _ = app.manager.get_or_create("test-1")
+        session1.registered = True
+        session1.name = "Code Review"
+        app.on_session_created(session1)
+
+        session2, _ = app.manager.get_or_create("test-2")
+        session2.registered = True
+        session2.name = "Build Agent"
+        app.on_session_created(session2)
+
+        # Set up session1 with inbox items
+        item1 = InboxItem(kind="choices", preamble="Pick a file", choices=[{"label": "A", "summary": ""}])
+        session1.enqueue(item1)
+        session1.preamble = item1.preamble
+        session1.choices = list(item1.choices)
+        session1.active = True
+        session1._active_inbox_item = item1
+        session1.extras_count = len(EXTRA_OPTIONS)
+        session1.all_items = list(EXTRA_OPTIONS) + session1.choices
+
+        app._show_choices()
+        await pilot.pause(0.1)
+
+        inbox_list = app.query_one("#inbox-list", ListView)
+        assert inbox_list.display is True
+
+        from io_mcp.tui.widgets import InboxListItem
+        inbox_items = [c for c in inbox_list.children if isinstance(c, InboxListItem)]
+        assert len(inbox_items) >= 1
+
+        # In multi-agent mode, items should carry the session name
+        assert inbox_items[0].session_name == "Code Review"
+        assert inbox_items[0].accent_color != ""
+
+
+@pytest.mark.asyncio
+async def test_inbox_items_no_agent_name_in_single_agent_mode():
+    """Inbox items do NOT show agent name when only one agent is connected."""
+    from io_mcp.session import InboxItem
+
+    app = make_app()
+    async with app.run_test() as pilot:
+        # Create only one agent session
+        session, _ = app.manager.get_or_create("test-1")
+        session.registered = True
+        session.name = "Solo Agent"
+        app.on_session_created(session)
+
+        item1 = InboxItem(kind="choices", preamble="Pick a file", choices=[{"label": "A", "summary": ""}])
+        session.enqueue(item1)
+        session.preamble = item1.preamble
+        session.choices = list(item1.choices)
+        session.active = True
+        session._active_inbox_item = item1
+        session.extras_count = len(EXTRA_OPTIONS)
+        session.all_items = list(EXTRA_OPTIONS) + session.choices
+
+        app._show_choices()
+        await pilot.pause(0.1)
+
+        inbox_list = app.query_one("#inbox-list", ListView)
+        from io_mcp.tui.widgets import InboxListItem
+        inbox_items = [c for c in inbox_list.children if isinstance(c, InboxListItem)]
+        assert len(inbox_items) >= 1
+
+        # In single-agent mode, items should NOT carry a session name
+        assert inbox_items[0].session_name == ""
+
+
+@pytest.mark.asyncio
 async def test_inbox_pane_focus_default_is_choices():
     """Default focus should be on the right (choices) pane."""
     app = make_app()
