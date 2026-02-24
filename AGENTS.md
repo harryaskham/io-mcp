@@ -128,7 +128,7 @@ config:
   session:
     cleanupTimeoutSeconds: 300
   ambient:                    # periodic status updates during agent silence
-    enabled: true
+    enabled: false            # disabled by default; enable to get "still working" updates
     initialDelaySecs: 30      # first update after 30s of silence
     repeatIntervalSecs: 45    # subsequent updates every 45s
   healthMonitor:              # detect stuck/crashed agents
@@ -203,8 +203,9 @@ quickActions:               # macros accessible via 'x' key
 | `d` | Dashboard (overview of all agent sessions with summaries) |
 | `v` | Pane view (live tmux output for focused agent) |
 | `g` | Timeline (unified speech + selection history for focused agent) |
-| `i` | Freeform text input |
-| `m` | Queue message for agent |
+| `i` | Freeform text input (wrapping, multi-line) |
+| `m` | Queue message for agent (text) |
+| `M` | Queue voice message (direct STT recording) |
 | `space` | Voice input (toggle recording) |
 | `s` | Settings menu |
 | `p`/`P` | Replay prompt / all options |
@@ -308,14 +309,15 @@ register_session(
 - Use `present_multi_select()` for checkable batch selections
 - User messages queued via `m` key appear in your next tool response — check for them
 - Use `check_inbox()` to poll for queued messages during long operations without a tool call
-- Queued messages persist across TUI restarts (saved with session data)
+- Queued messages are in-memory only (lost on backend restart)
+- **Sessions are stateless**: no disk persistence. When the backend restarts, agents re-register fresh. This avoids ghost sessions and stale state.
 - **UI voice**: `tts.uiVoice` config uses a separate voice for UI narration (settings, prompts, navigation) while agent speech uses the regular voice
 - **Activity feed**: When the agent is working without choices, the TUI shows an activity feed with actionable items (Queue message, Settings, Pane view, Dashboard) plus a scrollable speech log
 - **Restart loop**: TUI runs inside a restart loop — "Restart TUI" cleanly exits and re-launches, "Quit" exits fully
 - MCP server auto-restarts up to 5 times on crash (watchdog with exponential backoff)
 - All 15 MCP tools wrapped with error safety — single tool errors don't crash the server
 - Config validated on load with specific warnings for invalid references
-- Ambient mode: escalating TTS updates during silence (30s initial, then every 45s with context). Configurable in `config.ambient`
+- Ambient mode: escalating TTS updates during silence (30s initial, then every 45s with context). **Disabled by default.** Enable in `config.ambient.enabled: true`
 - Agent activity indicator shows last speech in TUI
 - **Health monitoring**: agents are checked every 30s for stuck/crashed state. Warning at 5 min, unresponsive at 10 min. Tmux pane liveness verified. Tab bar shows ⚠/✗ indicators. Configurable in `config.healthMonitor`
 - **Notification webhooks**: send alerts to ntfy, Slack, Discord, or generic webhooks. Events: `health_warning`, `health_unresponsive`, `agent_connected`, `agent_disconnected`, `error`. Per-event cooldown prevents spam. Configure in `config.notifications`
@@ -325,9 +327,10 @@ register_session(
 - **Dead session pruning**: health monitor auto-removes sessions with confirmed-dead tmux panes that are unresponsive. More aggressive than the standard 5-min stale timeout
 - **TUI restart resilience**: backend uses a mutable app reference so tool dispatch survives TUI restarts. Pending `present_choices` calls automatically retry with the new TUI instance
 - **Speech reminders**: tool responses include a reminder if the agent hasn't called `speak_async()` in over 60 seconds, nudging agents to narrate during long operations
-- **Thinking phrases**: ambient updates use playful filler phrases ("Hmm, let me see...", "One moment...", "Huh, interesting...") instead of generic status messages
+- **Thinking phrases**: ambient updates use playful filler phrases ("Hmm, let me see", "One moment", "Huh, interesting") instead of generic status messages
+- **Espeak fallback**: option scroll readout uses local espeak-ng for instant audio when API TTS isn't cached yet. Full-quality voice plays on cache hit. Agent speech always uses full API TTS.
 - **Number keys everywhere**: `1`-`9` number selection works in all menus: choices, settings, dashboard, dialogs, spawn menu, tab picker, quick actions, and setting value pickers
-- **Hostname auto-detection**: server detects Tailscale DNS hostname (e.g. `harrys-macbook-pro`) from `tailscale status --json`. Overrides `localhost`, `.local`, or empty hostnames from agents
+- **Hostname auto-detection**: server detects Tailscale DNS hostname (e.g. `harrys-macbook-pro`) from `tailscale status --json`. Overrides `localhost`, `.local`, or empty hostnames from agents. Only caches good values — retries Tailscale if it initially fails.
 
 ### Fallback TTS (when MCP is down)
 
