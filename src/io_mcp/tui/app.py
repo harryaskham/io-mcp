@@ -1834,10 +1834,49 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             return
 
         if inbox_item.done:
-            # Show resolved result
+            # Show resolved result in the right pane
             result = inbox_item.result or {}
-            label = result.get("selected", "")
-            self._speak_ui(f"Already resolved: {label}")
+            label = result.get("selected", "(no selection)")
+            summary = result.get("summary", "")
+
+            # Update right pane to show the resolved item's details
+            s = self._cs
+            preamble_widget = self.query_one("#preamble", Label)
+            preamble_widget.update(f"[dim]{inbox_item.preamble}[/dim]")
+            preamble_widget.display = True
+            self.query_one("#status").display = False
+
+            list_view = self.query_one("#choices", ListView)
+            list_view.clear()
+            list_view.append(ChoiceItem(
+                f"[{s['success']}]✓ {label}[/{s['success']}]",
+                summary if summary else "",
+                index=-999, display_index=0,
+            ))
+            # Show original choices as dimmed reference
+            for i, c in enumerate(inbox_item.choices):
+                choice_label = c.get("label", "")
+                is_selected = choice_label == label
+                if is_selected:
+                    list_view.append(ChoiceItem(
+                        f"  [{s['success']}]» {choice_label}[/{s['success']}]",
+                        c.get("summary", ""),
+                        index=-998 + i, display_index=i + 1,
+                    ))
+                else:
+                    list_view.append(ChoiceItem(
+                        f"  [{s['fg_dim']}]{choice_label}[/{s['fg_dim']}]",
+                        f"[{s['fg_dim']}]{c.get('summary', '')}[/{s['fg_dim']}]",
+                        index=-998 + i, display_index=i + 1,
+                    ))
+            list_view.display = True
+            list_view.index = 0
+
+            # Update inbox list to highlight the selected done item
+            self._inbox_scroll_index = idx
+            self._update_inbox_list()
+
+            self._speak_ui(f"Resolved: {label}")
             return
 
         # Make this the active inbox item and show its choices
@@ -3218,6 +3257,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         self._interrupt_readout()
         list_view = self._active_list_view()
         if list_view.display:
+            if not list_view.has_focus:
+                list_view.focus()
             list_view.action_cursor_down()
 
     def action_cursor_up(self) -> None:
@@ -3227,6 +3268,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         self._interrupt_readout()
         list_view = self._active_list_view()
         if list_view.display:
+            if not list_view.has_focus:
+                list_view.focus()
             list_view.action_cursor_up()
 
     def _scroll_allowed(self) -> bool:
@@ -3243,6 +3286,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             self._interrupt_readout()
             list_view = self._active_list_view()
             if list_view.display:
+                if not list_view.has_focus:
+                    list_view.focus()
                 if self._invert_scroll:
                     list_view.action_cursor_up()
                 else:
@@ -3256,6 +3301,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             self._interrupt_readout()
             list_view = self._active_list_view()
             if list_view.display:
+                if not list_view.has_focus:
+                    list_view.focus()
                 if self._invert_scroll:
                     list_view.action_cursor_down()
                 else:
