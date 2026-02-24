@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import time as _time_mod
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Optional
 
@@ -74,6 +75,14 @@ class TTSEngine:
         self._muted = False  # when True, play_cached is a no-op
         self._config = config
 
+        # PulseAudio/paplay health tracking
+        self._consecutive_failures = 0
+        self._last_failure_time: float = 0
+        self._last_failure_msg: str = ""
+        self._total_failures = 0
+        self._total_plays = 0
+        self._max_retries = 2  # retry paplay this many times on failure
+
         self._env = os.environ.copy()
         self._env["PULSE_SERVER"] = os.environ.get("PULSE_SERVER", "127.0.0.1")
         self._env["LD_LIBRARY_PATH"] = PORTAUDIO_LIB
@@ -131,6 +140,65 @@ class TTSEngine:
         else:
             params = f"{text}|local={self._local}|speed={self._speed}"
         return hashlib.md5(params.encode()).hexdigest()
+
+    # ─── Failure tracking and health ──────────────────────────────
+
+    def _record_failure(self, message: str) -> None:
+        """Record a paplay/TTS failure for health tracking and logging."""
+        self._consecutive_failures += 1
+        self._total_failures += 1
+        self._last_failure_time = _time_mod.time()
+        self._last_failure_msg = message
+        try:
+            with open("/tmp/io-mcp-tui-error.log", "a") as f:
+                f.write(
+                    f"\n--- TTS playback failure "
+                    f"(consecutive: {self._consecutive_failures}, "
+                    f"total: {self._total_failures}) ---\n"
+                    f"{message}\n"
+                    f"PULSE_SERVER={self._env.get('PULSE_SERVER', 'unset')}\n"
+                )
+        except Exception:
+            pass
+
+    def _log_recovery(self, attempt: int) -> None:
+        """Log recovery from playback failures."""
+        try:
+            with open("/tmp/io-mcp-tui-error.log", "a") as f:
+                f.write(
+                    f"\n--- TTS recovered after {self._consecutive_failures} "
+                    f"failure(s), retry attempt {attempt} ---\n"
+                )
+        except Exception:
+            pass
+
+    @property
+    def tts_health(self) -> dict:
+        """Return TTS health status for diagnostics.
+
+        Returns a dict with:
+            status: "ok", "degraded" (recent failures but recovered), "failing" (consecutive failures)
+            consecutive_failures: number of failures in a row
+            total_failures: total lifetime failures
+            total_plays: total successful plays
+            last_failure: last failure message (if any)
+            last_failure_ago: seconds since last failure (if any)
+        """
+        now = _time_mod.time()
+        result = {
+            "consecutive_failures": self._consecutive_failures,
+            "total_failures": self._total_failures,
+            "total_plays": self._total_plays,
+            "last_failure": self._last_failure_msg or None,
+            "last_failure_ago": round(now - self._last_failure_time, 1) if self._last_failure_time else None,
+        }
+        if self._consecutive_failures >= 3:
+            result["status"] = "failing"
+        elif self._total_failures > 0 and (now - self._last_failure_time) < 300:
+            result["status"] = "degraded"
+        else:
+            result["status"] = "ok"
+        return result
 
     def _generate_to_file(self, text: str, voice_override: Optional[str] = None,
                           emotion_override: Optional[str] = None) -> Optional[str]:
@@ -220,8 +288,7 @@ class TTSEngine:
         if path and os.path.isfile(path):
             # Fast path: cached — kill current and play immediately
             self.stop()
-            import time as _t
-            _t.sleep(0.05)  # Brief pause to let PulseAudio settle
+            _time_mod.sleep(0.05)  # Brief pause to let PulseAudio settle
             self._start_playback(path)
             if block:
                 self._wait_for_playback()
@@ -230,37 +297,85 @@ class TTSEngine:
             p = self._generate_to_file(text, voice_override, emotion_override)
             if p:
                 self.stop()
-                import time as _t
-                _t.sleep(0.05)  # Brief pause to let PulseAudio settle
+                _time_mod.sleep(0.05)  # Brief pause to let PulseAudio settle
                 self._start_playback(p)
                 if block:
                     self._wait_for_playback()
 
-    def _start_playback(self, path: str) -> None:
-        """Start paplay for a WAV file."""
-        with self._lock:
-            try:
-                self._process = subprocess.Popen(
-                    [self._paplay, path],
-                    env=self._env,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.PIPE,
-                    preexec_fn=os.setsid,
-                )
-            except Exception as e:
-                self._process = None
+    def _start_playback(self, path: str) -> bool:
+        """Start paplay for a WAV file. Returns True if playback started ok.
+
+        Detects immediate paplay failures (e.g. PulseAudio connection refused)
+        and retries up to _max_retries times. Logs failures for diagnostics.
+        """
+        for attempt in range(1 + self._max_retries):
+            with self._lock:
                 try:
-                    with open("/tmp/io-mcp-tui-error.log", "a") as f:
-                        f.write(f"\n--- paplay error ---\nFailed to start paplay: {e}\nPath: {path}\n")
+                    self._process = subprocess.Popen(
+                        [self._paplay, path],
+                        env=self._env,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.PIPE,
+                        preexec_fn=os.setsid,
+                    )
+                except Exception as e:
+                    self._process = None
+                    self._record_failure(f"Failed to start paplay: {e}")
+                    continue
+
+            # Give paplay a moment to fail on connection errors
+            proc = self._process
+            if proc is None:
+                continue
+            try:
+                retcode = proc.wait(timeout=0.3)
+                # Process exited immediately — likely a connection error
+                stderr_out = ""
+                try:
+                    stderr_out = (proc.stderr.read() or b"").decode("utf-8", errors="replace").strip()
                 except Exception:
                     pass
+                if retcode != 0:
+                    self._record_failure(
+                        f"paplay exited immediately (code {retcode}): {stderr_out or 'no stderr'}"
+                    )
+                    with self._lock:
+                        self._process = None
+                    # Brief pause before retry to let PulseAudio settle
+                    if attempt < self._max_retries:
+                        _time_mod.sleep(0.2 * (attempt + 1))
+                    continue
+            except subprocess.TimeoutExpired:
+                # Still running after 0.3s — playback started successfully
+                pass
+
+            # Success
+            self._total_plays += 1
+            if self._consecutive_failures > 0:
+                self._log_recovery(attempt)
+            self._consecutive_failures = 0
+            return True
+
+        # All retries exhausted
+        return False
 
     def _wait_for_playback(self) -> None:
-        """Wait for current playback to finish."""
+        """Wait for current playback to finish. Logs errors on failure."""
         proc = self._process
         if proc is not None:
             try:
-                proc.wait(timeout=30)
+                retcode = proc.wait(timeout=30)
+                if retcode != 0:
+                    stderr_out = ""
+                    try:
+                        stderr_out = (proc.stderr.read() or b"").decode("utf-8", errors="replace").strip()
+                    except Exception:
+                        pass
+                    self._record_failure(
+                        f"paplay exited with code {retcode}: {stderr_out or 'no stderr'}"
+                    )
+            except subprocess.TimeoutExpired:
+                self._record_failure("paplay timed out after 30s")
             except Exception:
                 pass
 
@@ -346,8 +461,7 @@ class TTSEngine:
         if path and os.path.isfile(path):
             # Cache hit — play the full quality version
             self.stop()
-            import time as _t
-            _t.sleep(0.05)
+            _time_mod.sleep(0.05)
             self._start_playback(path)
             return
 
@@ -378,8 +492,7 @@ class TTSEngine:
                             env=self._env, timeout=5,
                         )
                     self.stop()
-                    import time as _t
-                    _t.sleep(0.05)
+                    _time_mod.sleep(0.05)
                     self._start_playback(tmp)
                 except Exception:
                     pass
@@ -452,7 +565,7 @@ class TTSEngine:
                     [self._paplay],
                     stdin=tts_proc.stdout,
                     stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
                     env=self._env,
                     preexec_fn=os.setsid,
                 )
@@ -464,14 +577,29 @@ class TTSEngine:
 
             if block:
                 try:
-                    play_proc.wait(timeout=60)
+                    retcode = play_proc.wait(timeout=60)
+                    if retcode != 0:
+                        stderr_out = ""
+                        try:
+                            stderr_out = (play_proc.stderr.read() or b"").decode("utf-8", errors="replace").strip()
+                        except Exception:
+                            pass
+                        self._record_failure(
+                            f"paplay (streaming) exited with code {retcode}: {stderr_out or 'no stderr'}"
+                        )
+                    else:
+                        self._total_plays += 1
+                        self._consecutive_failures = 0
+                except subprocess.TimeoutExpired:
+                    self._record_failure("paplay (streaming) timed out after 60s")
                 except Exception:
                     pass
                 try:
                     tts_proc.wait(timeout=5)
                 except Exception:
                     pass
-        except Exception:
+        except Exception as e:
+            self._record_failure(f"Streaming TTS setup failed: {e}")
             # Fall back to non-streaming on any error
             self.play_cached(text, block=block, voice_override=voice_override,
                            emotion_override=emotion_override)
@@ -621,79 +749,78 @@ class TTSEngine:
             return
 
         def _play():
-            import time as _time
             if style == "choices":
                 self.play_tone(600, 60, 0.15)
-                _time.sleep(0.08)
+                _time_mod.sleep(0.08)
                 self.play_tone(900, 80, 0.2)
             elif style == "select":
                 self.play_tone(400, 40, 0.2)
             elif style == "connect":
                 self.play_tone(500, 50, 0.15)
-                _time.sleep(0.06)
+                _time_mod.sleep(0.06)
                 self.play_tone(700, 50, 0.15)
-                _time.sleep(0.06)
+                _time_mod.sleep(0.06)
                 self.play_tone(900, 70, 0.2)
             elif style == "record_start":
                 self.play_tone(400, 60, 0.2)
-                _time.sleep(0.05)
+                _time_mod.sleep(0.05)
                 self.play_tone(800, 80, 0.25)
             elif style == "record_stop":
                 self.play_tone(800, 60, 0.2)
-                _time.sleep(0.05)
+                _time_mod.sleep(0.05)
                 self.play_tone(400, 80, 0.15)
             elif style == "convo_on":
                 self.play_tone(500, 50, 0.15)
-                _time.sleep(0.06)
+                _time_mod.sleep(0.06)
                 self.play_tone(800, 70, 0.2)
             elif style == "convo_off":
                 self.play_tone(800, 50, 0.15)
-                _time.sleep(0.06)
+                _time_mod.sleep(0.06)
                 self.play_tone(500, 70, 0.15)
             elif style == "urgent":
                 # Sharp attention-grabber: high-frequency discord
                 self.play_tone(1200, 80, 0.35)
-                _time.sleep(0.06)
+                _time_mod.sleep(0.06)
                 self.play_tone(800, 80, 0.35)
-                _time.sleep(0.06)
+                _time_mod.sleep(0.06)
                 self.play_tone(1200, 80, 0.35)
             elif style == "error":
                 # Low pulsing tone — something went wrong
                 self.play_tone(250, 120, 0.3)
-                _time.sleep(0.1)
+                _time_mod.sleep(0.1)
                 self.play_tone(200, 150, 0.25)
             elif style == "warning":
                 # Mid-frequency double pulse — caution
                 self.play_tone(600, 60, 0.25)
-                _time.sleep(0.12)
+                _time_mod.sleep(0.12)
                 self.play_tone(600, 60, 0.25)
             elif style == "success":
                 # Bright ascending arpeggio — task completed
                 self.play_tone(600, 50, 0.2)
-                _time.sleep(0.05)
+                _time_mod.sleep(0.05)
                 self.play_tone(800, 50, 0.2)
-                _time.sleep(0.05)
+                _time_mod.sleep(0.05)
                 self.play_tone(1000, 50, 0.2)
-                _time.sleep(0.05)
+                _time_mod.sleep(0.05)
                 self.play_tone(1200, 80, 0.25)
             elif style == "disconnect":
                 # Descending three-note — agent gone
                 self.play_tone(900, 50, 0.15)
-                _time.sleep(0.06)
+                _time_mod.sleep(0.06)
                 self.play_tone(700, 50, 0.15)
-                _time.sleep(0.06)
+                _time_mod.sleep(0.06)
                 self.play_tone(500, 70, 0.15)
             elif style == "heartbeat":
                 # Gentle double-tap — ambient/status pulse
                 self.play_tone(400, 30, 0.1)
-                _time.sleep(0.15)
+                _time_mod.sleep(0.15)
                 self.play_tone(400, 40, 0.12)
             elif style == "inbox":
                 # Distinct from "choices": quick triple ascending notes
                 self.play_tone(500, 40, 0.12)
-                _time.sleep(0.05)
+                _time_mod.sleep(0.05)
                 self.play_tone(700, 40, 0.12)
-                _time.sleep(0.05)
+                _time_mod.sleep(0.05)
                 self.play_tone(1000, 60, 0.18)
 
         threading.Thread(target=_play, daemon=True).start()
