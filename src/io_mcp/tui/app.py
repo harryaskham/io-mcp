@@ -1314,23 +1314,15 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         session._active_inbox_item = item  # Track for _do_select resolution
         self._last_spoken_text = ""  # Reset dedup for new choices
 
-        # Force-exit settings/menus if this is the focused session —
-        # incoming choices take priority over settings
+        # Force-exit ALL modals/menus if this is the focused session —
+        # incoming choices take priority over settings, dialogs, etc.
         is_fg = self._is_focused(session.session_id)
         if is_fg and self._in_settings:
-            self._in_settings = False
-            self._setting_edit_mode = False
-            self._spawn_options = None
-            self._quick_action_options = None
-            self._dashboard_mode = False
-            self._dashboard_action_mode = False
-            self._dashboard_action_target = None
-            self._log_viewer_mode = False
-            self._system_logs_mode = False
-            self._help_mode = False
-            self._history_mode = False
-            self._tab_picker_mode = False
-            self._quick_settings_mode = False
+            self._clear_all_modal_state(session=session)
+            # Guard: prevent any pending Enter/selection from leaking into
+            # the freshly-presented choices (same guard as _exit_settings).
+            self._settings_just_closed = True
+            self.set_timer(0.1, self._clear_settings_guard)
 
         # Emit event for remote frontends
         try:

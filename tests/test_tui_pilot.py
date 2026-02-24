@@ -400,3 +400,206 @@ async def test_main_content_hidden_initially():
     async with app.run_test() as pilot:
         main_content = app.query_one("#main-content")
         assert main_content.display is False
+
+
+# ─── Settings force-exit tests (bd-dj0) ───────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_clear_all_modal_state_resets_settings():
+    """_clear_all_modal_state clears all settings/menu state flags."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        session, _ = app.manager.get_or_create("test-1")
+        session.registered = True
+        session.name = "Test"
+        app.on_session_created(session)
+
+        # Simulate being deep in nested settings state
+        app._in_settings = True
+        app._setting_edit_mode = True
+        app._dashboard_mode = True
+        app._dashboard_action_mode = True
+        app._dashboard_action_target = "some-id"
+        app._log_viewer_mode = True
+        app._help_mode = True
+        app._history_mode = True
+        app._tab_picker_mode = True
+        app._quick_settings_mode = True
+        app._spawn_options = [{"label": "test"}]
+        app._quick_action_options = [{"label": "test"}]
+        app._worktree_options = [{"label": "test"}]
+        app._dialog_callback = lambda x: None
+        app._dialog_buttons = [{"label": "OK"}]
+        session.in_settings = True
+        session.reading_options = True
+
+        # Clear everything
+        app._clear_all_modal_state(session=session)
+
+        assert app._in_settings is False
+        assert app._setting_edit_mode is False
+        assert app._dashboard_mode is False
+        assert app._dashboard_action_mode is False
+        assert app._dashboard_action_target is None
+        assert app._log_viewer_mode is False
+        assert app._help_mode is False
+        assert app._history_mode is False
+        assert app._tab_picker_mode is False
+        assert app._quick_settings_mode is False
+        assert app._spawn_options is None
+        assert app._quick_action_options is None
+        assert app._worktree_options is None
+        assert app._dialog_callback is None
+        assert app._dialog_buttons == []
+        assert session.in_settings is False
+        assert session.reading_options is False
+
+
+@pytest.mark.asyncio
+async def test_exit_settings_uses_clear_all_modal_state():
+    """_exit_settings clears dialog and worktree state (previously missing)."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        session, _ = app.manager.get_or_create("test-1")
+        session.registered = True
+        session.name = "Test"
+        app.on_session_created(session)
+
+        # Enter settings
+        await pilot.press("s")
+        await pilot.pause(0.2)
+        assert app._in_settings is True
+
+        # Simulate dialog and worktree state being set
+        app._dialog_callback = lambda x: None
+        app._dialog_buttons = [{"label": "OK"}]
+        app._worktree_options = [{"label": "test"}]
+
+        # Exit settings
+        app._exit_settings()
+
+        # Guard should be active immediately after exit
+        assert app._in_settings is False
+        assert app._dialog_callback is None
+        assert app._dialog_buttons == []
+        assert app._worktree_options is None
+        assert app._settings_just_closed is True  # guard active
+
+        # Guard clears after timer (100ms)
+        await pilot.pause(0.15)
+        assert app._settings_just_closed is False
+
+
+@pytest.mark.asyncio
+async def test_choices_force_exit_settings():
+    """Incoming choices force-exit settings and set the selection guard."""
+    from io_mcp.session import InboxItem
+
+    app = make_app()
+    async with app.run_test() as pilot:
+        session, _ = app.manager.get_or_create("test-1")
+        session.registered = True
+        session.name = "Test"
+        app.on_session_created(session)
+
+        # Enter settings
+        await pilot.press("s")
+        await pilot.pause(0.2)
+        assert app._in_settings is True
+
+        # Also simulate nested edit mode + dialog
+        app._setting_edit_mode = True
+        app._dialog_callback = lambda x: None
+        app._dialog_buttons = [{"label": "OK"}]
+        app._worktree_options = [{"label": "test"}]
+
+        # Simulate choices arriving (prepare session state as _activate_and_present does)
+        item = InboxItem(kind="choices", preamble="Pick one", choices=[
+            {"label": "Alpha", "summary": "First"},
+        ])
+        session.preamble = "Pick one"
+        session.choices = list(item.choices)
+        session.selection = None
+        session.selection_event.clear()
+        session.active = True
+        session.intro_speaking = True
+        session.reading_options = False
+        session.in_settings = False
+        session._active_inbox_item = item
+
+        # The force-exit code from _activate_and_present:
+        is_fg = app._is_focused(session.session_id)
+        if is_fg and app._in_settings:
+            app._clear_all_modal_state(session=session)
+            app._settings_just_closed = True
+            app.set_timer(0.1, app._clear_settings_guard)
+
+        # Verify all state is cleared
+        assert app._in_settings is False
+        assert app._setting_edit_mode is False
+        assert app._dialog_callback is None
+        assert app._dialog_buttons == []
+        assert app._worktree_options is None
+        assert app._settings_just_closed is True
+
+        # Guard prevents _do_select from firing
+        app._do_select()  # Should be a no-op due to guard
+        assert session.selection is None  # No selection made
+
+        # Guard clears after timer
+        await pilot.pause(0.15)
+        assert app._settings_just_closed is False
+
+
+@pytest.mark.asyncio
+async def test_choices_force_exit_setting_edit_mode():
+    """Choices arriving during setting edit mode clear all edit state."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        session, _ = app.manager.get_or_create("test-1")
+        session.registered = True
+        session.name = "Test"
+        app.on_session_created(session)
+
+        # Enter settings, then enter edit mode
+        await pilot.press("s")
+        await pilot.pause(0.2)
+        assert app._in_settings is True
+
+        # Enter speed edit mode
+        app._enter_setting_edit("speed")
+        await pilot.pause(0.1)
+        assert app._setting_edit_mode is True
+        assert app._setting_edit_key == "speed"
+
+        # Force-exit via _clear_all_modal_state
+        app._clear_all_modal_state(session=session)
+
+        assert app._in_settings is False
+        assert app._setting_edit_mode is False
+        assert session.in_settings is False
+
+
+@pytest.mark.asyncio
+async def test_choices_force_exit_quick_settings():
+    """Choices arriving during quick settings mode clear all state."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        session, _ = app.manager.get_or_create("test-1")
+        session.registered = True
+        session.name = "Test"
+        app.on_session_created(session)
+
+        # Simulate quick settings mode
+        app._in_settings = True
+        app._quick_settings_mode = True
+        session.in_settings = True
+
+        # Force-exit
+        app._clear_all_modal_state(session=session)
+
+        assert app._in_settings is False
+        assert app._quick_settings_mode is False
+        assert session.in_settings is False
+

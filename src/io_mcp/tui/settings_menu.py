@@ -91,11 +91,20 @@ class SettingsMixin:
         self._tts.stop()
         self._speak_ui("Settings")
 
-    def _exit_settings(self) -> None:
-        """Leave settings and restore choices."""
-        session = self._focused()
+    def _clear_all_modal_state(self, *, session=None) -> None:
+        """Reset ALL modal/menu state flags to their defaults.
+
+        This is the single source of truth for clearing nested menu state.
+        Called from both ``_exit_settings`` (user-initiated) and
+        ``_activate_and_present`` (force-exit when choices arrive).
+
+        Args:
+            session: If provided, also clears per-session settings flags.
+        """
         if session:
             session.in_settings = False
+            session.reading_options = False
+
         self._in_settings = False
         self._setting_edit_mode = False
         self._spawn_options = None
@@ -109,6 +118,11 @@ class SettingsMixin:
         self._history_mode = False
         self._tab_picker_mode = False
         self._quick_settings_mode = False
+        self._worktree_options = None
+
+        # Clear dialog state — dialogs set _in_settings too
+        self._dialog_callback = None
+        self._dialog_buttons = []
 
         # Clean up pane viewer if active
         if getattr(self, '_pane_viewer_mode', False):
@@ -118,6 +132,11 @@ class SettingsMixin:
                 self.query_one("#pane-view", RichLog).display = False
             except Exception:
                 pass
+
+    def _exit_settings(self) -> None:
+        """Leave settings and restore choices."""
+        session = self._focused()
+        self._clear_all_modal_state(session=session)
 
         # Guard: prevent the Enter keypress that triggered "close" from
         # also firing _do_select on the freshly-restored choice list.
