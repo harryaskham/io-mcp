@@ -342,6 +342,57 @@ async def test_inbox_pane_focus_default_is_choices():
 
 
 @pytest.mark.asyncio
+async def test_inbox_focus_syncs_with_widget_focus():
+    """_inbox_pane_focused syncs when widget focus changes (e.g. via Tab key)."""
+    from io_mcp.session import InboxItem
+
+    app = make_app()
+    async with app.run_test() as pilot:
+        session, _ = app.manager.get_or_create("test-1")
+        session.registered = True
+        session.name = "Test"
+        app.on_session_created(session)
+
+        # Enqueue two inbox items so inbox pane is visible
+        item1 = InboxItem(kind="choices", preamble="Q1", choices=[{"label": "A", "summary": ""}])
+        item2 = InboxItem(kind="choices", preamble="Q2", choices=[{"label": "B", "summary": ""}])
+        session.enqueue(item1)
+        session.enqueue(item2)
+
+        session.preamble = item1.preamble
+        session.choices = list(item1.choices)
+        session.active = True
+        session._active_inbox_item = item1
+        session.extras_count = len(EXTRA_OPTIONS)
+        session.all_items = list(EXTRA_OPTIONS) + session.choices
+
+        app._show_choices()
+        await pilot.pause(0.1)
+
+        # Default: choices pane is focused
+        assert app._inbox_pane_focused is False
+
+        # Manually focus inbox list (simulates Tab key focus change)
+        inbox_list = app.query_one("#inbox-list", ListView)
+        inbox_list.focus()
+        await pilot.pause(0.1)
+
+        # _active_list_view should now return inbox list and sync state
+        active = app._active_list_view()
+        assert active.id == "inbox-list"
+        assert app._inbox_pane_focused is True
+
+        # Now focus choices list (simulates Tab back)
+        choices_list = app.query_one("#choices", ListView)
+        choices_list.focus()
+        await pilot.pause(0.1)
+
+        active = app._active_list_view()
+        assert active.id == "choices"
+        assert app._inbox_pane_focused is False
+
+
+@pytest.mark.asyncio
 async def test_main_content_hidden_initially():
     """Main content container is hidden when no agent is connected."""
     app = make_app()
