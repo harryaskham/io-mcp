@@ -1091,13 +1091,16 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         self._touch_session(session)
 
-        # ── Cancel any existing pending inbox items for this session ──
-        # This handles the case where the MCP connection dropped and the
-        # proxy retried, creating a duplicate present_choices call while
-        # the old one's thread is still alive but orphaned.
+        # ── Cancel duplicate retries for this session ──
+        # Only cancel pending items with identical preamble+choices (MCP retries).
+        # Genuinely new choices from different calls queue normally.
+        new_labels = tuple(c.get("label", "") for c in choices)
         for existing in list(session.inbox):
-            if not existing.done:
-                existing.result = {"selected": "_restart", "summary": "Superseded by new present_choices"}
+            if existing.done:
+                continue
+            existing_labels = tuple(c.get("label", "") for c in existing.choices)
+            if existing.preamble == preamble and existing_labels == new_labels:
+                existing.result = {"selected": "_restart", "summary": "Superseded by retry"}
                 existing.done = True
                 existing.event.set()
 
@@ -3192,7 +3195,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             chunk = text[self._freeform_spoken_pos:].strip()
             if chunk:
                 self._freeform_tts.stop()
-                self._freeform_tts.speak_async(chunk)
+                self._freeform_tts.speak_with_local_fallback(chunk)
             self._freeform_spoken_pos = len(text)
 
     @on(SubmitTextArea.Submitted, "#freeform-input")
