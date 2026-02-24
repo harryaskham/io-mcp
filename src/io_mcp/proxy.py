@@ -563,6 +563,25 @@ def create_proxy_server(
         """
         return _fwd("check_inbox", {}, ctx)
 
+    @server.tool()
+    async def get_logs(lines: int = 50, ctx: Context = None) -> str:
+        """Get recent io-mcp logs for debugging.
+
+        Returns TUI error logs, proxy logs, and session speech history.
+        Use this when something isn't working to diagnose the issue.
+
+        Parameters
+        ----------
+        lines:
+            Number of recent log lines to return (default 50).
+
+        Returns
+        -------
+        str
+            JSON with tui_errors, proxy, and speech_log arrays.
+        """
+        return _fwd("get_logs", {"lines": lines}, ctx)
+
     return server
 
 
