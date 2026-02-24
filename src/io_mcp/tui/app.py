@@ -22,7 +22,7 @@ from textual.events import MouseScrollDown, MouseScrollUp
 from textual.reactive import reactive
 from textual.timer import Timer
 from textual.widget import Widget
-from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, RichLog, Static
+from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, RichLog, Static, TextArea
 
 from ..session import Session, SessionManager, SpeechEntry, HistoryEntry
 from ..settings import Settings
@@ -33,7 +33,7 @@ from ..notifications import (
 )
 
 from .themes import COLOR_SCHEMES, DEFAULT_SCHEME, get_scheme, build_css
-from .widgets import ChoiceItem, DwellBar, EXTRA_OPTIONS, _safe_action
+from .widgets import ChoiceItem, DwellBar, SubmitTextArea, EXTRA_OPTIONS, _safe_action
 from .views import ViewsMixin
 from .voice import VoiceMixin
 from .settings_menu import SettingsMixin
@@ -338,7 +338,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         yield Vertical(id="speech-log")
         yield ListView(id="choices")
         yield RichLog(id="pane-view", markup=False, highlight=False, auto_scroll=True, max_lines=200)
-        yield Input(placeholder="Type your reply, press Enter to send, Escape to cancel", id="freeform-input")
+        yield SubmitTextArea(id="freeform-input", soft_wrap=True, show_line_numbers=False, tab_behavior="focus")
         yield Input(placeholder="Filter choices...", id="filter-input")
         yield DwellBar(id="dwell-bar")
         yield Static("[dim]↕[/dim] Scroll  [dim]⏎[/dim] Select  [dim]x[/dim] Multi  [dim]u[/dim] Undo  [dim]i[/dim] Type  [dim]m[/dim] Msg  [dim]␣[/dim] Voice  [dim]/[/dim] Filter  [dim]s[/dim] Settings  [dim]q[/dim] Back/Quit", id="footer-help")
@@ -353,9 +353,6 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         self.query_one("#dwell-bar").display = False
         self.query_one("#speech-log").display = False
         self.query_one("#pane-view").display = False
-
-        # Restore persisted sessions so the tab bar shows previous agents
-        self._restore_persisted_sessions()
 
         # Start periodic session cleanup (every 60 seconds, 5 min timeout)
         self._cleanup_timer = self.set_interval(60, self._cleanup_stale_sessions)
@@ -495,7 +492,15 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             self._update_tab_bar()
 
     def _check_agent_health(self) -> None:
-        """Monitor agent health and alert when agents appear stuck or crashed.
+        """Monitor agent health in a background thread.
+
+        Runs subprocess calls (tmux pane checks, SSH) in a thread to avoid
+        blocking the event loop. UI updates are dispatched via call_from_thread.
+        """
+        threading.Thread(target=self._check_agent_health_inner, daemon=True).start()
+
+    def _check_agent_health_inner(self) -> None:
+        """Inner health check — runs in a background thread.
 
         For each session, checks:
         1. Time since last tool call — if too old while NOT presenting choices,
@@ -592,12 +597,10 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 session.health_alert_spoken = True
 
         # ── Auto-prune dead sessions ─────────────────────────────
-        # Multiple heuristics for detecting dead sessions:
+        # Heuristics for detecting dead sessions:
         # 1. Dead tmux pane (immediate — don't wait for unresponsive timer)
-        # 2. Placeholder sessions that never reconnected (2 min timeout)
-        # 3. Unresponsive sessions without tmux info (no way to verify)
+        # 2. Unresponsive sessions without tmux info (no way to verify)
         dead_sessions = []
-        placeholder_timeout = 120.0  # 2 min for placeholders to reconnect
 
         for session in self.manager.all_sessions():
             if session.session_id == self.manager.active_session_id:
@@ -605,22 +608,13 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             if session.active:
                 continue  # has pending choices
 
-            is_placeholder = session.session_id.startswith("persisted-")
-
             # Heuristic 1: Dead tmux pane — immediate removal
             pane_dead = self._is_tmux_pane_dead(session)
             if pane_dead:
                 dead_sessions.append((session, "dead tmux pane"))
                 continue
 
-            # Heuristic 2: Placeholder that never reconnected
-            if is_placeholder:
-                elapsed = now - session.last_activity
-                if elapsed > placeholder_timeout:
-                    dead_sessions.append((session, "placeholder timeout"))
-                    continue
-
-            # Heuristic 3: Unresponsive without tmux info (can't verify liveness)
+            # Heuristic 2: Unresponsive without tmux info (can't verify liveness)
             if session.health_status == "unresponsive":
                 has_tmux = bool(getattr(session, 'tmux_pane', ''))
                 if not has_tmux:
@@ -751,21 +745,21 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
     # Thinking-out-loud filler phrases for ambient updates
     _THINKING_PHRASES = [
-        "Hmm, still thinking...",
-        "Let me see...",
-        "One moment...",
-        "Working on it...",
-        "Hmm, let me figure this out...",
-        "Just a sec...",
-        "Bear with me...",
-        "Almost there, I think...",
-        "Hmm...",
-        "Let me check something...",
-        "Hold on...",
-        "Huh, interesting...",
-        "Thinking...",
-        "One sec...",
-        "Mm, working on it...",
+        "Hmm, still thinking",
+        "Let me see",
+        "One moment",
+        "Working on it",
+        "Hmm, let me figure this out",
+        "Just a sec",
+        "Bear with me",
+        "Almost there, I think",
+        "Hmm",
+        "Let me check something",
+        "Hold on",
+        "Huh, interesting",
+        "Thinking",
+        "One sec",
+        "Mm, working on it",
     ]
 
     def _check_heartbeat(self) -> None:
@@ -1847,11 +1841,6 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
                 def _do_restart():
                     time.sleep(2.0)
-                    # Save session data before exit
-                    try:
-                        self.manager.save_registered()
-                    except Exception:
-                        pass
                     # Unblock all pending selection waits so backend threads
                     # don't hang forever after the app is replaced
                     for sess in self.manager.all_sessions():
@@ -1965,9 +1954,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             self._freeform_spoken_pos = 0
 
             self.query_one("#choices").display = False
-            inp = self.query_one("#freeform-input", Input)
-            inp.placeholder = "Enter branch name (e.g. fix/auth-bug)"
-            inp.value = ""
+            inp = self.query_one("#freeform-input", SubmitTextArea)
+            inp.clear()
             inp.styles.display = "block"
             inp.focus()
 
@@ -1979,9 +1967,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             self._freeform_spoken_pos = 0
 
             self.query_one("#choices").display = False
-            inp = self.query_one("#freeform-input", Input)
-            inp.placeholder = "Enter branch name for new agent worktree"
-            inp.value = ""
+            inp = self.query_one("#freeform-input", SubmitTextArea)
+            inp.clear()
             inp.styles.display = "block"
             inp.focus()
 
@@ -2348,23 +2335,27 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         self._speak_ui(f"Pick a tab. {len(sessions)} tabs. Scrolling switches live.")
 
     def action_next_tab(self) -> None:
-        """Switch to next tab."""
+        """Switch to next tab (no-op if only one session)."""
         session = self._focused()
         if session and (session.input_mode or session.voice_recording):
             return
+        if self.manager.count() <= 1:
+            return
         new_session = self.manager.next_tab()
-        if new_session:
+        if new_session and new_session.session_id != (session.session_id if session else None):
             self._tts.stop()
             self._tts.speak_async(new_session.name)
             self._switch_to_session(new_session)
 
     def action_prev_tab(self) -> None:
-        """Switch to previous tab."""
+        """Switch to previous tab (no-op if only one session)."""
         session = self._focused()
         if session and (session.input_mode or session.voice_recording):
             return
+        if self.manager.count() <= 1:
+            return
         new_session = self.manager.prev_tab()
-        if new_session:
+        if new_session and new_session.session_id != (session.session_id if session else None):
             self._tts.stop()
             self._tts.speak_async(new_session.name)
             self._switch_to_session(new_session)
@@ -2383,53 +2374,6 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             self._speak_ui("No other tabs with choices")
 
     # ─── Session lifecycle ─────────────────────────────────────────
-
-    def _restore_persisted_sessions(self) -> None:
-        """Load persisted sessions and create placeholder tabs for them.
-
-        On TUI restart, shows previous agent sessions in the tab bar so the
-        user can see which agents were connected. When agents reconnect and
-        call register_session(), they match to these placeholders and restore
-        their speech log, history, and tool stats.
-        """
-        try:
-            persisted = self.manager.load_registered()
-            if not persisted:
-                return
-
-            for saved in persisted:
-                name = saved.get("name", "")
-                if not name:
-                    continue
-
-                # Create a placeholder session with a synthetic ID
-                import hashlib
-                placeholder_id = f"persisted-{hashlib.md5(name.encode()).hexdigest()[:8]}"
-                session, created = self.manager.get_or_create(placeholder_id)
-                if created:
-                    session.name = name
-                    session.registered = True
-                    session.cwd = saved.get("cwd", "")
-                    session.hostname = saved.get("hostname", "")
-                    session.username = saved.get("username", "")
-                    session.tmux_session = saved.get("tmux_session", "")
-                    session.tmux_pane = saved.get("tmux_pane", "")
-                    session.voice_override = saved.get("voice_override")
-                    session.emotion_override = saved.get("emotion_override")
-                    session.agent_metadata = saved.get("agent_metadata", {})
-                    session.restore_activity(saved)
-                    # Mark as unhealthy since agent hasn't reconnected yet
-                    session.health_status = "warning"
-
-            # Reset counter so new agents don't get inflated numbers
-            # (placeholders increment counter, but they'll be claimed/removed)
-            self.manager._counter = 0
-
-            self._update_tab_bar()
-            # Show the first persisted session's activity feed
-            self._show_idle()
-        except Exception:
-            pass
 
     def on_session_created(self, session: Session) -> None:
         """Called when a new session is created (from MCP thread).
@@ -2520,7 +2464,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             if new_active is not None:
                 new_session = self.manager.get(new_active)
                 if new_session:
-                    self._switch_to_session(new_session)
+                    self.call_from_thread(lambda s=new_session: self._switch_to_session(s))
             else:
                 self.call_from_thread(self._show_idle)
         except Exception:
@@ -2955,8 +2899,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         # UI first
         self.query_one("#choices").display = False
         self.query_one("#dwell-bar").display = False
-        inp = self.query_one("#freeform-input", Input)
-        inp.value = ""
+        inp = self.query_one("#freeform-input", SubmitTextArea)
+        inp.clear()
         inp.styles.display = "block"
         inp.focus()
 
@@ -2980,9 +2924,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         # UI
         self.query_one("#choices").display = False
         self.query_one("#dwell-bar").display = False
-        inp = self.query_one("#freeform-input", Input)
-        inp.placeholder = "Type message (Enter to send) or press Space to record voice message"
-        inp.value = ""
+        inp = self.query_one("#freeform-input", SubmitTextArea)
+        inp.clear()
         inp.styles.display = "block"
         inp.focus()
 
@@ -3087,13 +3030,13 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         count = sum(1 for c in list_view.children if isinstance(c, ChoiceItem) and c.choice_index > 0)
         self._speak_ui(f"{count} matches")
 
-    @on(Input.Changed, "#freeform-input")
-    def on_freeform_changed(self, event: Input.Changed) -> None:
+    @on(TextArea.Changed, "#freeform-input")
+    def on_freeform_changed(self, event: TextArea.Changed) -> None:
         session = self._focused()
         # Readback works for both freeform input and message queue mode
         if not session or (not session.input_mode and not self._message_mode):
             return
-        text = event.value
+        text = event.text_area.text
         if len(text) <= self._freeform_spoken_pos:
             self._freeform_spoken_pos = len(text)
             return
@@ -3104,12 +3047,13 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 self._freeform_tts.speak_async(chunk)
             self._freeform_spoken_pos = len(text)
 
-    @on(Input.Submitted, "#freeform-input")
-    def on_freeform_submitted(self, event: Input.Submitted) -> None:
+    def _submit_freeform(self) -> None:
+        """Submit the freeform text input (called on Enter key)."""
         session = self._focused()
         if not session:
             return
-        text = event.value.strip()
+        inp = self.query_one("#freeform-input", SubmitTextArea)
+        text = inp.text.strip()
         if not text:
             return
 
@@ -3120,8 +3064,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         if worktree_action:
             self._worktree_action = None
             session.input_mode = False
-            event.input.styles.display = "none"
-            event.input.placeholder = "Type your reply, press Enter to send, Escape to cancel"
+            inp.styles.display = "none"
             self._freeform_tts.stop()
             self._create_worktree(session, text, worktree_action)
             return
@@ -3129,8 +3072,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         # Message queue mode — queue the message, don't select
         if self._message_mode:
             self._message_mode = False
-            event.input.styles.display = "none"
-            event.input.placeholder = "Type your reply, press Enter to send, Escape to cancel"
+            inp.styles.display = "none"
             msgs = getattr(session, 'pending_messages', None)
             if msgs is not None:
                 msgs.append(text)
@@ -3146,7 +3088,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         # Normal freeform input — select with the text
         session.input_mode = False
-        event.input.styles.display = "none"
+        inp.styles.display = "none"
 
         self._freeform_tts.stop()
         self._tts.stop()
@@ -3162,17 +3104,24 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             session.input_mode = False
         self._message_mode = False
         self._freeform_tts.stop()
-        inp = self.query_one("#freeform-input", Input)
+        inp = self.query_one("#freeform-input", SubmitTextArea)
         inp.styles.display = "none"
-        inp.placeholder = "Type your reply, press Enter to send, Escape to cancel"
         self._restore_choices()
         self._speak_ui("Cancelled.")
 
     def on_key(self, event) -> None:
-        """Handle Escape in freeform/voice/settings/filter mode.
+        """Handle Escape/Enter in freeform/voice/settings/filter mode.
         Also intercepts space in message mode to trigger voice recording.
         """
         session = self._focused()
+        # In freeform/message mode, Enter submits the text
+        if (session and (session.input_mode or self._message_mode)
+                and event.key == "enter"
+                and not session.voice_recording):
+            event.prevent_default()
+            event.stop()
+            self._submit_freeform()
+            return
         # In message mode, space triggers voice recording instead of typing
         if self._message_mode and event.key == "space" and not (session and session.voice_recording):
             event.prevent_default()
@@ -3432,8 +3381,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         session = self._focused()
         if session and session.input_mode:
             session.input_mode = False
-            inp = self.query_one("#freeform-input", Input)
-            inp.value = ""
+            inp = self.query_one("#freeform-input", SubmitTextArea)
+            inp.clear()
             inp.styles.display = "none"
             if session.active:
                 self._show_choices()

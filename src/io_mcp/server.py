@@ -602,12 +602,6 @@ def create_mcp_server(
         except Exception:
             pass
 
-        # Persist registered session metadata
-        try:
-            frontend.manager.save_registered()
-        except Exception:
-            pass
-
         return json.dumps({
             "status": "registered",
             "session_id": session.session_id,

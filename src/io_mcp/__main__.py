@@ -322,7 +322,9 @@ def _detect_hostname() -> str:
     Checks tailscale status --json for the self node's DNS name first
     (e.g. 'harrys-macbook-pro' from 'harrys-macbook-pro.domain.ts.net.'),
     then falls back to HostName, then socket.gethostname().
-    Result is cached after first call.
+
+    Only caches the result if it's a useful value (not 'localhost' or empty).
+    This way, if Tailscale isn't ready at startup, subsequent calls can retry.
     """
     cached = getattr(_detect_hostname, '_cached', None)
     if cached is not None:
@@ -362,7 +364,10 @@ def _detect_hostname() -> str:
         if hostname.endswith(".local"):
             hostname = hostname[:-6]
 
-    _detect_hostname._cached = hostname
+    # Only cache useful values — retry Tailscale on next call if we got a bad result
+    if hostname and hostname != "localhost":
+        _detect_hostname._cached = hostname
+
     return hostname
 
 
@@ -447,9 +452,6 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
     def _get_session(session_id: str):
         session, created = frontend.manager.get_or_create(session_id)
         if created:
-            # Check if there's a placeholder session to take over
-            # (from TUI restart — persisted sessions waiting for reconnection)
-            placeholder = _find_and_claim_placeholder(session)
             try:
                 frontend.on_session_created(session)
             except Exception:
@@ -458,77 +460,6 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
         session.heartbeat_spoken = False
         session.ambient_count = 0
         return session
-
-    def _find_and_claim_placeholder(session):
-        """Find a placeholder session and transfer its identity to the new session.
-
-        On TUI restart, persisted sessions create placeholder tabs (IDs start
-        with 'persisted-'). When a real agent connects, we match it to a
-        placeholder and transfer the name, registration data, and activity.
-
-        Matching strategy:
-        1. If only one placeholder exists → always match (single-agent case)
-        2. If multiple → try matching by name (from register_session)
-        3. If still no match → take the oldest placeholder (FIFO)
-        """
-        try:
-            placeholders = [
-                (sid, frontend.manager.get(sid))
-                for sid in list(frontend.manager.session_order)
-                if sid.startswith("persisted-") and frontend.manager.get(sid)
-            ]
-
-            if not placeholders:
-                return None
-
-            # If only one placeholder, always match
-            if len(placeholders) == 1:
-                sid, placeholder = placeholders[0]
-            else:
-                # Multiple placeholders — try name matching if session has a name
-                matched = None
-                if session.name and not session.name.startswith("Agent "):
-                    for ph_sid, ph in placeholders:
-                        if ph.name == session.name:
-                            matched = (ph_sid, ph)
-                            break
-
-                if matched:
-                    sid, placeholder = matched
-                else:
-                    # Take the first (oldest) placeholder as FIFO fallback
-                    sid, placeholder = placeholders[0]
-
-            # Transfer identity
-            session.name = placeholder.name
-            session.registered = placeholder.registered
-            session.cwd = placeholder.cwd
-            session.hostname = placeholder.hostname
-            session.username = placeholder.username
-            session.tmux_session = placeholder.tmux_session
-            session.tmux_pane = placeholder.tmux_pane
-            session.voice_override = placeholder.voice_override
-            session.emotion_override = placeholder.emotion_override
-            session.agent_metadata = dict(placeholder.agent_metadata)
-
-            # Transfer activity data
-            session.restore_activity({
-                "speech_log": [{"text": s.text, "timestamp": s.timestamp}
-                              for s in placeholder.speech_log],
-                "history": [{"label": h.label, "summary": h.summary,
-                            "preamble": h.preamble, "timestamp": h.timestamp}
-                           for h in placeholder.history],
-                "tool_call_count": placeholder.tool_call_count,
-                "last_tool_name": placeholder.last_tool_name,
-                "last_tool_call": placeholder.last_tool_call,
-                "pending_messages": list(placeholder.pending_messages),
-            })
-
-            # Remove the placeholder
-            frontend.manager.remove(sid)
-            return placeholder
-        except Exception:
-            return None
 
     def _registration_reminder(session) -> str:
         if not session.registered:
@@ -738,54 +669,8 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
         hostname = session.hostname or ""
         is_local = (hostname == local_hostname) if hostname else True
 
-        # Remove placeholder sessions that match this agent (from TUI restart)
-        # Placeholder IDs start with "persisted-"
-        try:
-            for sid in list(frontend.manager.session_order):
-                if sid.startswith("persisted-") and sid != session.session_id:
-                    placeholder = frontend.manager.get(sid)
-                    if placeholder:
-                        # Match by name or cwd
-                        name_match = placeholder.name == session.name and session.name
-                        cwd_match = placeholder.cwd == session.cwd and session.cwd
-                        if name_match or cwd_match:
-                            # Transfer activity data from placeholder
-                            session.restore_activity({
-                                "speech_log": [{"text": s.text, "timestamp": s.timestamp}
-                                              for s in placeholder.speech_log],
-                                "history": [{"label": h.label, "summary": h.summary,
-                                            "preamble": h.preamble, "timestamp": h.timestamp}
-                                           for h in placeholder.history],
-                                "tool_call_count": placeholder.tool_call_count,
-                                "last_tool_name": placeholder.last_tool_name,
-                                "last_tool_call": placeholder.last_tool_call,
-                                "pending_messages": list(placeholder.pending_messages),
-                            })
-                            # Remove the placeholder
-                            frontend.manager.remove(sid)
-        except Exception:
-            pass
-
         try:
             frontend.update_tab_bar()
-        except Exception:
-            pass
-        try:
-            frontend.manager.save_registered()
-        except Exception:
-            pass
-
-        # Restore persisted activity data (speech log, history, tool stats)
-        # Match by name or cwd to find the right persisted session
-        try:
-            persisted = frontend.manager.load_registered()
-            for saved in persisted:
-                # Match by name (primary) or cwd (fallback)
-                name_match = saved.get("name") == session.name and session.name
-                cwd_match = saved.get("cwd") == session.cwd and session.cwd
-                if name_match or cwd_match:
-                    session.restore_activity(saved)
-                    break
         except Exception:
             pass
 

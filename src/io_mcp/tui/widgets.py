@@ -10,7 +10,7 @@ import functools
 
 from textual.app import ComposeResult
 from textual.reactive import reactive
-from textual.widgets import Label, ListItem, Static
+from textual.widgets import Label, ListItem, Static, TextArea
 
 
 # ─── Safe action decorator ────────────────────────────────────────────────
@@ -104,3 +104,25 @@ class DwellBar(Static):
         remaining = self.dwell_time * (1.0 - self.progress)
         bar = "━" * filled + "╌" * empty
         return f"  [{bar}] {remaining:.1f}s"
+
+
+# ─── Submit-on-Enter TextArea ─────────────────────────────────────────────
+
+class SubmitTextArea(TextArea):
+    """TextArea that doesn't handle Enter — lets the app intercept it for submit.
+
+    By default, TextArea inserts a newline on Enter. This subclass
+    removes that binding so Enter propagates up to the App's on_key
+    handler, which calls _submit_freeform().
+    """
+
+    BINDINGS = [
+        # Override TextArea's enter binding to do nothing at widget level.
+        # The app's on_key handler will intercept Enter for submission.
+    ]
+
+    def _on_key(self, event) -> None:
+        """Let Enter pass through to the app instead of inserting a newline."""
+        if event.key == "enter":
+            return  # Don't process — let it bubble up to App.on_key
+        return super()._on_key(event)

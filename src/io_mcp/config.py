@@ -138,7 +138,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "cleanupTimeoutSeconds": 300,
         },
         "ambient": {
-            "enabled": True,
+            "enabled": False,
             "initialDelaySecs": 30,
             "repeatIntervalSecs": 45,
         },
@@ -643,11 +643,14 @@ class IoMcpConfig:
 
     @property
     def ambient_enabled(self) -> bool:
-        """Whether ambient mode is enabled (periodic status updates during silence)."""
+        """Whether ambient mode is enabled (periodic status updates during silence).
+
+        Disabled by default — enable in config.yml: config.ambient.enabled: true
+        """
         return bool(
             self.expanded.get("config", {})
             .get("ambient", {})
-            .get("enabled", True)
+            .get("enabled", False)
         )
 
     @property

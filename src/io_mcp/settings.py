@@ -102,6 +102,29 @@ class Settings:
             return self._config.stt_model_names
         return ["whisper"]
 
+    def get_voice_model_pairs(self) -> list[tuple[str, str]]:
+        """Get all voice+model combinations across TTS models.
+
+        Returns list of (voice_name, model_name) tuples.
+        E.g. [("sage", "gpt-4o-mini-tts"), ("alloy", "gpt-4o-mini-tts"), ...]
+        """
+        if not self._config:
+            return [("sage", "gpt-4o-mini-tts")]
+        pairs = []
+        for model_name in self._config.tts_model_names:
+            model_def = self._config.models.get("tts", {}).get(model_name, {})
+            voice_def = model_def.get("voice", {})
+            for voice in voice_def.get("options", []):
+                pairs.append((voice, model_name))
+        return pairs
+
+    def set_voice_and_model(self, voice: str, model: str) -> None:
+        """Set both voice and TTS model atomically."""
+        if self._config:
+            self._config.set_tts_model(model)
+            self._config.set_tts_voice(voice)
+            self._config.save()
+
     def apply_to_env(self):
         """Push current settings to env vars (legacy compat)."""
         os.environ["TTS_SPEED"] = str(self.speed)

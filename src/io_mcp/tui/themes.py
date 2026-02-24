@@ -251,6 +251,9 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
         display: none;
         border: tall {s['accent']};
         background: {s['bg_alt']};
+        height: auto;
+        max-height: 12;
+        min-height: 3;
     }}
 
     #filter-input {{
