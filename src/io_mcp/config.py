@@ -127,6 +127,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "uiVoice": "en-US-Teo:MAI-Voice-1",
             "speed": 1.3,
             "emotion": "shy",
+            "localBackend": "termux",  # "termux", "espeak", or "none"
             "voiceRotation": [],
             "emotionRotation": [],
         },
@@ -513,6 +514,16 @@ class IoMcpConfig:
     def tts_emotion_rotation(self) -> list[str]:
         """List of emotions to cycle through for multi-session tab assignment."""
         return self.runtime.get("tts", {}).get("emotionRotation", [])
+
+    @property
+    def tts_local_backend(self) -> str:
+        """Local TTS backend for scroll readout fallback.
+
+        "termux" — termux-tts-speak via Android TTS (default, best quality)
+        "espeak" — espeak-ng (robotic but universal)
+        "none"   — no local fallback, always use API TTS
+        """
+        return self.runtime.get("tts", {}).get("localBackend", "termux")
 
     @property
     def tts_voice_options(self) -> list[str]:

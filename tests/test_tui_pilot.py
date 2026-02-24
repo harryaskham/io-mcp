@@ -28,7 +28,7 @@ class MockTTS:
     def speak(self, text, **kwargs): pass
     def speak_async(self, text, **kwargs): pass
     def speak_streaming(self, text, **kwargs): pass
-    def speak_with_espeak_fallback(self, text, **kwargs): pass
+    def speak_with_local_fallback(self, text, **kwargs): pass
     def stop(self): pass
     def play_chime(self, name): pass
     def pregenerate(self, texts): pass

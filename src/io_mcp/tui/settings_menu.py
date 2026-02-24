@@ -48,6 +48,11 @@ class SettingsMixin:
             ui_voice = self._config.tts_ui_voice
         ui_voice_display = f"{ui_voice} ({self.settings.tts_model})" if ui_voice and ui_voice != self.settings.voice else "same as agent"
 
+        # Build local TTS display
+        local_backend = "termux"
+        if self._config:
+            local_backend = self._config.tts_local_backend
+
         self._settings_items = [
             {"label": "Speed", "key": "speed",
              "summary": f"Current: {self.settings.speed:.1f}"},
@@ -59,6 +64,8 @@ class SettingsMixin:
              "summary": f"Current: {self.settings.emotion}"},
             {"label": "STT model", "key": "stt_model",
              "summary": f"Current: {self.settings.stt_model}"},
+            {"label": "Local TTS", "key": "local_tts",
+             "summary": f"Current: {local_backend}"},
             {"label": "Color scheme", "key": "color_scheme",
              "summary": f"Current: {scheme}"},
             {"label": "Close settings", "key": "close", "summary": ""},
@@ -196,6 +203,22 @@ class SettingsMixin:
                 if current in self._setting_edit_values else 0
             )
 
+        elif key == "local_tts":
+            # Available local TTS backends
+            from ..tts import _find_binary
+            values = []
+            if _find_binary("termux-exec"):
+                values.append("termux")
+            if _find_binary("espeak-ng"):
+                values.append("espeak")
+            values.append("none")
+            self._setting_edit_values = values
+            current = self._config.tts_local_backend if self._config else "termux"
+            self._setting_edit_index = (
+                values.index(current)
+                if current in values else 0
+            )
+
         # UI first
         list_view = self.query_one("#choices", ListView)
         list_view.clear()
@@ -258,6 +281,12 @@ class SettingsMixin:
                 self._config.raw.setdefault("config", {})["colorScheme"] = value
                 self._config.save()
             self.title = "io-mcp"
+        elif key == "local_tts":
+            if self._config:
+                self._config.raw.setdefault("config", {}).setdefault("tts", {})["localBackend"] = value
+                self._config.save()
+                # Update the TTS engine's local backend preference
+                self._tts._local_backend = value
 
         self._tts.clear_cache()
 

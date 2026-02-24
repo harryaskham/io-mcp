@@ -121,6 +121,7 @@ config:
     model: gpt-4o-mini-tts
     speed: 1.3
     emotion: happy
+    localBackend: termux      # termux (Android TTS), espeak (espeak-ng), none
     uiVoice: ""             # separate voice for UI narration (settings, prompts)
     voiceRotation: []       # cycle voices across agent tabs
     emotionRotation: []
@@ -330,7 +331,7 @@ register_session(
 - **TUI restart resilience**: backend uses a mutable app reference so tool dispatch survives TUI restarts. Pending `present_choices` calls automatically retry with the new TUI instance
 - **Speech reminders**: tool responses include a reminder if the agent hasn't called `speak_async()` in over 60 seconds, nudging agents to narrate during long operations
 - **Thinking phrases**: ambient updates use playful filler phrases ("Hmm, let me see", "One moment", "Huh, interesting") instead of generic status messages
-- **Espeak fallback**: option scroll readout uses local espeak-ng for instant audio when API TTS isn't cached yet. Full-quality voice plays on cache hit. Agent speech always uses full API TTS.
+- **Local TTS fallback**: option scroll readout uses `termux-tts-speak` (Android native TTS, default) or espeak-ng for instant audio when API TTS isn't cached yet. Full-quality API voice plays on cache hit. Agent speech always uses full API TTS. Configure with `tts.localBackend`: `termux`, `espeak`, or `none`.
 - **Number keys everywhere**: `1`-`9` number selection works in all menus: choices, settings, dashboard, dialogs, spawn menu, tab picker, quick actions, and setting value pickers
 - **Hostname auto-detection**: server detects Tailscale DNS hostname (e.g. `harrys-macbook-pro`) from `tailscale status --json`. Overrides `localhost`, `.local`, or empty hostnames from agents. Only caches good values — retries Tailscale if it initially fails.
 

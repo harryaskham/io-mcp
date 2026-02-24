@@ -377,6 +377,22 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         # Initial health check
         self._update_daemon_status()
 
+    def _safe_call(self, callback, *args) -> bool:
+        """Call callback on the Textual event loop, swallowing 'App is not running'.
+
+        Returns True if the call succeeded, False if the app was not running.
+        Use this for non-critical UI updates (tab bar, speech log, etc.) that
+        should not crash the calling thread during TUI restarts.
+        """
+        try:
+            if args:
+                self.call_from_thread(callback, *args)
+            else:
+                self.call_from_thread(callback)
+            return True
+        except RuntimeError:
+            return False
+
     def _touch_session(self, session: Session) -> None:
         """Update last_activity, safe for old Session objects without the field."""
         try:
@@ -385,7 +401,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             pass
 
     def _update_daemon_status(self) -> None:
-        """Check proxy/backend/API health and store as a status string.
+        """Check proxy/backend/API/PulseAudio health and store as a status string.
 
         Status is displayed in the right side of the tab bar via _update_tab_bar.
         Runs health checks in a background thread to avoid blocking the TUI.
@@ -393,6 +409,22 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         def _check():
             import urllib.request
             import urllib.error
+            import shutil
+
+            # Check PulseAudio via pactl info
+            pls_ok = False
+            pactl = shutil.which("pactl")
+            if pactl:
+                try:
+                    env = os.environ.copy()
+                    env["PULSE_SERVER"] = os.environ.get("PULSE_SERVER", "127.0.0.1")
+                    result = subprocess.run(
+                        [pactl, "info"],
+                        env=env, capture_output=True, timeout=2,
+                    )
+                    pls_ok = result.returncode == 0
+                except Exception:
+                    pass
 
             # Check proxy via PID file
             proxy_ok = False
@@ -436,6 +468,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 return f"[{color}]o[/{color}]"
 
             parts = [
+                f"{_dot(pls_ok)}pls",
                 f"{_dot(proxy_ok)}mcp",
                 f"{_dot(backend_ok)}tui",
                 f"{_dot(api_ok)}api",
@@ -1007,6 +1040,11 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         """
         try:
             return self._present_choices_inner(session, preamble, choices)
+        except RuntimeError as exc:
+            if "App is not running" in str(exc):
+                # TUI is restarting — signal the tool dispatch to retry
+                return {"selected": "_restart", "summary": "TUI restarting"}
+            raise
         except Exception as exc:
             import traceback
             err = f"{type(exc).__name__}: {str(exc)[:200]}"
@@ -1053,7 +1091,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         session.enqueue(item)
 
         # Update tab bar to show inbox count
-        self.call_from_thread(self._update_tab_bar)
+        self._safe_call(self._update_tab_bar)
 
         # ── Drain loop: wait for our turn, then present ──
         while True:
@@ -1068,7 +1106,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
                 # Wake up the next queued item (if any) by re-checking
                 # The next item's thread will see itself at the front
-                self.call_from_thread(self._update_tab_bar)
+                self._safe_call(self._update_tab_bar)
 
                 return result
 
@@ -1125,7 +1163,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 status = self.query_one("#status", Label)
                 status.update(f"[dim]Conversation mode[/dim] [{self._cs['blue']}](c to exit)[/{self._cs['blue']}]")
                 status.display = True
-            self.call_from_thread(_show_convo)
+            self._safe_call(_show_convo)
 
             # Speak preamble only (no options readout)
             self._fg_speaking = True
@@ -1137,7 +1175,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
             # Check if conversation mode is still active (user might have pressed c)
             if self._conversation_mode and session.active:
-                self.call_from_thread(self._start_voice_recording)
+                self._safe_call(self._start_voice_recording)
 
             # Block until selection (voice recording will set it)
             item.event.wait()
@@ -1147,7 +1185,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             session.last_tool_call = _time.time()
             session.ambient_count = 0
 
-            self.call_from_thread(self._update_tab_bar)
+            self._safe_call(self._update_tab_bar)
             return item.result or session.selection or {"selected": "timeout", "summary": ""}
 
         # ── Normal mode: full choice presentation ──
@@ -1175,10 +1213,10 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         # Show UI immediately if this is the focused session
         if is_fg:
-            self.call_from_thread(self._show_choices)
+            self._safe_call(self._show_choices)
 
         # Update tab bar (session now has active choices indicator)
-        self.call_from_thread(self._update_tab_bar)
+        self._safe_call(self._update_tab_bar)
 
         # Pregenerate per-option clips in background
         bg_texts = (
@@ -1244,7 +1282,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         session.last_tool_call = _time.time()
         session.ambient_count = 0
 
-        self.call_from_thread(self._update_tab_bar)
+        self._safe_call(self._update_tab_bar)
 
         return item.result or session.selection or {"selected": "timeout", "summary": ""}
 
@@ -1594,10 +1632,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         # Update speech log UI if this is the focused session
         if self._is_focused(session.session_id):
-            try:
-                self.call_from_thread(self._update_speech_log)
-            except Exception:
-                pass
+            self._safe_call(self._update_speech_log)
 
         if self._is_focused(session.session_id):
             # Foreground: play immediately
@@ -2767,7 +2802,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                     self._last_spoken_text = text
                     self._last_spoken_time = now
                     # Use espeak fallback for instant readout when scrolling options
-                    self._tts.speak_with_espeak_fallback(text)
+                    self._tts.speak_with_local_fallback(text)
 
             if self._dwell_time > 0:
                 self._start_dwell()

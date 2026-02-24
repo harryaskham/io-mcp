@@ -526,6 +526,12 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
                 session = _get_session(session_id)
                 session.last_tool_name = "present_choices"
                 continue
+            if result.get("selected") == "error" and "App is not running" in result.get("summary", ""):
+                # TUI crashed mid-presentation — treat as restart
+                _time.sleep(3.0)
+                session = _get_session(session_id)
+                session.last_tool_name = "present_choices"
+                continue
             break
 
         return _attach_messages(json.dumps(result), session) + _registration_reminder(session)

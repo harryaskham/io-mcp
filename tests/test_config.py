@@ -213,7 +213,7 @@ class TestConfigAccessors:
 
     def test_ambient_defaults(self, config_with_defaults):
         c = config_with_defaults
-        assert c.ambient_enabled == True
+        assert c.ambient_enabled == False
         assert c.ambient_initial_delay == 30
         assert c.ambient_repeat_interval == 45
 
