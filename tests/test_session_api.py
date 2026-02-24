@@ -770,3 +770,149 @@ class TestTabBarInboxBadge:
         text_after = m.tab_bar_text()
         # Now only 1 item, no +N badge
         assert "+1" not in text_after or "o+0" not in text_after
+
+
+class TestDedupAndEnqueue:
+    """Tests for Session.dedup_and_enqueue() — atomic dedup + enqueue."""
+
+    def test_basic_enqueue(self):
+        """A single item is enqueued normally."""
+        s = Session(session_id="test-1", name="Agent 1")
+        item = InboxItem(kind="choices", preamble="Pick one",
+                         choices=[{"label": "A"}, {"label": "B"}])
+        assert s.dedup_and_enqueue(item) is True
+        assert len(s.inbox) == 1
+        assert not item.done
+
+    def test_cancels_pending_duplicate(self):
+        """An identical pending item is cancelled when a new one arrives."""
+        s = Session(session_id="test-1", name="Agent 1")
+        choices = [{"label": "A"}, {"label": "B"}]
+        item1 = InboxItem(kind="choices", preamble="Pick", choices=list(choices))
+        s.enqueue(item1)  # bypass dedup for setup
+
+        # Reset dedup log so the timestamp window doesn't interfere
+        s._inbox_dedup_log.clear()
+
+        item2 = InboxItem(kind="choices", preamble="Pick", choices=list(choices))
+        assert s.dedup_and_enqueue(item2) is True
+
+        # item1 should have been superseded
+        assert item1.done is True
+        assert item1.result["selected"] == "_restart"
+        assert item1.event.is_set()
+
+        # item2 is now in the queue
+        assert len(s.inbox) == 2  # both in deque, but item1 is done
+        assert not item2.done
+
+    def test_dedup_window_suppresses_rapid_duplicate(self):
+        """A duplicate within the dedup window is suppressed (not enqueued)."""
+        s = Session(session_id="test-1", name="Agent 1")
+        choices = [{"label": "X"}]
+        item1 = InboxItem(kind="choices", preamble="Go", choices=list(choices))
+        assert s.dedup_and_enqueue(item1) is True
+
+        # Resolve item1 so it's done — simulates normal completion
+        item1.result = {"selected": "X"}
+        item1.done = True
+        item1.event.set()
+
+        # Now enqueue an identical item immediately (within 2s window)
+        item2 = InboxItem(kind="choices", preamble="Go", choices=list(choices))
+        assert s.dedup_and_enqueue(item2) is False
+        assert item2.done is True
+        assert item2.result["selected"] == "_restart"
+        assert "dedup window" in item2.result["summary"].lower()
+
+    def test_different_choices_not_deduped(self):
+        """Items with different choices are enqueued normally."""
+        s = Session(session_id="test-1", name="Agent 1")
+        item1 = InboxItem(kind="choices", preamble="Pick",
+                          choices=[{"label": "A"}])
+        item2 = InboxItem(kind="choices", preamble="Pick",
+                          choices=[{"label": "B"}])
+        assert s.dedup_and_enqueue(item1) is True
+        assert s.dedup_and_enqueue(item2) is True
+        assert len(s.inbox) == 2
+
+    def test_different_preamble_not_deduped(self):
+        """Items with different preambles are enqueued normally."""
+        s = Session(session_id="test-1", name="Agent 1")
+        choices = [{"label": "A"}]
+        item1 = InboxItem(kind="choices", preamble="First prompt",
+                          choices=list(choices))
+        item2 = InboxItem(kind="choices", preamble="Second prompt",
+                          choices=list(choices))
+        assert s.dedup_and_enqueue(item1) is True
+        assert s.dedup_and_enqueue(item2) is True
+        assert len(s.inbox) == 2
+
+    def test_dedup_window_expires(self):
+        """After the dedup window expires, identical items are allowed."""
+        s = Session(session_id="test-1", name="Agent 1")
+        s._inbox_dedup_window_secs = 0.05  # 50ms for fast test
+        choices = [{"label": "A"}]
+
+        item1 = InboxItem(kind="choices", preamble="Go", choices=list(choices))
+        assert s.dedup_and_enqueue(item1) is True
+
+        # Wait for window to expire
+        time.sleep(0.1)
+
+        item2 = InboxItem(kind="choices", preamble="Go", choices=list(choices))
+        assert s.dedup_and_enqueue(item2) is True
+        # item1 should be cancelled (pending duplicate logic)
+        assert item1.done is True
+
+    def test_concurrent_threads_no_duplicates(self):
+        """Multiple threads enqueuing identical choices don't create duplicates."""
+        s = Session(session_id="test-1", name="Agent 1")
+        choices = [{"label": "A"}, {"label": "B"}]
+        results = []
+        barrier = threading.Barrier(5)
+
+        def try_enqueue(idx):
+            item = InboxItem(kind="choices", preamble="Pick",
+                             choices=list(choices))
+            barrier.wait()  # synchronize start
+            enqueued = s.dedup_and_enqueue(item)
+            results.append((idx, enqueued, item))
+
+        threads = [threading.Thread(target=try_enqueue, args=(i,))
+                   for i in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=5)
+
+        # Exactly one should be enqueued, rest should be suppressed
+        enqueued_count = sum(1 for _, e, _ in results if e)
+        suppressed_count = sum(1 for _, e, _ in results if not e)
+        assert enqueued_count == 1, f"Expected 1 enqueued, got {enqueued_count}"
+        assert suppressed_count == 4, f"Expected 4 suppressed, got {suppressed_count}"
+
+        # All suppressed items should have _restart result
+        for _, enqueued, item in results:
+            if not enqueued:
+                assert item.done is True
+                assert item.result["selected"] == "_restart"
+
+    def test_dedup_log_pruning(self):
+        """Old dedup log entries are cleaned up."""
+        s = Session(session_id="test-1", name="Agent 1")
+        # Pre-populate with old entries
+        old_time = time.time() - 120  # 2 minutes ago
+        s._inbox_dedup_log[("old", ("X",))] = old_time
+        s._inbox_dedup_log[("also_old", ("Y",))] = old_time
+
+        # Enqueue a new item — should trigger pruning
+        item = InboxItem(kind="choices", preamble="New",
+                         choices=[{"label": "Z"}])
+        s.dedup_and_enqueue(item)
+
+        # Old entries should be pruned
+        assert ("old", ("X",)) not in s._inbox_dedup_log
+        assert ("also_old", ("Y",)) not in s._inbox_dedup_log
+        # New entry should exist
+        assert ("New", ("Z",)) in s._inbox_dedup_log

@@ -1238,33 +1238,25 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         and enqueues it. If we're at the front of the queue, we present
         choices immediately. If not, we wait until it's our turn.
 
-        Before enqueuing, any existing pending items for this session are
-        auto-resolved as cancelled to prevent duplicates from MCP retries.
+        Before enqueuing, duplicate items are detected and suppressed via
+        Session.dedup_and_enqueue() which holds a per-session mutex to
+        prevent race conditions between concurrent threads.
         """
         import time as _time
 
         self._touch_session(session)
 
-        # ── Cancel duplicate retries for this session ──
-        # Only cancel pending items with identical preamble+choices (MCP retries).
-        # Genuinely new choices from different calls queue normally.
-        new_labels = tuple(c.get("label", "") for c in choices)
-        cancelled = False
-        for existing in list(session.inbox):
-            if existing.done:
-                continue
-            existing_labels = tuple(c.get("label", "") for c in existing.choices)
-            if existing.preamble == preamble and existing_labels == new_labels:
-                existing.result = {"selected": "_restart", "summary": "Superseded by retry"}
-                existing.done = True
-                existing.event.set()
-                cancelled = True
-        if cancelled:
-            session.drain_kick.set()
-
-        # Create and enqueue our inbox item
+        # Create and atomically dedup+enqueue our inbox item.
+        # dedup_and_enqueue() handles:
+        #   1. Cancelling pending items with identical preamble+choices
+        #   2. Timestamp-based dedup window to suppress rapid duplicates
+        #   3. Thread-safe locking so concurrent calls don't both pass the check
         item = InboxItem(kind="choices", preamble=preamble, choices=list(choices))
-        session.enqueue(item)
+        enqueued = session.dedup_and_enqueue(item)
+
+        if not enqueued:
+            # Item was suppressed as a duplicate — return the pre-set result
+            return item.result or {"selected": "_restart", "summary": "Duplicate suppressed"}
 
         # Update tab bar to show inbox count
         self._safe_call(self._update_tab_bar)

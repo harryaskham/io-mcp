@@ -70,6 +70,15 @@ class Session:
     session_id: str                          # MCP session ID (UUID for streamable-http)
     name: str                                # "Agent 1", "Agent 2", ...
 
+    # ── Inbox concurrency control ───────────────────────────────────
+    # Guards dedup-check + enqueue so concurrent threads can't both
+    # pass the duplicate check before either has enqueued.
+    _inbox_lock: threading.Lock = field(default_factory=threading.Lock)
+    # Timestamp-based dedup: (preamble, choice_labels_tuple) → timestamp
+    # of the last enqueue.  Items within the dedup window are dropped.
+    _inbox_dedup_log: dict = field(default_factory=dict)
+    _inbox_dedup_window_secs: float = 2.0  # seconds
+
     # ── Choice state ──────────────────────────────────────────────
     preamble: str = ""
     choices: list[dict] = field(default_factory=list)
@@ -143,6 +152,67 @@ class Session:
     def enqueue(self, item: InboxItem) -> None:
         """Add an item to the inbox queue."""
         self.inbox.append(item)
+
+    def dedup_and_enqueue(self, item: InboxItem) -> bool:
+        """Atomically check for duplicates and enqueue a choices item.
+
+        Under the inbox lock:
+        1. Cancel any pending items with identical preamble+choice labels
+           (MCP retries that haven't been presented yet).
+        2. Check the timestamp-based dedup window — if an identical item
+           was enqueued within the last ``_inbox_dedup_window_secs`` seconds,
+           mark this item as a duplicate and don't enqueue it.
+        3. Otherwise enqueue normally and record the timestamp.
+
+        Returns True if the item was enqueued, False if it was suppressed
+        as a duplicate (the caller should return a ``_restart`` result).
+        """
+        key = (item.preamble, tuple(c.get("label", "") for c in item.choices))
+
+        with self._inbox_lock:
+            now = time.time()
+
+            # ── Cancel pending items with identical content (MCP retries) ──
+            for existing in list(self.inbox):
+                if existing.done:
+                    continue
+                existing_key = (
+                    existing.preamble,
+                    tuple(c.get("label", "") for c in existing.choices),
+                )
+                if existing_key == key:
+                    existing.result = {
+                        "selected": "_restart",
+                        "summary": "Superseded by retry",
+                    }
+                    existing.done = True
+                    existing.event.set()
+
+            # ── Timestamp-based dedup window ──
+            last_enqueue = self._inbox_dedup_log.get(key, 0.0)
+            if now - last_enqueue < self._inbox_dedup_window_secs:
+                # Another identical set was just enqueued — suppress this one
+                item.result = {
+                    "selected": "_restart",
+                    "summary": "Duplicate within dedup window",
+                }
+                item.done = True
+                item.event.set()
+                return False
+
+            # ── Enqueue and record timestamp ──
+            self._inbox_dedup_log[key] = now
+            self.inbox.append(item)
+
+            # Prune old dedup log entries (keep last 60 seconds)
+            cutoff = now - 60.0
+            self._inbox_dedup_log = {
+                k: ts
+                for k, ts in self._inbox_dedup_log.items()
+                if ts > cutoff
+            }
+
+            return True
 
     def peek_inbox(self) -> Optional[InboxItem]:
         """Get the next unresolved inbox item without removing it.
