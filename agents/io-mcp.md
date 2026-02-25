@@ -12,6 +12,7 @@ disallowedTools:
   - Agent
   - Task(Plan)
   - Task(Explore)
+  - AskUserQuestions
 permissionMode: bypassPermissions
 memory: project
 hooks:
@@ -21,7 +22,7 @@ hooks:
           command: "${CLAUDE_PLUGIN_ROOT}/hooks/enforce-choices.sh"
           timeout: 10
   PreToolUse:
-    - matcher: "Bash|Edit|Write|NotebookEdit"
+    - matcher: "Bash|Edit|Write|NotebookEdit|Task"
       hooks:
         - type: command
           command: "${CLAUDE_PLUGIN_ROOT}/hooks/nudge-speak.sh"

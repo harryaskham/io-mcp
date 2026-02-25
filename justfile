@@ -17,3 +17,9 @@ dev-desktop *FLAGS:
 # Desktop with default config
 default-desktop *FLAGS:
     just dev-desktop --default-config {{ FLAGS }}
+
+tmux *FLAGS:
+    tmux new -A -s io-mcp-tui "while true; do just dev-desktop {{ FLAGS }}; sleep 3; done"
+
+rmconfig:
+    rm $HOME/.config/io-mcp/config.yml || true

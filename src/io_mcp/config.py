@@ -97,7 +97,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "gpt-4o-mini-tts": {
                 "provider": "openai",
                 "voice": {
-                    "default": "sage",
+                    "default": "shimmer",
                     "options": [
                         "alloy", "ash", "ballad", "coral", "echo",
                         "fable", "onyx", "nova", "sage", "shimmer", "verse",
@@ -123,14 +123,32 @@ DEFAULT_CONFIG: dict[str, Any] = {
         },
         "tts": {
             "model": "gpt-4o-mini-tts",
-            "voice": "sage",
-            "uiVoice": "",
+            "voice": "shimmer",
+            "uiVoice": "alloy",
             "speed": 1.3,
-            "emotion": "friendly",
+            "style": "friendly",
             "styleDegree": None,               # Azure Speech style intensity (0.01-2.0, None=default)
-            "localBackend": "termux",  # "termux", "espeak", or "none"
-            "voiceRotation": [],
-            "emotionRotation": [],
+            "localBackend": "espeak",  # "termux", "espeak", or "none"
+            "voiceRotation": [
+                {"voice": "alloy", "model": "gpt-4o-mini-tts"},
+                {"voice": "ash", "model": "gpt-4o-mini-tts"},
+                {"voice": "ballad", "model": "gpt-4o-mini-tts"},
+                {"voice": "coral", "model": "gpt-4o-mini-tts"},
+                {"voice": "echo", "model": "gpt-4o-mini-tts"},
+                {"voice": "fable", "model": "gpt-4o-mini-tts"},
+                {"voice": "onyx", "model": "gpt-4o-mini-tts"},
+                {"voice": "nova", "model": "gpt-4o-mini-tts"},
+                {"voice": "sage", "model": "gpt-4o-mini-tts"},
+                {"voice": "shimmer", "model": "gpt-4o-mini-tts"},
+                {"voice": "verse", "model": "gpt-4o-mini-tts"},
+                {"voice": "en-US-Noa:MAI-Voice-1", "model": "mai-voice-1"},
+                {"voice": "en-US-Teo:MAI-Voice-1", "model": "mai-voice-1"},
+            ],
+            "styleRotation": [
+                "happy", "calm", "excited", "serious", "friendly",
+                "neutral", "storyteller", "gentle", "shy",
+                "empathetic", "encouraging", "confused", "sad", "surprised", "curious",
+            ],
         },
         "stt": {
             "model": "whisper",
@@ -189,9 +207,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "spawnAgent": "t",
             "multiSelect": "x",
             "conversationMode": "c",
-            "dashboard": "d",
-            "unifiedInbox": "a",
-            "agentLog": "g",
+            "paneView": "v",
+            "toggleSidebar": "b",
             "hotReload": "r",
             "quit": "q",
         },
@@ -199,31 +216,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "enabled": False,
         },
     },
-    "emotionPresets": {
-        "openai": {
-            "happy": "Speak in a warm, cheerful, and upbeat tone. Sound genuinely pleased and positive.",
-            "calm": "Speak in a soothing, relaxed, and measured tone. Be gentle and unhurried.",
-            "excited": "Speak with high energy and enthusiasm. Sound genuinely thrilled and animated.",
-            "serious": "Speak in a focused, professional, and matter-of-fact tone. Be clear and direct.",
-            "friendly": "Speak in a warm, conversational, and approachable tone. Like talking to a good friend.",
-            "neutral": "Speak in a natural, even tone without strong emotion.",
-            "storyteller": "Speak like a captivating narrator. Vary pace and emphasis for dramatic effect.",
-            "gentle": "Speak softly and kindly, as if comforting someone. Warm and tender.",
-            "shy": "Speak in a soft, quiet whisper. Be hesitant and gentle, as if sharing a secret. Keep volume low and intimate.",
-        },
-        "azure-speech": {
-            "empathetic": "empathetic",
-            "excited": "excitement",
-            "happy": "joy",
-            "friendly": "friendly",
-            "neutral": "neutral",
-            "encouraging": "encouragement",
-            "confused": "confusion",
-            "sad": "sadness",
-            "surprised": "surprise",
-            "curious": "curiosity",
-        },
-    },
+    "styles": [
+        "happy", "calm", "excited", "serious", "friendly",
+        "neutral", "storyteller", "gentle", "shy",
+        "empathetic", "encouraging", "confused", "sad", "surprised", "curious",
+    ],
 }
 
 
@@ -411,11 +408,12 @@ class IoMcpConfig:
                 if provider and provider not in self.raw.get("providers", {}):
                     warnings.append(f"Model '{name}' references provider '{provider}' which is not defined")
 
-        # Check emotion preset exists (provider-aware)
-        emotion = self.runtime.get("tts", {}).get("emotion", "")
-        presets = self._emotion_presets_for_provider()
-        if emotion and presets and emotion not in presets:
-            # Not an error — could be a custom instruction string
+        # Check style exists in styles list
+        style = self.runtime.get("tts", {}).get("style",
+                self.runtime.get("tts", {}).get("emotion", ""))
+        styles = self.expanded.get("styles", [])
+        if style and styles and style not in styles:
+            # Not an error — could be a custom style name
             pass
 
         # Check speed is in valid range
@@ -562,7 +560,13 @@ class IoMcpConfig:
 
     @property
     def tts_emotion(self) -> str:
-        return self.runtime.get("tts", {}).get("emotion", "neutral")
+        # Legacy alias — reads "style" first, falls back to "emotion" for migration
+        return self.runtime.get("tts", {}).get("style",
+               self.runtime.get("tts", {}).get("emotion", "neutral"))
+
+    @property
+    def tts_style(self) -> str:
+        return self.tts_emotion
 
     @property
     def tts_style_degree(self) -> float | None:
@@ -572,37 +576,20 @@ class IoMcpConfig:
             return float(val)
         return None
 
-    def _emotion_presets_for_provider(self, provider: str | None = None) -> dict[str, str]:
-        """Get emotion presets for the given (or current) TTS provider.
+    @property
+    def tts_style_options(self) -> list[str]:
+        """Available style names from the top-level 'styles' list."""
+        return list(self.expanded.get("styles", []))
 
-        The emotionPresets config is keyed by provider name (e.g. "openai",
-        "azure-speech").  Falls back to "openai" presets, then to a flat
-        (legacy) dict if present.
-        """
-        all_presets = self.expanded.get("emotionPresets", {})
-        prov = provider or self.tts_provider_name
-
-        # New per-provider structure: {"openai": {...}, "azure-speech": {...}}
-        if all_presets and isinstance(next(iter(all_presets.values()), None), dict):
-            return dict(all_presets.get(prov, all_presets.get("openai", {})))
-
-        # Legacy flat structure: {"happy": "...", "calm": "..."}
-        return dict(all_presets)
+    # Legacy aliases
+    @property
+    def emotion_preset_names(self) -> list[str]:
+        return self.tts_style_options
 
     @property
     def tts_instructions(self) -> str:
-        """Get the TTS instructions text for the current emotion preset."""
-        emotion = self.tts_emotion
-        presets = self._emotion_presets_for_provider()
-        # If the emotion matches a preset, use its text
-        if emotion in presets:
-            return presets[emotion]
-        # Otherwise treat the emotion value itself as custom instructions
-        return emotion
-
-    @property
-    def emotion_preset_names(self) -> list[str]:
-        return list(self._emotion_presets_for_provider().keys())
+        """Legacy — just return the style name."""
+        return self.tts_style
 
     @property
     def tts_voice_rotation(self) -> list[dict]:
@@ -626,8 +613,16 @@ class IoMcpConfig:
 
     @property
     def tts_emotion_rotation(self) -> list[str]:
-        """List of emotions to cycle through for multi-session tab assignment."""
-        return self.runtime.get("tts", {}).get("emotionRotation", [])
+        """List of styles to cycle through for multi-session tab assignment.
+        Reads 'styleRotation' first, falls back to legacy 'emotionRotation'.
+        """
+        tts = self.runtime.get("tts", {})
+        return tts.get("styleRotation", tts.get("emotionRotation", []))
+
+    @property
+    def tts_style_rotation(self) -> list[str]:
+        """Alias for tts_emotion_rotation."""
+        return self.tts_emotion_rotation
 
     @property
     def tts_local_backend(self) -> str:
@@ -1011,9 +1006,13 @@ class IoMcpConfig:
         self.expanded = _expand_config(self.raw)
 
     def set_tts_emotion(self, emotion: str) -> None:
-        """Set the TTS emotion preset (or custom instructions)."""
-        self.raw.setdefault("config", {}).setdefault("tts", {})["emotion"] = emotion
+        """Set the TTS style (legacy name: emotion)."""
+        self.raw.setdefault("config", {}).setdefault("tts", {})["style"] = emotion
         self.expanded = _expand_config(self.raw)
+
+    def set_tts_style(self, style: str) -> None:
+        """Set the TTS style."""
+        self.set_tts_emotion(style)
 
     def set_stt_model(self, model_name: str) -> None:
         """Set the STT model."""
@@ -1035,14 +1034,8 @@ class IoMcpConfig:
         Returns the full argument list (excluding the 'tts' binary itself).
         Optional overrides for voice/emotion/model (used for per-session rotation).
 
-        Emotion handling:
-        - ``--style <name>`` is sent for both providers when an emotion preset
-          name is active.  For azure-speech this maps to SSML express-as style;
-          for openai the tts CLI auto-generates instructions from it.
-        - ``--instructions <text>`` is additionally sent for openai when we have
-          detailed preset text (more expressive than the auto-generated version).
-        - Custom freeform emotion text uses ``--instructions`` for openai and
-          ``--style`` for azure-speech.
+        Style handling: always passes ``--style <name>`` for both providers.
+        The tts CLI handles OpenAI instructions and Azure SSML internally.
         """
         model_name = model_override or self.tts_model_name
         model_def = self.models.get("tts", {}).get(model_name, {})
@@ -1067,30 +1060,12 @@ class IoMcpConfig:
 
         args.extend(["--speed", str(self.tts_speed)])
 
-        # Resolve emotion to preset value or use raw text
-        emotion = emotion_override or self.tts_emotion
-        presets = self._emotion_presets_for_provider()
-        is_preset = emotion in presets if emotion else False
-        resolved = presets.get(emotion, emotion) if emotion else None
+        # Style: just pass --style for both providers
+        style = emotion_override or self.tts_style
+        if style:
+            args.extend(["--style", style])
 
-        if is_preset:
-            # Named preset: always send --style (works for both providers)
-            args.extend(["--style", resolved])
-            # For OpenAI: also send --instructions with the full preset text
-            # from the openai presets (more expressive than auto-generated)
-            if provider not in ("azure-speech",):
-                openai_presets = self._emotion_presets_for_provider("openai")
-                openai_text = openai_presets.get(emotion)
-                if openai_text:
-                    args.extend(["--instructions", openai_text])
-        elif resolved:
-            # Custom freeform text: route to the right flag
-            if provider == "azure-speech":
-                args.extend(["--style", resolved])
-            else:
-                args.extend(["--instructions", resolved])
-
-        # Azure Speech: add --style-degree for emotion intensity control
+        # Azure Speech: add --style-degree for style intensity control
         style_degree = self.tts_style_degree
         if style_degree is not None and "--style" in args:
             args.extend(["--style-degree", str(style_degree)])

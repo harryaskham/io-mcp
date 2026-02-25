@@ -60,7 +60,7 @@ class SettingsMixin:
              "summary": f"Current: {current_voice}"},
             {"label": "UI voice", "key": "ui_voice",
              "summary": f"Current: {ui_voice_display}"},
-            {"label": "Emotion", "key": "emotion",
+            {"label": "Style", "key": "style",
              "summary": f"Current: {self.settings.emotion}"},
             {"label": "STT model", "key": "stt_model",
              "summary": f"Current: {self.settings.stt_model}"},
@@ -109,13 +109,8 @@ class SettingsMixin:
         self._setting_edit_mode = False
         self._spawn_options = None
         self._quick_action_options = None
-        self._dashboard_mode = False
-        self._dashboard_action_mode = False
-        self._dashboard_action_target = None
-        self._log_viewer_mode = False
         self._system_logs_mode = False
         self._help_mode = False
-        self._unified_inbox_mode = False
         self._history_mode = False
         self._tab_picker_mode = False
         self._quick_settings_mode = False
@@ -203,7 +198,7 @@ class SettingsMixin:
                         self._setting_edit_index = i
                         break
 
-        elif key == "emotion":
+        elif key == "style":
             self._setting_edit_values = self.settings.get_emotions()
             current = self.settings.emotion
             self._setting_edit_index = (
@@ -292,7 +287,7 @@ class SettingsMixin:
                         # "same as agent" — clear uiVoice
                         self._config.raw.setdefault("config", {}).setdefault("tts", {})["uiVoice"] = ""
                     self._config.save()
-        elif key == "emotion":
+        elif key == "style":
             self.settings.emotion = value
         elif key == "stt_model":
             self.settings.stt_model = value

@@ -74,6 +74,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         Binding("x", "multi_select_toggle", "Multi", show=False),
         Binding("c", "toggle_conversation", "Chat", show=False),
         Binding("v", "pane_view", "Pane", show=False),
+        Binding("b", "toggle_sidebar", "Sidebar", show=False),
         Binding("question_mark", "show_help", "Help", show=False),
         Binding("r", "hot_reload", "Refresh", show=False),
         Binding("1", "pick_1", "", show=False),
@@ -3286,6 +3287,25 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             self._switch_to_session(new_session)
         else:
             self._speak_ui("No other tabs with choices")
+
+    def action_toggle_sidebar(self) -> None:
+        """Toggle the inbox sidebar collapsed/expanded."""
+        session = self._focused()
+        if session and (session.input_mode or session.voice_recording):
+            return
+        if self._inbox_collapsed:
+            self._inbox_collapsed = False
+            self._update_inbox_list()
+            self._speak_ui("Inbox expanded")
+        else:
+            self._inbox_collapsed = True
+            try:
+                self.query_one("#inbox-list").display = False
+            except Exception:
+                pass
+            self._inbox_pane_focused = False
+            self.query_one("#choices", ListView).focus()
+            self._speak_ui("Inbox collapsed")
 
     # ─── Session lifecycle ─────────────────────────────────────────
 

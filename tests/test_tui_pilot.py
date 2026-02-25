@@ -495,10 +495,6 @@ async def test_clear_all_modal_state_resets_settings():
         # Simulate being deep in nested settings state
         app._in_settings = True
         app._setting_edit_mode = True
-        app._dashboard_mode = True
-        app._dashboard_action_mode = True
-        app._dashboard_action_target = "some-id"
-        app._log_viewer_mode = True
         app._help_mode = True
         app._history_mode = True
         app._tab_picker_mode = True
@@ -516,10 +512,6 @@ async def test_clear_all_modal_state_resets_settings():
 
         assert app._in_settings is False
         assert app._setting_edit_mode is False
-        assert app._dashboard_mode is False
-        assert app._dashboard_action_mode is False
-        assert app._dashboard_action_target is None
-        assert app._log_viewer_mode is False
         assert app._help_mode is False
         assert app._history_mode is False
         assert app._tab_picker_mode is False

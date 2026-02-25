@@ -654,12 +654,12 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
         return f"STT model set to {model}"
 
     def _tool_set_emotion(args, session_id):
-        emotion = args.get("emotion", "")
+        style = args.get("emotion", "")
         if frontend.config:
-            frontend.config.set_tts_emotion(emotion)
+            frontend.config.set_tts_style(style)
             frontend.config.save()
             frontend.tts.clear_cache()
-        return f"Emotion set to: {emotion}"
+        return f"Style set to: {style}"
 
     def _tool_get_settings(args, session_id):
         if frontend.config:
@@ -667,10 +667,10 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
                 "tts_model": frontend.config.tts_model_name,
                 "tts_voice": frontend.config.tts_voice,
                 "tts_speed": frontend.config.tts_speed,
-                "tts_emotion": frontend.config.tts_emotion,
+                "tts_style": frontend.config.tts_style,
                 "tts_voice_options": frontend.config.tts_voice_options,
                 "tts_models": frontend.config.tts_model_names,
-                "emotion_presets": frontend.config.emotion_preset_names,
+                "styles": frontend.config.tts_style_options,
                 "stt_model": frontend.config.stt_model_name,
                 "stt_models": frontend.config.stt_model_names,
             })
@@ -751,7 +751,7 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
                 "tts_model": frontend.config.tts_model_name,
                 "tts_voice": frontend.config.tts_voice,
                 "tts_speed": frontend.config.tts_speed,
-                "tts_emotion": frontend.config.tts_emotion,
+                "tts_style": frontend.config.tts_style,
                 "stt_model": frontend.config.stt_model_name,
             })
         return json.dumps({"status": "no config to reload"})

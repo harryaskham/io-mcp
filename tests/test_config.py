@@ -242,7 +242,7 @@ class TestConfigAccessors:
     def test_tts_defaults(self, config_with_defaults):
         c = config_with_defaults
         assert c.tts_model_name == "gpt-4o-mini-tts"
-        assert c.tts_voice == "sage"
+        assert c.tts_voice == "shimmer"
         assert c.tts_speed == 1.3
         assert c.tts_provider_name == "openai"
 
@@ -267,61 +267,48 @@ class TestConfigAccessors:
         # Default model is now gpt-4o-mini-tts → openai voices
         assert "sage" in options
 
-    def test_emotion_defaults(self, config_with_defaults):
+    def test_style_defaults(self, config_with_defaults):
         c = config_with_defaults
-        assert c.tts_emotion == "friendly"
-        assert "friendly" in c.emotion_preset_names
-        assert "neutral" in c.emotion_preset_names
+        assert c.tts_style == "friendly"
+        assert c.tts_emotion == "friendly"  # legacy alias
+        assert "friendly" in c.tts_style_options
+        assert "neutral" in c.tts_style_options
 
-    def test_tts_instructions_from_preset(self, config_with_defaults):
+    def test_tts_instructions_returns_style_name(self, config_with_defaults):
         c = config_with_defaults
-        # Default provider is now openai, default emotion is "friendly"
-        # openai presets map to full text instructions
-        instructions = c.tts_instructions
-        assert "friendly" in instructions.lower() or "conversational" in instructions.lower()
+        # tts_instructions now just returns the style name
+        assert c.tts_instructions == "friendly"
 
-    def test_per_provider_presets_azure(self, config_with_defaults):
-        """Azure-speech presets return SSML style names."""
+    def test_styles_list_has_all_entries(self, config_with_defaults):
+        """Styles list contains entries from both old OpenAI and Azure presets."""
         c = config_with_defaults
-        # Switch to mai-voice-1 to test azure-speech provider presets
-        c.set_tts_model("mai-voice-1")
-        assert c.tts_provider_name == "azure-speech"
-        presets = c._emotion_presets_for_provider()
-        assert presets["happy"] == "joy"
-        assert presets["excited"] == "excitement"
-        assert presets["friendly"] == "friendly"
-        assert "shy" not in presets  # shy is only in openai presets
+        styles = c.tts_style_options
+        # From old OpenAI presets
+        assert "shy" in styles
+        assert "calm" in styles
+        assert "storyteller" in styles
+        # From old Azure presets
+        assert "curious" in styles
+        assert "empathetic" in styles
 
-    def test_per_provider_presets_openai(self, config_with_defaults):
-        """OpenAI presets return full text instructions."""
+    def test_emotion_preset_names_is_style_alias(self, config_with_defaults):
+        """emotion_preset_names returns same as tts_style_options (legacy compat)."""
         c = config_with_defaults
-        # Default model is now gpt-4o-mini-tts → openai provider
-        assert c.tts_provider_name == "openai"
-        presets = c._emotion_presets_for_provider()
-        assert "warm" in presets["happy"].lower()
-        assert "shy" in presets
+        assert c.emotion_preset_names == c.tts_style_options
 
-    def test_emotion_preset_names_provider_aware(self, config_with_defaults):
-        """emotion_preset_names returns names for the current provider."""
-        c = config_with_defaults
-        # Default is now openai provider
-        oa_names = c.emotion_preset_names
-        assert "shy" in oa_names
-        assert "calm" in oa_names
-        # curious is azure-speech-only
-        assert "curious" not in oa_names
+    def test_style_rotation_defaults_populated(self, config_with_defaults):
+        voice_rot = config_with_defaults.tts_voice_rotation
+        assert len(voice_rot) == 13  # 11 openai + 2 azure
+        assert voice_rot[0]["voice"] == "alloy"
+        assert voice_rot[-1]["model"] == "mai-voice-1"
 
-        # Switch to azure-speech
-        c.set_tts_model("mai-voice-1")
-        az_names = c.emotion_preset_names
-        assert "curious" in az_names
-        assert "empathetic" in az_names
-        # shy is openai-only
-        assert "shy" not in az_names
+        style_rot = config_with_defaults.tts_style_rotation
+        assert len(style_rot) == 15
+        assert "friendly" in style_rot
+        assert "curious" in style_rot
 
-    def test_voice_rotation_default_empty(self, config_with_defaults):
-        assert config_with_defaults.tts_voice_rotation == []
-        assert config_with_defaults.tts_emotion_rotation == []
+        # Legacy alias
+        assert config_with_defaults.tts_emotion_rotation == style_rot
 
     def test_extra_options_default_empty(self, config_with_defaults):
         # Default config has no extra options (unless local .io-mcp.yml is present)
@@ -562,7 +549,7 @@ class TestConfigMutation:
         c.set_tts_model("gpt-4o-mini-tts")
         assert c.tts_model_name == "gpt-4o-mini-tts"
         # Voice should be reset to the new model's default
-        assert c.tts_voice == "sage"
+        assert c.tts_voice == "shimmer"
 
     def test_set_tts_voice(self, config_with_defaults):
         c = config_with_defaults
@@ -610,12 +597,12 @@ class TestConfigMutation:
     def test_save_and_reload(self, tmp_config):
         c = IoMcpConfig.load(tmp_config)
         c.set_tts_speed(1.8)
-        c.set_tts_emotion("happy")
+        c.set_tts_style("happy")
         c.save()
 
         c2 = IoMcpConfig.load(tmp_config)
         assert c2.tts_speed == 1.8
-        assert c2.tts_emotion == "happy"
+        assert c2.tts_style == "happy"
 
 
 # ---------------------------------------------------------------------------
@@ -649,41 +636,37 @@ class TestCLIArgs:
         assert "--voice" in args
         assert "sage" in args
 
-    def test_tts_args_openai_with_emotion_preset(self, tmp_config, monkeypatch):
-        """OpenAI + named preset: sends both --style and --instructions."""
+    def test_tts_args_openai_with_style(self, tmp_config, monkeypatch):
+        """OpenAI + named style: sends --style only (no --instructions)."""
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         custom = {
-            "config": {"tts": {"model": "gpt-4o-mini-tts", "voice": "sage", "emotion": "happy"}},
+            "config": {"tts": {"model": "gpt-4o-mini-tts", "voice": "sage", "style": "happy"}},
         }
         with open(tmp_config, "w") as f:
             yaml.dump(custom, f)
         c = IoMcpConfig.load(tmp_config)
         args = c.tts_cli_args("hello")
-        # Should have both --style and --instructions for openai preset
         assert "--style" in args
         style_idx = args.index("--style")
-        # The azure-speech preset for "happy" is "joy", but openai preset is text
-        # The --style value should be the resolved preset for the current provider
-        assert "--instructions" in args
-        inst_idx = args.index("--instructions")
-        assert "cheerful" in args[inst_idx + 1].lower()  # openai preset text
+        assert args[style_idx + 1] == "happy"
+        # No --instructions anymore
+        assert "--instructions" not in args
 
-    def test_tts_args_openai_with_custom_emotion(self, tmp_config, monkeypatch):
-        """OpenAI + custom text emotion: sends --instructions only."""
+    def test_tts_args_openai_with_custom_style(self, tmp_config, monkeypatch):
+        """OpenAI + custom text style: sends --style with the text."""
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         custom = {
             "config": {"tts": {"model": "gpt-4o-mini-tts", "voice": "sage",
-                               "emotion": "Speak like a pirate"}},
+                               "style": "Speak like a pirate"}},
         }
         with open(tmp_config, "w") as f:
             yaml.dump(custom, f)
         c = IoMcpConfig.load(tmp_config)
         args = c.tts_cli_args("ahoy")
-        assert "--instructions" in args
-        inst_idx = args.index("--instructions")
-        assert args[inst_idx + 1] == "Speak like a pirate"
-        # Should NOT have --style for custom text on openai
-        assert "--style" not in args
+        assert "--style" in args
+        style_idx = args.index("--style")
+        assert args[style_idx + 1] == "Speak like a pirate"
+        assert "--instructions" not in args
 
     def test_tts_args_with_overrides(self, config_with_defaults, monkeypatch):
         monkeypatch.setenv("AZURE_SPEECH_API_KEY", "test-key")
@@ -694,10 +677,10 @@ class TestCLIArgs:
         args = c.tts_cli_args("hello", voice_override="en-US-Teo:MAI-Voice-1",
                               emotion_override="happy")
         assert "en-US-Teo:MAI-Voice-1" in args
-        # azure-speech provider: "happy" maps to SSML style via _emotion_presets_for_provider
+        # --style is always passed now
+        assert "--style" in args
         style_idx = args.index("--style")
-        # The preset should resolve through the provider-aware presets
-        assert args[style_idx + 1] is not None
+        assert args[style_idx + 1] == "happy"
 
     def test_stt_args_basic(self, config_with_defaults, monkeypatch):
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
@@ -796,7 +779,7 @@ class TestConfigReset:
         assert "providers" in on_disk
         assert "models" in on_disk
         assert "config" in on_disk
-        assert "emotionPresets" in on_disk
+        assert "styles" in on_disk
         assert "openai" in on_disk["providers"]
         assert "healthMonitor" in on_disk["config"]
         assert "ambient" in on_disk["config"]

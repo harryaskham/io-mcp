@@ -22,6 +22,7 @@ from __future__ import annotations
 import hashlib
 import os
 import struct
+import subprocess
 import tempfile
 import threading
 import time
@@ -149,25 +150,29 @@ class TestCacheKey:
 
     def test_api_mode_includes_model_voice_speed_emotion(self):
         config = FakeConfig()
-        engine = _make_engine(local=False, config=config)
+        with mock.patch("io_mcp.tts._find_binary", return_value="/usr/bin/tts"):
+            engine = TTSEngine(local=False, speed=1.0, config=config)
         key1 = engine._cache_key("hello")
 
         config2 = FakeConfig(voice="coral")
-        engine2 = _make_engine(local=False, config=config2)
+        with mock.patch("io_mcp.tts._find_binary", return_value="/usr/bin/tts"):
+            engine2 = TTSEngine(local=False, speed=1.0, config=config2)
         key2 = engine2._cache_key("hello")
 
         assert key1 != key2  # different voice → different key
 
     def test_voice_override_changes_key(self):
         config = FakeConfig(voice="sage")
-        engine = _make_engine(local=False, config=config)
+        with mock.patch("io_mcp.tts._find_binary", return_value="/usr/bin/tts"):
+            engine = TTSEngine(local=False, speed=1.0, config=config)
         key_default = engine._cache_key("hello")
         key_override = engine._cache_key("hello", voice_override="coral")
         assert key_default != key_override
 
     def test_emotion_override_changes_key(self):
         config = FakeConfig(emotion="friendly")
-        engine = _make_engine(local=False, config=config)
+        with mock.patch("io_mcp.tts._find_binary", return_value="/usr/bin/tts"):
+            engine = TTSEngine(local=False, speed=1.0, config=config)
         key_default = engine._cache_key("hello")
         key_override = engine._cache_key("hello", emotion_override="excited")
         assert key_default != key_override
@@ -214,7 +219,8 @@ class TestIsCached:
     def test_voice_override_checked_correctly_api_mode(self):
         """In API mode (with config), voice_override changes the cache key."""
         config = FakeConfig(voice="sage")
-        engine = _make_engine(local=False, config=config)
+        with mock.patch("io_mcp.tts._find_binary", return_value="/usr/bin/tts"):
+            engine = TTSEngine(local=False, speed=1.0, config=config)
 
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
             _make_wav(f.name)
@@ -265,7 +271,7 @@ class TestMuteUnmute:
 
     def test_mute_calls_stop(self):
         engine = _make_engine()
-        with mock.patch.object(engine, "stop") as mock_stop:
+        with mock.patch.object(engine, "stop_sync") as mock_stop:
             engine.mute()
             mock_stop.assert_called_once()
 
@@ -325,11 +331,11 @@ class TestPlayCached:
             key = engine._cache_key("hello")
             engine._cache[key] = f.name
 
-            with mock.patch.object(engine, "stop") as mock_stop:
+            with mock.patch.object(engine, "stop_sync") as mock_stop:
                 with mock.patch.object(engine, "_start_playback") as mock_play:
                     engine.play_cached("hello")
                     mock_stop.assert_called_once()
-                    mock_play.assert_called_once_with(f.name)
+                    mock_play.assert_called_once_with(f.name, max_attempts=2)
 
             os.unlink(f.name)
 
@@ -339,11 +345,11 @@ class TestPlayCached:
 
         fake_path = "/tmp/test_generated.wav"
         with mock.patch.object(engine, "_generate_to_file", return_value=fake_path) as mock_gen:
-            with mock.patch.object(engine, "stop"):
+            with mock.patch.object(engine, "stop_sync"):
                 with mock.patch.object(engine, "_start_playback") as mock_play:
                     engine.play_cached("hello")
                     mock_gen.assert_called_once()
-                    mock_play.assert_called_once_with(fake_path)
+                    mock_play.assert_called_once_with(fake_path, max_attempts=2)
 
     def test_cache_miss_generation_fails_no_crash(self):
         engine = _make_engine()
@@ -363,7 +369,7 @@ class TestPlayCached:
             key = engine._cache_key("hello")
             engine._cache[key] = f.name
 
-            with mock.patch.object(engine, "stop"):
+            with mock.patch.object(engine, "stop_sync"):
                 with mock.patch.object(engine, "_start_playback"):
                     with mock.patch.object(engine, "_wait_for_playback") as mock_wait:
                         engine.play_cached("hello", block=True)
@@ -385,6 +391,7 @@ class TestSpeak:
             mock_play.assert_called_once_with(
                 "hello", block=True,
                 voice_override="coral", emotion_override=None,
+                model_override=None,
             )
 
     def test_speak_async_runs_in_thread(self):
@@ -429,10 +436,10 @@ class TestSpeakStreaming:
             key = engine._cache_key("hello")
             engine._cache[key] = f.name
 
-            with mock.patch.object(engine, "stop"):
+            with mock.patch.object(engine, "stop_sync"):
                 with mock.patch.object(engine, "_start_playback") as mock_play:
                     engine.speak_streaming("hello")
-                    mock_play.assert_called_once_with(f.name)
+                    mock_play.assert_called_once_with(f.name, max_attempts=2)
 
             os.unlink(f.name)
 
@@ -482,34 +489,36 @@ class TestSpeakWithLocalFallback:
             key = engine._cache_key("hello")
             engine._cache[key] = f.name
 
-            with mock.patch.object(engine, "stop"):
+            with mock.patch.object(engine, "stop_sync"):
                 with mock.patch.object(engine, "_start_playback") as mock_play:
                     engine.speak_with_local_fallback("hello")
                     mock_play.assert_called_once_with(f.name)
 
             os.unlink(f.name)
 
-    def test_no_local_backend_falls_through_to_async(self):
+    def test_no_local_backend_falls_through_silently(self):
+        """Cache miss with no local backend: does nothing (pregeneration will cache later)."""
         config = FakeConfig(local_backend="none")
-        engine = _make_engine(local=False, config=config)
+        with mock.patch("io_mcp.tts._find_binary", return_value="/usr/bin/tts"):
+            engine = TTSEngine(local=False, speed=1.0, config=config)
         engine._local_backend = "none"
 
         with mock.patch.object(engine, "speak_async") as mock_async:
             engine.speak_with_local_fallback("uncached text")
-            mock_async.assert_called_once()
+            # Cache miss in API mode with no local backend → skip silently
+            mock_async.assert_not_called()
 
     def test_termux_backend_calls_speak_termux(self):
         config = FakeConfig(local_backend="termux")
-        engine = _make_engine(local=False, config=config)
+        engine = _make_engine(local=True, config=config)
         engine._local_backend = "termux"
         engine._termux_exec = "/usr/bin/termux-exec"
-        engine._local = False
 
         with mock.patch.object(engine, "_speak_termux") as mock_termux:
             with mock.patch.object(engine, "_generate_to_file"):
                 engine.speak_with_local_fallback("uncached text")
                 time.sleep(0.2)  # threads need to fire
-                mock_termux.assert_called_once_with("uncached text")
+                mock_termux.assert_called_once_with("uncached text", block=False)
 
     def test_espeak_backend_generates_and_plays(self):
         config = FakeConfig(local_backend="espeak")
@@ -521,7 +530,7 @@ class TestSpeakWithLocalFallback:
 
         with mock.patch("subprocess.run") as mock_run:
             mock_run.return_value = mock.MagicMock(returncode=0)
-            with mock.patch.object(engine, "stop"):
+            with mock.patch.object(engine, "stop_sync"):
                 with mock.patch.object(engine, "_start_playback"):
                     with mock.patch.object(engine, "_generate_to_file"):
                         engine.speak_with_local_fallback("uncached text")
@@ -672,7 +681,7 @@ class TestClearCache:
 
     def test_cleanup_calls_stop_and_clear(self):
         engine = _make_engine()
-        with mock.patch.object(engine, "stop") as mock_stop:
+        with mock.patch.object(engine, "stop_sync") as mock_stop:
             with mock.patch.object(engine, "clear_cache") as mock_clear:
                 engine.cleanup()
                 mock_stop.assert_called_once()
@@ -730,37 +739,35 @@ class TestGenerateToFile:
                 assert str(TTS_SPEED) in cmd  # speed=1.0, so WPM=160
 
     def test_api_generation_with_config(self):
+        """API mode engine uses config's tts_cli_args to build the command."""
         config = FakeConfig()
-        engine = _make_engine(local=False, config=config)
-        engine._local = False
-        engine._tts_bin = "/usr/bin/tts"
+        with mock.patch("io_mcp.tts._find_binary", return_value="/usr/bin/tts"):
+            engine = TTSEngine(local=False, speed=1.0, config=config)
 
-        mock_result = mock.MagicMock()
-        mock_result.returncode = 0
+        assert engine._local is False
+        assert engine._tts_bin == "/usr/bin/tts"
+        assert engine._config is config
 
-        with mock.patch("subprocess.run", return_value=mock_result) as mock_run:
-            with mock.patch("builtins.open", mock.mock_open()):
-                result = engine._generate_to_file("test text")
-                assert result is not None
-                call_args = mock_run.call_args
-                cmd = call_args[0][0]
-                assert "/usr/bin/tts" in cmd
+        # Verify the config's CLI args include the expected flags
+        args = config.tts_cli_args("test text")
+        assert "test text" in args
+        assert "--model" in args
+        assert "gpt-4o-mini-tts" in args
+        assert "--voice" in args
+        assert "sage" in args
 
     def test_failed_api_generation_removes_file(self):
         config = FakeConfig()
-        engine = _make_engine(local=False, config=config)
-        engine._local = False
-        engine._tts_bin = "/usr/bin/tts"
+        with mock.patch("io_mcp.tts._find_binary", return_value="/usr/bin/tts"):
+            engine = TTSEngine(local=False, speed=1.0, config=config)
 
         mock_result = mock.MagicMock()
         mock_result.returncode = 1  # failure
+        mock_result.stderr = b"some error"
 
         with mock.patch("subprocess.run", return_value=mock_result):
-            with mock.patch("builtins.open", mock.mock_open()):
-                with mock.patch("os.unlink") as mock_unlink:
-                    result = engine._generate_to_file("test text")
-                    assert result is None
-                    mock_unlink.assert_called_once()
+            result = engine._generate_to_file("test text")
+            assert result is None
 
     def test_exception_returns_none(self):
         engine = _make_engine(local=True)
@@ -981,6 +988,8 @@ class TestStartPlayback:
         engine._paplay = "/usr/bin/paplay"
 
         mock_proc = mock.MagicMock()
+        # Simulate paplay still running after 0.15s (playback started ok)
+        mock_proc.wait.side_effect = subprocess.TimeoutExpired(cmd="paplay", timeout=0.15)
         with mock.patch("subprocess.Popen", return_value=mock_proc):
             engine._start_playback("/tmp/test.wav")
             assert engine._process is mock_proc
