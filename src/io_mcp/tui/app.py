@@ -1595,6 +1595,10 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         pregen_thread.start()
 
         if is_fg:
+            # Wait for any in-progress speak_async to finish before
+            # starting the intro readout (which would kill it via stop).
+            self._tts.wait_for_speech(timeout=5.0)
+
             # Audio + haptic cue for new choices
             self._tts.play_chime("choices")
             self._vibrate_pattern("pulse")
