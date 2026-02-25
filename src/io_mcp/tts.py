@@ -83,6 +83,17 @@ class TTSEngine:
         self._total_plays = 0
         self._max_retries = 2  # retry paplay this many times on failure
 
+        # API TTS generation failure tracking — when the API key is missing
+        # or the service is down, avoid spawning 30s-timeout processes on
+        # every scroll event.  After _API_FAIL_THRESHOLD consecutive failures,
+        # skip background API generation entirely.
+        self._api_gen_consecutive_failures = 0
+        self._api_gen_last_failure: float = 0
+        _API_FAIL_THRESHOLD = 3
+        _API_FAIL_COOLDOWN = 60  # retry API after 60s
+        self._api_fail_threshold = _API_FAIL_THRESHOLD
+        self._api_fail_cooldown = _API_FAIL_COOLDOWN
+
         self._env = os.environ.copy()
         self._env["PULSE_SERVER"] = os.environ.get("PULSE_SERVER", "127.0.0.1")
         self._env["LD_LIBRARY_PATH"] = PORTAUDIO_LIB
@@ -187,6 +198,30 @@ class TTSEngine:
         except Exception:
             pass
 
+    def _api_gen_available(self) -> bool:
+        """Check whether API TTS generation should be attempted.
+
+        Returns False when we've seen too many consecutive API failures
+        (e.g. missing API key) to avoid spawning 30s-timeout processes
+        that pile up and make the TUI sluggish.  Resets after a cooldown.
+        """
+        if self._api_gen_consecutive_failures < self._api_fail_threshold:
+            return True
+        # Check cooldown — maybe the key was restored
+        if _time_mod.time() - self._api_gen_last_failure > self._api_fail_cooldown:
+            self._api_gen_consecutive_failures = 0
+            return True
+        return False
+
+    def _record_api_gen_failure(self) -> None:
+        """Record an API TTS generation failure."""
+        self._api_gen_consecutive_failures += 1
+        self._api_gen_last_failure = _time_mod.time()
+
+    def _record_api_gen_success(self) -> None:
+        """Record a successful API TTS generation."""
+        self._api_gen_consecutive_failures = 0
+
     @property
     def tts_health(self) -> dict:
         """Return TTS health status for diagnostics.
@@ -217,7 +252,11 @@ class TTSEngine:
 
     def _generate_to_file(self, text: str, voice_override: Optional[str] = None,
                           emotion_override: Optional[str] = None) -> Optional[str]:
-        """Generate audio for text and save to a WAV file. Returns file path."""
+        """Generate audio for text and save to a WAV file. Returns file path.
+
+        Tracks consecutive API failures so callers can skip background
+        generation when the API is known-broken (e.g. missing key).
+        """
         key = self._cache_key(text, voice_override, emotion_override)
 
         # Check cache
@@ -248,7 +287,13 @@ class TTSEngine:
             else:
                 if not self._tts_bin:
                     self._log_tts_error("tts binary not available", text)
+                    self._record_api_gen_failure()
                     return None
+
+                # Skip if API is known-broken (saves 10s timeout per call)
+                if not self._api_gen_available():
+                    return None
+
                 # Build tts command from config (explicit flags)
                 if self._config:
                     cmd = [self._tts_bin] + self._config.tts_cli_args(
@@ -261,12 +306,13 @@ class TTSEngine:
                 with open(out_path, "wb") as f:
                     proc = subprocess.run(
                         cmd, stdout=f, stderr=subprocess.PIPE,
-                        env=self._env, timeout=30,
+                        env=self._env, timeout=10,
                     )
                 if proc.returncode != 0:
                     stderr_out = (proc.stderr or b"").decode("utf-8", errors="replace").strip()
                     self._log_tts_error(
                         f"tts CLI failed (code {proc.returncode}): {stderr_out}", text)
+                    self._record_api_gen_failure()
                     try:
                         os.unlink(out_path)
                     except OSError:
@@ -279,6 +325,7 @@ class TTSEngine:
                     if fsize < 44:  # WAV header is 44 bytes minimum
                         self._log_tts_error(
                             f"tts CLI produced invalid WAV ({fsize} bytes)", text)
+                        self._record_api_gen_failure()
                         try:
                             os.unlink(out_path)
                         except OSError:
@@ -288,20 +335,31 @@ class TTSEngine:
                     pass
 
             self._cache[key] = out_path
+            self._record_api_gen_success()
             return out_path
 
         except subprocess.TimeoutExpired:
             self._log_tts_error("TTS generation timed out", text)
+            if not self._local:
+                self._record_api_gen_failure()
             return None
         except Exception as e:
             self._log_tts_error(f"TTS generation exception: {e}", text)
+            if not self._local:
+                self._record_api_gen_failure()
             return None
 
     def pregenerate(self, texts: list[str]) -> None:
         """Generate audio clips for all texts in parallel.
 
         Call this when choices arrive so scrolling is instant.
+        Skips API generation when the API is known-broken to avoid
+        spawning processes that timeout after 30s.
         """
+        # Skip entirely when API is known-broken
+        if not self._local and not self._api_gen_available():
+            return
+
         # Filter out already-cached texts
         to_generate = [t for t in texts if self._cache_key(t) not in self._cache]
         if not to_generate:
@@ -598,12 +656,15 @@ class TTSEngine:
         # Cache miss — use configured local backend for instant readout
         if effective_backend == "termux" and self._termux_exec:
             # termux-tts-speak: direct Android TTS, no PulseAudio needed
+            # Stop any current audio first so we don't overlap
+            self.stop()
             def _termux_play():
                 self._speak_termux(text)
             threading.Thread(target=_termux_play, daemon=True).start()
 
             # Also kick off background API generation for next time
-            if not self._local:
+            # (skip if API is known-broken to avoid 10s-timeout processes)
+            if not self._local and self._api_gen_available():
                 def _gen():
                     self._generate_to_file(text, voice_override, emotion_override)
                 threading.Thread(target=_gen, daemon=True).start()
@@ -629,7 +690,8 @@ class TTSEngine:
             threading.Thread(target=_espeak_play, daemon=True).start()
 
             # Also kick off background API generation for next time
-            if not self._local:
+            # (skip if API is known-broken to avoid 10s-timeout processes)
+            if not self._local and self._api_gen_available():
                 def _gen():
                     self._generate_to_file(text, voice_override, emotion_override)
                 threading.Thread(target=_gen, daemon=True).start()
@@ -675,6 +737,11 @@ class TTSEngine:
             # Fall back to non-streaming (espeak file generation)
             self.play_cached(text, block=block, voice_override=voice_override,
                            emotion_override=emotion_override)
+            return
+
+        # Skip streaming when API is known-broken — go straight to local fallback
+        if not self._api_gen_available():
+            self._local_tts_fallback(text)
             return
 
         # Build tts command
@@ -745,6 +812,7 @@ class TTSEngine:
                                 f"tts CLI (streaming) failed (code {tts_retcode}): {tts_stderr}",
                                 text)
                         tts_failed = True
+                        self._record_api_gen_failure()
                 except Exception:
                     pass
                 # Fall back to local TTS if streaming failed
@@ -788,6 +856,7 @@ class TTSEngine:
                                     f"tts CLI (streaming async) failed (code {tts_retcode}): {tts_stderr}",
                                     text)
                             tts_failed = True
+                            self._record_api_gen_failure()
                     except Exception:
                         pass
                     # Fall back to local TTS if streaming failed
