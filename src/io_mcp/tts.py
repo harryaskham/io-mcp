@@ -392,7 +392,7 @@ class TTSEngine:
 
         if path and os.path.isfile(path):
             # Fast path: cached — kill current and play immediately
-            self.stop()
+            self.stop_sync()
             _time_mod.sleep(0.05)  # Brief pause to let PulseAudio settle
             if not self._start_playback(path, max_attempts=self._max_retries):
                 self._log_tts_error("paplay failed for cached audio", text)
@@ -402,7 +402,7 @@ class TTSEngine:
             # Slow path: generate on demand
             p = self._generate_to_file(text, voice_override, emotion_override)
             if p:
-                self.stop()
+                self.stop_sync()
                 _time_mod.sleep(0.05)  # Brief pause to let PulseAudio settle
                 if not self._start_playback(p, max_attempts=self._max_retries):
                     self._log_tts_error("paplay failed after generation", text)
@@ -435,7 +435,7 @@ class TTSEngine:
                     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
                         f.write(proc.stdout)
                         tmp_path = f.name
-                    self.stop()
+                    self.stop_sync()
                     self._start_playback(tmp_path)
         except Exception:
             pass
@@ -643,15 +643,17 @@ class TTSEngine:
                                    voice_override: Optional[str] = None,
                                    emotion_override: Optional[str] = None,
                                    nonblocking: bool = False) -> None:
-        """Speak text for scroll readout: cached API audio or async generation.
+        """Speak text for scroll readout: cached audio only, no subprocess spawning.
 
-        Simple two-path model:
-        1. Cache hit → play immediately in background thread
-        2. Cache miss → speak_async (API generates + plays, no local engine)
+        On cache hit: plays immediately in a background thread.
+        On cache miss: silently skips (pregeneration will cache it for next time).
 
-        Local engines (termux-tts-speak, espeak) are ONLY used when running
-        in --local mode. The one exception is espeak for freeform text entry
-        readback (nonblocking=True), which needs instant low-latency audio.
+        This keeps the scroll path completely free of subprocess.Popen calls,
+        which take 200-300ms each on proot/Android and cause key sluggishness.
+
+        The only exceptions:
+        - nonblocking=True: uses espeak for freeform text entry readback
+        - --local mode: uses configured local backend (termux/espeak)
 
         Args:
             nonblocking: If True, use espeak for instant readback (text entry).
@@ -673,7 +675,7 @@ class TTSEngine:
             def _play_cached():
                 if self._scroll_gen != my_gen:
                     return  # stale — newer scroll superseded us
-                self.stop()
+                self.stop_sync()
                 if self._scroll_gen != my_gen:
                     return  # stale — newer scroll superseded us
                 self._start_playback(path)
@@ -696,7 +698,7 @@ class TTSEngine:
                         )
                     if self._scroll_gen != my_gen:
                         return
-                    self.stop()
+                    self.stop_sync()
                     self._start_playback(tmp)
                 except Exception:
                     pass
@@ -709,7 +711,7 @@ class TTSEngine:
                 def _termux_play():
                     if self._scroll_gen != my_gen:
                         return
-                    self.stop()
+                    self.stop_sync()
                     self._speak_termux(text, block=False)
                 threading.Thread(target=_termux_play, daemon=True).start()
             elif self._local_backend == "espeak" and self._espeak and self._paplay:
@@ -727,15 +729,16 @@ class TTSEngine:
                             )
                         if self._scroll_gen != my_gen:
                             return
-                        self.stop()
+                        self.stop_sync()
                         self._start_playback(tmp)
                     except Exception:
                         pass
                 threading.Thread(target=_espeak_local, daemon=True).start()
             return
 
-        # Cache miss, API mode — use speak_async to generate and play via API
-        self.speak_async(text, voice_override, emotion_override)
+        # Cache miss, API mode — skip silently.
+        # Pregeneration will cache this text for next scroll-through.
+        # No subprocess spawning keeps the scroll path fast.
 
     def speak_streaming(self, text: str, voice_override: Optional[str] = None,
                         emotion_override: Optional[str] = None,
@@ -760,7 +763,7 @@ class TTSEngine:
         key = self._cache_key(text, voice_override, emotion_override)
         cached = self._cache.get(key)
         if cached and os.path.isfile(cached):
-            self.stop()
+            self.stop_sync()
             self._start_playback(cached, max_attempts=self._max_retries)
             if block:
                 self._wait_for_playback()
@@ -787,7 +790,7 @@ class TTSEngine:
             text, voice_override=voice_override,
             emotion_override=emotion_override)
 
-        self.stop()
+        self.stop_sync()
 
         try:
             with self._lock:
@@ -916,7 +919,32 @@ class TTSEngine:
         threading.Thread(target=_do, daemon=True).start()
 
     def stop(self) -> None:
-        """Kill any in-progress playback and streaming TTS (non-blocking)."""
+        """Kill any in-progress playback and streaming TTS.
+
+        Runs kill operations in a background thread to avoid blocking
+        the caller (important on proot where syscalls take 10-50ms each).
+        """
+        def _do_stop():
+            with self._lock:
+                for proc in (self._process, self._streaming_tts_proc):
+                    if proc and proc.poll() is None:
+                        try:
+                            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                        except (OSError, ProcessLookupError):
+                            pass
+                self._process = None
+                self._streaming_tts_proc = None
+            # Kill termux-tts-speak via process group (outside lock)
+            self._kill_termux_proc()
+        threading.Thread(target=_do_stop, daemon=True).start()
+
+    def stop_sync(self) -> None:
+        """Kill any in-progress playback synchronously (blocks caller).
+
+        Use this only when you need to guarantee audio is stopped before
+        proceeding (e.g., before starting blocking speech in a background
+        thread). Prefer stop() for UI/event-loop contexts.
+        """
         with self._lock:
             for proc in (self._process, self._streaming_tts_proc):
                 if proc and proc.poll() is None:
@@ -926,13 +954,32 @@ class TTSEngine:
                         pass
             self._process = None
             self._streaming_tts_proc = None
-        # Kill termux-tts-speak via process group (outside lock to avoid contention)
         self._kill_termux_proc()
+
+    def wait_for_speech(self, timeout: float = 5.0) -> None:
+        """Wait for any in-progress speech to finish, up to timeout seconds.
+
+        Used before starting new speech that should follow (not interrupt)
+        the current speech. For example, choice presentation waits for any
+        prior speak_async to finish before reading the intro.
+        """
+        deadline = _time_mod.time() + timeout
+        while _time_mod.time() < deadline:
+            with self._lock:
+                procs = [self._process, self._streaming_tts_proc]
+            # Also check termux proc (outside lock)
+            termux = self._termux_proc
+            active = any(p and p.poll() is None for p in procs)
+            if termux and termux.poll() is None:
+                active = True
+            if not active:
+                return
+            _time_mod.sleep(0.1)
 
     def mute(self) -> None:
         """Stop playback and prevent any new audio from playing."""
         self._muted = True
-        self.stop()
+        self.stop_sync()
 
     def unmute(self) -> None:
         """Allow audio playback again."""
@@ -1036,7 +1083,7 @@ class TTSEngine:
         return steps
 
     def cleanup(self) -> None:
-        self.stop()
+        self.stop_sync()
         self.clear_cache()
 
     # ─── Audio cues (tone generation) ─────────────────────────────
@@ -1055,6 +1102,9 @@ class TTSEngine:
             fade: Apply fade-in/out to avoid clicks (default True)
         """
         if not self._paplay or self._muted:
+            return
+        # Check if chimes are enabled in config
+        if self._config and not self._config.chimes_enabled:
             return
 
         import math

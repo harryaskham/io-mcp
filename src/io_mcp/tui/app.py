@@ -3558,21 +3558,17 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
     def _interrupt_readout(self) -> None:
         """Interrupt intro/options readout when user scrolls.
 
-        Runs stop() in a background thread to avoid blocking the main
-        event loop — on proot/Android, lock acquisition can take 10-100ms
-        if a background TTS thread is mid-operation.
+        stop() is non-blocking (runs kills in a background thread),
+        so this is safe to call from the main event loop.
         """
         session = self._focused()
         if session:
-            need_stop = False
             if getattr(session, 'intro_speaking', False):
                 session.intro_speaking = False
-                need_stop = True
+                self._tts.stop()
             if getattr(session, 'reading_options', False):
                 session.reading_options = False
-                need_stop = True
-            if need_stop:
-                threading.Thread(target=self._tts.stop, daemon=True).start()
+                self._tts.stop()
 
     def _sync_inbox_focus_from_widget(self) -> None:
         """Sync _inbox_pane_focused with actual widget focus.

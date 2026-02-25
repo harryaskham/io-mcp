@@ -151,6 +151,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "haptic": {
             "enabled": False,                  # disabled by default; enable on Android/Termux
         },
+        "chimes": {
+            "enabled": False,                  # disabled by default; enable for audio cues
+        },
         "healthMonitor": {
             "enabled": True,
             "warningThresholdSecs": 300,      # 5 minutes with no tool call → warning
@@ -833,6 +836,15 @@ class IoMcpConfig:
         return bool(
             self.expanded.get("config", {})
             .get("haptic", {})
+            .get("enabled", False)
+        )
+
+    @property
+    def chimes_enabled(self) -> bool:
+        """Whether audio chimes/tones are enabled."""
+        return bool(
+            self.expanded.get("config", {})
+            .get("chimes", {})
             .get("enabled", False)
         )
 
