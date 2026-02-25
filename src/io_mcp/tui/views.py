@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 from textual import work
 from textual.widgets import Label, ListView, RichLog
 
+from ..logging import read_log_tail, TUI_ERROR_LOG, PROXY_LOG
 from .themes import DEFAULT_SCHEME, get_scheme
 from .widgets import ChoiceItem, _safe_action
 
@@ -413,28 +414,10 @@ class ViewsMixin:
         flat_entries = []  # plain text for TTS on scroll
 
         # TUI error log
-        tui_errors = []
-        try:
-            with open("/tmp/io-mcp-tui-error.log", "r") as f:
-                content = f.read().strip()
-            if content:
-                tui_errors = content.split("\n")[-50:]
-        except FileNotFoundError:
-            pass
-        except Exception as e:
-            tui_errors = [f"Error reading TUI log: {e}"]
+        tui_errors = read_log_tail(TUI_ERROR_LOG, 50)
 
         # Proxy log
-        proxy_lines = []
-        try:
-            with open("/tmp/io-mcp-proxy.log", "r") as f:
-                content = f.read().strip()
-            if content:
-                proxy_lines = content.split("\n")[-30:]
-        except FileNotFoundError:
-            pass
-        except Exception as e:
-            proxy_lines = [f"Error reading proxy log: {e}"]
+        proxy_lines = read_log_tail(PROXY_LOG, 30)
 
         # Speech log from focused session
         speech_lines = []

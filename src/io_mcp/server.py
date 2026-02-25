@@ -14,7 +14,10 @@ from typing import Any, Optional, Protocol
 
 from mcp.server.fastmcp import FastMCP, Context
 
+from .logging import get_logger, log_context, TOOL_ERROR_LOG
+
 log = logging.getLogger("io-mcp.server")
+_tool_log = get_logger("io-mcp.server.tools", TOOL_ERROR_LOG)
 
 
 class TTSBackend(Protocol):
@@ -209,11 +212,11 @@ def create_mcp_server(
             except Exception as exc:
                 err_msg = f"{type(exc).__name__}: {str(exc)[:200]}"
                 log.error(f"Tool {fn.__name__} failed: {err_msg}")
-                try:
-                    with open("/tmp/io-mcp-tool-error.log", "a") as f:
-                        f.write(f"\n--- {fn.__name__} ---\n{tb.format_exc()}\n")
-                except Exception:
-                    pass
+                _tool_log.error(
+                    "Tool %s failed: %s", fn.__name__, err_msg,
+                    exc_info=True,
+                    extra={"context": log_context(tool_name=fn.__name__)},
+                )
                 # Speak the error to the user so they know something went wrong
                 try:
                     short_err = f"Tool error: {fn.__name__}. {str(exc)[:80]}"

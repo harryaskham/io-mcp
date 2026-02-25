@@ -33,8 +33,11 @@ import threading
 from .config import IoMcpConfig
 from .tui import IoMcpApp
 from .tts import TTSEngine
+from .logging import get_logger, log_context, TUI_ERROR_LOG, TOOL_ERROR_LOG, SERVER_LOG
 
 log = logging.getLogger("io_mcp")
+_file_log = get_logger("io-mcp.main", TUI_ERROR_LOG)
+_tool_log = get_logger("io-mcp.tools", TOOL_ERROR_LOG)
 
 PID_FILE = "/tmp/io-mcp.pid"
 PROXY_PID_FILE = "/tmp/io-mcp-server.pid"
@@ -926,26 +929,11 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
         logs = {}
 
         # TUI error log
-        try:
-            with open("/tmp/io-mcp-tui-error.log", "r") as f:
-                content = f.read()
-            log_lines = content.strip().split("\n")
-            logs["tui_errors"] = log_lines[-lines:]
-        except FileNotFoundError:
-            logs["tui_errors"] = []
-        except Exception as e:
-            logs["tui_errors"] = [f"Error reading: {e}"]
+        from .logging import read_log_tail, TUI_ERROR_LOG as _tui_log, PROXY_LOG as _proxy_log
+        logs["tui_errors"] = read_log_tail(_tui_log, lines)
 
         # Proxy log (if exists)
-        try:
-            with open("/tmp/io-mcp-proxy.log", "r") as f:
-                content = f.read()
-            log_lines = content.strip().split("\n")
-            logs["proxy"] = log_lines[-lines:]
-        except FileNotFoundError:
-            logs["proxy"] = []
-        except Exception as e:
-            logs["proxy"] = [f"Error reading: {e}"]
+        logs["proxy"] = read_log_tail(_proxy_log, lines)
 
         # Session speech log (recent entries for this session)
         speech = []
@@ -1244,13 +1232,12 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
                     result += _speech_reminder(session)
             return result
         except Exception as e:
-            import traceback
             log.error(f"Tool {tool_name} error: {e}")
-            try:
-                with open("/tmp/io-mcp-tool-error.log", "a") as f:
-                    f.write(f"\n--- {tool_name} ---\n{traceback.format_exc()}\n")
-            except Exception:
-                pass
+            _tool_log.error(
+                "Tool %s failed: %s", tool_name, e,
+                exc_info=True,
+                extra={"context": log_context(tool_name=tool_name)},
+            )
             try:
                 frontend.tts.play_chime("error")
                 frontend.tts.speak_async(f"Tool error: {tool_name}. {str(e)[:80]}")
@@ -1259,18 +1246,15 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
             error_data = {"error": f"{type(e).__name__}: {str(e)[:200]}", "tool": tool_name}
             # Include crash log content so agents can self-heal
             crash_log = ""
-            try:
-                with open("/tmp/io-mcp-tool-error.log", "r") as f:
-                    content = f.read()
-                if content.strip():
-                    tail = content[-1500:] if len(content) > 1500 else content
-                    crash_log = (
-                        "\n\n[IO-MCP ERROR LOG]\n" + tail
-                        + "\n\n[SELF-HEALING: If this is a code bug in io-mcp, "
-                        "fix it and call pull_latest() to apply. Source: src/io_mcp/]"
-                    )
-            except Exception:
-                pass
+            from .logging import read_log_tail, TOOL_ERROR_LOG as _tel
+            tail_lines = read_log_tail(_tel, 50)
+            if tail_lines:
+                tail = "\n".join(tail_lines)[-1500:]
+                crash_log = (
+                    "\n\n[IO-MCP ERROR LOG]\n" + tail
+                    + "\n\n[SELF-HEALING: If this is a code bug in io-mcp, "
+                    "fix it and call pull_latest() to apply. Source: src/io_mcp/]"
+                )
             return json.dumps(error_data) + crash_log
 
     return dispatch

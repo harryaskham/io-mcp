@@ -23,7 +23,10 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP, Context
 
+from .logging import get_logger, log_context, SERVER_LOG, TUI_ERROR_LOG, TOOL_ERROR_LOG, read_log_tail
+
 log = logging.getLogger("io-mcp.proxy")
+_server_log = get_logger("io-mcp.proxy.server", SERVER_LOG, json_format=False)
 
 PID_FILE = "/tmp/io-mcp-server.pid"
 DEFAULT_BACKEND = "http://localhost:8446"
@@ -106,18 +109,14 @@ def _crash_log_hint() -> str:
     Appended to error responses so agents can diagnose and fix issues.
     """
     logs = []
-    for log_file in ("/tmp/io-mcp-tui-error.log", "/tmp/io-mcp-tool-error.log"):
-        try:
-            with open(log_file, "r") as f:
-                content = f.read()
-            if content.strip():
-                # Get last 2000 chars to avoid overwhelming the context
-                tail = content[-2000:] if len(content) > 2000 else content
-                logs.append(f"\n--- {log_file} ---\n{tail}")
-        except FileNotFoundError:
-            pass
-        except Exception:
-            pass
+    for log_file in (TUI_ERROR_LOG, TOOL_ERROR_LOG):
+        tail_lines = read_log_tail(log_file, 50)
+        if tail_lines:
+            tail = "\n".join(tail_lines)
+            # Limit total length
+            if len(tail) > 2000:
+                tail = tail[-2000:]
+            logs.append(f"\n--- {log_file} ---\n{tail}")
 
     if not logs:
         return ""
@@ -799,11 +798,7 @@ def run_proxy_server(
     server = create_proxy_server(host=host, port=port, backend_url=backend_url)
 
     log.info(f"MCP proxy server starting on {host}:{port}, backend={backend_url}")
-    try:
-        with open("/tmp/io-mcp-server.log", "a") as f:
-            f.write(f"MCP proxy on {host}:{port} → backend {backend_url}\n")
-    except Exception:
-        pass
+    _server_log.info("MCP proxy on %s:%s → backend %s", host, port, backend_url)
 
     server.run(transport="streamable-http")
 
