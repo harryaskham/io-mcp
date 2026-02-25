@@ -254,6 +254,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         self._inbox_scroll_index = 0  # cursor position in inbox list
         self._inbox_was_visible = False  # saved inbox state for message mode
         self._inbox_last_generation = -1  # tracks session._inbox_generation to skip no-op rebuilds
+        self._inbox_collapsed = False  # user-toggled collapse state
 
         # Notification webhooks
         self._notifier = create_dispatcher(config)
@@ -286,16 +287,16 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         """Ensure the #main-content container is visible.
 
         Called before showing the #choices list in any context (settings,
-        dashboard, activity feed, etc.) since #choices is now nested inside
-        #main-content > #choices-panel.
+        etc.) since #choices is now nested inside #main-content > #choices-panel.
 
         Args:
-            show_inbox: If True, also update and show the inbox list.
-                       If False, hide the inbox list (for modal views).
+            show_inbox: If True, also update and show the inbox list
+                       (unless user has collapsed it). If False, hide
+                       the inbox list (for modal views).
         """
         try:
             self.query_one("#main-content").display = True
-            if show_inbox:
+            if show_inbox and not self._inbox_collapsed:
                 self._update_inbox_list()
             else:
                 self.query_one("#inbox-list").display = False
@@ -3196,6 +3197,13 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         if session and (session.input_mode or session.voice_recording):
             return
 
+        # If inbox is collapsed, expand it
+        if self._inbox_collapsed:
+            self._inbox_collapsed = False
+            self._update_inbox_list()
+            self._speak_ui("Inbox expanded")
+            return
+
         # If inbox pane is visible and we're in the inbox, switch to choices pane
         if self._inbox_pane_visible() and self._inbox_pane_focused:
             self._inbox_pane_focused = False
@@ -3212,9 +3220,21 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             self._switch_to_session(new_session)
 
     def action_prev_tab(self) -> None:
-        """Switch to previous tab, or switch to inbox pane if inbox is visible."""
+        """Switch to previous tab, or toggle inbox pane.
+
+        Flow: choices → inbox → collapsed → choices (via l)
+        """
         session = self._focused()
         if session and (session.input_mode or session.voice_recording):
+            return
+
+        # If inbox pane is visible and focused, collapse it
+        if self._inbox_pane_visible() and self._inbox_pane_focused:
+            self._inbox_collapsed = True
+            self.query_one("#inbox-list").display = False
+            self._inbox_pane_focused = False
+            self.query_one("#choices", ListView).focus()
+            self._speak_ui("Inbox collapsed")
             return
 
         # If inbox pane is visible and we're in choices, switch to inbox pane
