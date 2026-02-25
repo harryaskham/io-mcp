@@ -415,6 +415,9 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
             self._app.call_from_thread(self._app._update_tab_bar)
         def hot_reload(self):
             self._app.call_from_thread(self._app.action_hot_reload)
+        def notify_inbox_update(self, session):
+            """Notify the TUI that a session's inbox has new items."""
+            self._app.notify_inbox_update(session)
 
     frontend = _AppFrontend()
 
@@ -576,7 +579,10 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
         session = _get_session(session_id)
         session.last_tool_name = "speak"
         text = args.get("text", "")
-        frontend.session_speak(session, text, True, 0, "")
+        # Enqueue as inbox item — agent blocks until TTS finishes
+        item = session.enqueue_speech(text, blocking=True, priority=0)
+        frontend.notify_inbox_update(session)
+        item.event.wait()  # Block until TTS playback completes
         preview = text[:100] + ("..." if len(text) > 100 else "")
         return _attach_messages(f"Spoke: {preview}", session)
 
@@ -584,7 +590,9 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
         session = _get_session(session_id)
         session.last_tool_name = "speak_async"
         text = args.get("text", "")
-        frontend.session_speak(session, text, False, 0, "")
+        # Enqueue as inbox item — agent returns immediately
+        item = session.enqueue_speech(text, blocking=False, priority=0)
+        frontend.notify_inbox_update(session)
         preview = text[:100] + ("..." if len(text) > 100 else "")
         return _attach_messages(f"Spoke: {preview}", session)
 
@@ -592,7 +600,10 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
         session = _get_session(session_id)
         session.last_tool_name = "speak_urgent"
         text = args.get("text", "")
-        frontend.session_speak(session, text, True, 1, "")
+        # Enqueue at front of inbox with priority — agent blocks
+        item = session.enqueue_speech(text, blocking=True, priority=1)
+        frontend.notify_inbox_update(session)
+        item.event.wait()
         preview = text[:100] + ("..." if len(text) > 100 else "")
         return _attach_messages(f"Urgently spoke: {preview}", session)
 

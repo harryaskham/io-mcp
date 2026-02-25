@@ -84,9 +84,7 @@ SECONDARY_EXTRAS = [
     {"label": "History", "summary": "Review past selections for this session"},
     {"label": "Switch tab", "summary": "Scroll through agent tabs and select one"},
     {"label": "New agent", "summary": "Spawn a new Claude Code agent (local or remote)"},
-    {"label": "Dashboard", "summary": "Overview of all active agents"},
     {"label": "View logs", "summary": "TUI errors, proxy logs, speech history"},
-    {"label": "Unified inbox", "summary": "All pending choices across all agents"},
     {"label": "Close tab", "summary": "Close the focused agent tab"},
     {"label": "Quick settings", "summary": "Speed, voice, notifications, restart"},
 ]
@@ -132,16 +130,18 @@ class ChoiceItem(ListItem):
 class InboxListItem(ListItem):
     """A single item in the inbox list (left pane of two-column layout).
 
-    Shows a status icon (● pending, ✓ done) and truncated preamble text.
+    Shows a status icon and truncated text. Icons:
+    - Choice items: ● pending, ✓ done
+    - Speech items: ♪ pending/playing, > done
     Active (currently displayed) item is highlighted. Done items are dimmed.
-    In multi-agent mode, shows the agent/session name prefix so the user
-    knows which agent sent each item.
+    In multi-agent mode, shows the agent/session name prefix.
     """
 
     def __init__(self, preamble: str, is_done: bool = False,
                  is_active: bool = False, inbox_index: int = 0,
                  n_choices: int = 0, session_name: str = "",
-                 accent_color: str = "", **kwargs) -> None:
+                 accent_color: str = "", kind: str = "choices",
+                 **kwargs) -> None:
         super().__init__(**kwargs)
         self.inbox_preamble = preamble
         self.is_done = is_done
@@ -150,15 +150,24 @@ class InboxListItem(ListItem):
         self.n_choices = n_choices
         self.session_name = session_name  # agent name (shown in multi-agent mode)
         self.accent_color = accent_color  # color for agent name tag
+        self.kind = kind  # "choices" or "speech"
 
     def compose(self) -> ComposeResult:
-        # Status icon
-        if self.is_active:
-            icon = "[bold]●[/bold]"
-        elif self.is_done:
-            icon = "[dim]✓[/dim]"
-        else:
-            icon = "○"
+        # Status icon — varies by kind
+        if self.kind == "speech":
+            if self.is_active:
+                icon = "[bold]♪[/bold]"
+            elif self.is_done:
+                icon = "[dim]>[/dim]"
+            else:
+                icon = "♪"
+        else:  # choices
+            if self.is_active:
+                icon = "[bold]●[/bold]"
+            elif self.is_done:
+                icon = "[dim]✓[/dim]"
+            else:
+                icon = "○"
 
         # Agent name prefix (only set in multi-agent mode)
         if self.session_name:

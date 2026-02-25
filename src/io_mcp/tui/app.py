@@ -73,10 +73,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         Binding("t", "spawn_agent", "New agent", show=False),
         Binding("x", "multi_select_toggle", "Multi", show=False),
         Binding("c", "toggle_conversation", "Chat", show=False),
-        Binding("d", "dashboard", "Dashboard", show=False),
-        Binding("a", "unified_inbox", "Inbox", show=False),
         Binding("v", "pane_view", "Pane", show=False),
-        Binding("g", "agent_log", "Log", show=False),
         Binding("question_mark", "show_help", "Help", show=False),
         Binding("r", "hot_reload", "Refresh", show=False),
         Binding("1", "pick_1", "", show=False),
@@ -122,10 +119,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         spawn_key = kb.get("spawnAgent", "t")
         multi_select_key = kb.get("multiSelect", "x")
         convo_key = kb.get("conversationMode", "c")
-        dashboard_key = kb.get("dashboard", "d")
-        unified_inbox_key = kb.get("unifiedInbox", "a")
         pane_key = kb.get("paneView", "v")
-        log_key = kb.get("agentLog", "g")
         help_key = kb.get("help", "question_mark")
         reload_key = kb.get("refresh", kb.get("hotReload", "r"))
         quit_key = kb.get("quit", "q")
@@ -151,10 +145,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             Binding(spawn_key, "spawn_agent", "New agent", show=False),
             Binding(multi_select_key, "multi_select_toggle", "Multi", show=False),
             Binding(convo_key, "toggle_conversation", "Chat", show=False),
-            Binding(dashboard_key, "dashboard", "Dashboard", show=False),
-            Binding(unified_inbox_key, "unified_inbox", "Inbox", show=False),
             Binding(pane_key, "pane_view", "Pane", show=False),
-            Binding(log_key, "agent_log", "Log", show=False),
             Binding(help_key, "show_help", "Help", show=False),
             Binding(reload_key, "hot_reload", "Refresh", show=False),
         ] + [Binding(str(i), f"pick_{i}", "", show=False) for i in range(1, 10)]
@@ -241,8 +232,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         # Conversation mode — continuous voice back-and-forth
         self._conversation_mode = False
 
-        # Log viewer mode
-        self._log_viewer_mode = False
+        # (Log viewer mode removed — timeline view deleted)
 
         # System logs mode (TUI errors, proxy logs, speech history)
         self._system_logs_mode = False
@@ -250,9 +240,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         # Help screen mode
         self._help_mode = False
 
-        # Unified inbox mode (cross-session)
-        self._unified_inbox_mode = False
-        self._unified_inbox_items: list[dict] = []
+        # (Unified inbox mode removed — inbox is now the default view)
 
         # Tab picker mode
         self._tab_picker_mode = False
@@ -1446,6 +1434,13 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             self._tts.play_chime("inbox")
             self._safe_call(self._update_inbox_list)
 
+        # Kick a drain thread in case there are speech items ahead of us
+        threading.Thread(
+            target=self._drain_session_inbox,
+            args=(session,),
+            daemon=True,
+        ).start()
+
         # ── Drain loop: wait for our turn, then present ──
         while True:
             front = session.peek_inbox()
@@ -2027,8 +2022,9 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             inbox_list.clear()
 
             # Collect all inbox items: pending (from inbox deque) + done
-            pending = [item for item in session.inbox if not item.done and item.kind == "choices"]
-            done = [item for item in session.inbox_done if item.kind == "choices"]
+            # Include both choices and speech items
+            pending = [item for item in session.inbox if not item.done]
+            done = [item for item in session.inbox_done]
 
             # Deduplicate done items — collapse entries with identical preambles
             done_deduped = self._dedup_done_items(done)
@@ -2057,25 +2053,27 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             for item in reversed(list(pending)):
                 is_active = (item is active_item)
                 inbox_list.append(InboxListItem(
-                    preamble=item.preamble,
+                    preamble=item.preamble or item.text,
                     is_done=False,
                     is_active=is_active,
                     inbox_index=idx,
                     n_choices=len(item.choices),
                     session_name=agent_name,
                     accent_color=accent_color,
+                    kind=item.kind,
                 ))
                 idx += 1
 
             for item in reversed(done_deduped[-10:]):  # Show last 10 done items
                 inbox_list.append(InboxListItem(
-                    preamble=item.preamble,
+                    preamble=item.preamble or item.text,
                     is_done=True,
                     is_active=False,
                     inbox_index=idx,
                     n_choices=len(item.choices),
                     session_name=agent_name,
                     accent_color=accent_color,
+                    kind=item.kind,
                 ))
                 idx += 1
 
@@ -2097,8 +2095,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         if not session:
             return None
 
-        pending = [item for item in session.inbox if not item.done and item.kind == "choices"]
-        done = [item for item in session.inbox_done if item.kind == "choices"]
+        pending = [item for item in session.inbox if not item.done]
+        done = [item for item in session.inbox_done]
 
         # Deduplicate done items to match _update_inbox_list display
         done_deduped = self._dedup_done_items(done)
@@ -2259,20 +2257,124 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         self.session_speak(session, text, block=False)
 
     def speak(self, text: str) -> None:
-        """Legacy blocking TTS — uses focused session or plays directly."""
-        session = self._focused()
-        if session:
-            self.session_speak(session, text, block=True)
-        else:
-            self._tts.speak(text)
+        """Legacy blocking TTS — plays directly, does NOT create inbox items."""
+        self._tts.speak(text)
 
     def speak_async(self, text: str) -> None:
-        """Legacy non-blocking TTS — uses focused session."""
-        session = self._focused()
-        if session:
-            self.session_speak(session, text, block=False)
-        else:
-            self._tts.speak_async(text)
+        """Legacy non-blocking TTS — plays directly, does NOT create inbox items."""
+        self._tts.speak_async(text)
+
+    # ─── Inbox drain (speech items) ───────────────────────────────
+
+    def notify_inbox_update(self, session: Session) -> None:
+        """Called from tool dispatch when a new item is enqueued.
+
+        Kicks the drain loop so speech items at the front of the queue
+        get played immediately. Also updates the inbox UI.
+        """
+        self._touch_session(session)
+        session.drain_kick.set()
+        self._safe_call(self._update_tab_bar)
+        self._safe_call(self._update_inbox_list)
+
+        # Start a drain thread for this session if speech items need processing
+        threading.Thread(
+            target=self._drain_session_inbox,
+            args=(session,),
+            daemon=True,
+        ).start()
+
+    def _drain_session_inbox(self, session: Session) -> None:
+        """Background drain loop: process speech items at the front of the inbox.
+
+        Speech items are auto-resolved after TTS playback. Choice items are
+        handled by _present_choices_inner (which runs on the tool thread).
+        This method only processes speech items — it exits when it hits a
+        choice item or the queue is empty.
+        """
+        while True:
+            front = session.peek_inbox()
+            if front is None:
+                break
+            if front.kind != "speech":
+                # Choice item — handled by _present_choices_inner
+                break
+            if front.done:
+                continue
+
+            # ── Process speech item ──
+            self._activate_speech_item(session, front)
+
+    def _activate_speech_item(self, session: Session, item: InboxItem) -> None:
+        """Play TTS for a speech inbox item and auto-resolve it.
+
+        Shows the speech text in the inbox sidebar and right pane,
+        plays TTS, then marks the item done.
+        """
+        text = item.text or item.preamble
+        priority = item.priority
+
+        self._touch_session(session)
+
+        # Log the speech
+        entry = SpeechEntry(text=text, priority=priority)
+        session.speech_log.append(entry)
+
+        # Emit event for remote frontends
+        try:
+            frontend_api.emit_speech_requested(
+                session.session_id, text, blocking=True, priority=priority)
+        except Exception:
+            pass
+
+        # Update inbox UI to show this item as active
+        session._active_inbox_item = item
+        self._safe_call(self._update_inbox_list)
+
+        # Show speech text in right pane if this is the focused session
+        if self._is_focused(session.session_id):
+            self._safe_call(lambda: self._show_speech_item(text))
+
+        # Play TTS
+        voice_ov = getattr(session, 'voice_override', None)
+        model_ov = getattr(session, 'model_override', None)
+        emotion_ov = getattr(session, 'emotion_override', None)
+
+        if priority >= 1:
+            self._tts.stop()
+
+        self._tts.speak(text, voice_override=voice_ov,
+                        emotion_override=emotion_ov,
+                        model_override=model_ov)
+
+        # Auto-resolve: mark done and kick drain
+        item.result = {"selected": "_speech_done", "summary": text[:100]}
+        item.done = True
+        item.event.set()
+        session._append_done(session.inbox.popleft())
+        session.drain_kick.set()
+        self._safe_call(self._update_inbox_list)
+        self._safe_call(self._update_tab_bar)
+
+    def _show_speech_item(self, text: str) -> None:
+        """Show a speech item's text in the right pane (runs on textual thread)."""
+        try:
+            s = self._cs
+            preamble_widget = self.query_one("#preamble", Label)
+            preamble_widget.update(f"[{s['blue']}]♪[/{s['blue']}] {text}")
+            preamble_widget.display = True
+            self.query_one("#status").display = False
+            self._ensure_main_content_visible(show_inbox=True)
+
+            list_view = self.query_one("#choices", ListView)
+            list_view.clear()
+            list_view.append(ChoiceItem(
+                f"[{s['fg_dim']}]Speaking...[/{s['fg_dim']}]", "",
+                index=-999, display_index=0,
+            ))
+            list_view.display = True
+        except Exception:
+            pass
 
     def _try_play_background_queue(self) -> None:
         """Try to play queued background speech if foreground is idle."""
@@ -2608,7 +2710,6 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         self._spawn_options = None
         self._quick_action_options = None
         self._dashboard_mode = False
-        self._log_viewer_mode = False
         self._system_logs_mode = False
         self._help_mode = False
         self._history_mode = False
@@ -3025,7 +3126,6 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         self._spawn_options = None
         self._quick_action_options = None
         self._dashboard_mode = False
-        self._log_viewer_mode = False
         self._help_mode = False
         self._tab_picker_mode = True
 
@@ -3354,14 +3454,6 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                         text = f"{btn['label']}. {btn.get('summary', '')}" if btn.get('summary') else btn['label']
                         self._tts.speak_async(text)
                 return
-            # Log viewer: read the full speech entry text
-            if getattr(self, '_log_viewer_mode', False):
-                if isinstance(event.item, ChoiceItem) and session:
-                    idx = event.item.display_index
-                    speech_log = getattr(session, 'speech_log', [])
-                    if idx < len(speech_log):
-                        self._tts.speak_async(speech_log[idx].text)
-                return
             # System logs: read the log entry text
             if getattr(self, '_system_logs_mode', False):
                 if isinstance(event.item, ChoiceItem):
@@ -3387,16 +3479,6 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                     if idx < len(history):
                         entry = history[idx]
                         text = f"{entry.label}. {entry.summary}" if entry.summary else entry.label
-                        self._tts.speak_async(text)
-                return
-            # Unified inbox: read the session name and preamble
-            if getattr(self, '_unified_inbox_mode', False):
-                if isinstance(event.item, ChoiceItem):
-                    idx = event.item.display_index
-                    ui_items = getattr(self, '_unified_inbox_items', [])
-                    if idx < len(ui_items):
-                        item = ui_items[idx]
-                        text = f"{item['session_name']}. {item['preamble']}"
                         self._tts.speak_async(text)
                 return
             # Tab picker: switch to the highlighted tab live
@@ -3507,11 +3589,6 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                     self._clear_all_modal_state(session=session)
                     self._do_spawn(spawn_opts[idx])
                     return
-                # Check if we're in log viewer mode (Enter closes it)
-                if getattr(self, '_log_viewer_mode', False):
-                    self._log_viewer_mode = False
-                    self._exit_settings()
-                    return
                 # Check if we're in system logs mode (Enter closes it)
                 if getattr(self, '_system_logs_mode', False):
                     self._system_logs_mode = False
@@ -3521,10 +3598,6 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 if getattr(self, '_help_mode', False):
                     self._help_mode = False
                     self._exit_settings()
-                    return
-                # Check if we're in unified inbox mode (Enter selects)
-                if getattr(self, '_unified_inbox_mode', False):
-                    self._handle_unified_inbox_select(idx)
                     return
                 # Check if we're in history mode (Enter closes it)
                 if getattr(self, '_history_mode', False):
@@ -3541,14 +3614,6 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 # Check if we're in worktree mode
                 if getattr(self, '_worktree_options', None):
                     self._handle_worktree_select(idx)
-                    return
-                # Check if we're in dashboard action menu
-                if getattr(self, '_dashboard_action_mode', False):
-                    self._handle_dashboard_action(idx)
-                    return
-                # Check if we're in dashboard mode
-                if getattr(self, '_dashboard_mode', False):
-                    self._dashboard_session_actions(idx)
                     return
                 # Check if we're in quick settings submenu
                 if getattr(self, '_quick_settings_mode', False):
@@ -4070,27 +4135,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 self._handle_quick_settings_select(items[n - 1])
             return
 
-        # Dashboard action menu — dispatch by number
-        if getattr(self, '_dashboard_action_mode', False):
-            self._handle_dashboard_action(n - 1)
-            return
-
-        # Unified inbox — select item by number
-        if getattr(self, '_unified_inbox_mode', False):
-            ui_items = getattr(self, '_unified_inbox_items', [])
-            if 1 <= n <= len(ui_items):
-                self._handle_unified_inbox_select(n - 1)
-            return
-
-        # Dashboard — select session by number
-        if getattr(self, '_dashboard_mode', False):
-            sessions = self.manager.all_sessions()
-            if 1 <= n <= len(sessions):
-                self._dashboard_session_actions(n - 1)
-            return
-
         # Settings menu — select setting by number
-        if self._in_settings and not getattr(self, '_dashboard_mode', False):
+        if self._in_settings:
             # Tab picker
             if getattr(self, '_tab_picker_mode', False):
                 sessions = getattr(self, '_tab_picker_sessions', [])
@@ -4139,10 +4185,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                     self._handle_dialog_select(n)
                 return
 
-            # Help, timeline, history, log — read-only, no action on number
+            # Help, history, log — read-only, no action on number
             if getattr(self, '_help_mode', False):
-                return
-            if getattr(self, '_log_viewer_mode', False):
                 return
             if getattr(self, '_system_logs_mode', False):
                 return
@@ -4246,14 +4290,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             self._show_choices()
             return
 
-        # Settings / dashboard / log / help / any modal → back
+        # Settings / help / any modal → back
         if self._in_settings:
-            # Dashboard action menu → go back to dashboard
-            if getattr(self, '_dashboard_action_mode', False):
-                self._dashboard_action_mode = False
-                self._dashboard_action_target = None
-                self.action_dashboard()
-                return
             self._exit_settings()
             return
 
@@ -4421,12 +4459,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             self._enter_tab_picker()
         elif label == "New agent":
             self.action_spawn_agent()
-        elif label == "Dashboard":
-            self.action_dashboard()
         elif label == "View logs":
             self.action_view_system_logs()
-        elif label == "Unified inbox":
-            self.action_unified_inbox()
         elif label == "Close tab":
             session = self._focused()
             if session:

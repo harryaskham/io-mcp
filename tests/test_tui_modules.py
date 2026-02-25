@@ -110,7 +110,6 @@ class TestExtraOptions:
         assert "Quick settings" in labels
         assert "Record response" in labels
         assert "Queue message" in labels
-        assert "Dashboard" in labels
         assert "New agent" in labels
         assert "Switch tab" in labels
 

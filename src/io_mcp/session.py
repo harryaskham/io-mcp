@@ -155,6 +155,34 @@ class Session:
         self.inbox.append(item)
         self._inbox_generation += 1
 
+    def enqueue_speech(self, text: str, blocking: bool = True,
+                       priority: int = 0) -> InboxItem:
+        """Create and enqueue a speech InboxItem.
+
+        Args:
+            text: The speech text.
+            blocking: Whether the agent should block until TTS finishes.
+            priority: 0=normal, 1=urgent (interrupts current playback).
+
+        Returns:
+            The enqueued InboxItem.
+        """
+        item = InboxItem(
+            kind="speech",
+            text=text,
+            blocking=blocking,
+            priority=priority,
+            preamble=text[:80] + ("…" if len(text) > 80 else ""),
+        )
+        if priority >= 1:
+            # Urgent: insert at front of inbox
+            self.inbox.appendleft(item)
+        else:
+            self.inbox.append(item)
+        self._inbox_generation += 1
+        self.drain_kick.set()
+        return item
+
     def dedup_and_enqueue(self, item: InboxItem) -> "bool | InboxItem":
         """Atomically check for duplicates and enqueue a choices item.
 
