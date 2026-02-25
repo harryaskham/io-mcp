@@ -660,20 +660,21 @@ class TTSEngine:
                                    voice_override: Optional[str] = None,
                                    emotion_override: Optional[str] = None,
                                    nonblocking: bool = False) -> None:
-        """Speak text for scroll readout: cached audio only, no subprocess spawning.
+        """Speak text for scroll readout: cached audio preferred, API fallback.
 
         On cache hit: plays immediately in a background thread.
-        On cache miss: silently skips (pregeneration will cache it for next time).
+        On cache miss (API mode): calls speak_async() to generate + play via API.
+        On cache miss (local mode): uses configured local backend (termux/espeak).
 
-        This keeps the scroll path completely free of subprocess.Popen calls,
-        which take 200-300ms each on proot/Android and cause key sluggishness.
+        This keeps the scroll path fast — cache hits play instantly, cache misses
+        trigger async API generation which will cache for next time.
 
-        The only exceptions:
-        - nonblocking=True: uses espeak for freeform text entry readback
-        - --local mode: uses configured local backend (termux/espeak)
+        In --local mode only, uses configured local backend (termux/espeak).
+        espeak is NEVER used in non-local mode.
 
         Args:
-            nonblocking: If True, use espeak for instant readback (text entry).
+            nonblocking: If True, used for freeform text entry readback.
+                In API mode, uses speak_async(). In local mode, uses local backend.
         """
         if self._muted:
             return
@@ -699,30 +700,7 @@ class TTSEngine:
             threading.Thread(target=_play_cached, daemon=True).start()
             return
 
-        # Special case: nonblocking text entry readback via espeak
-        if nonblocking and self._espeak and self._paplay:
-            def _espeak_play():
-                try:
-                    if self._scroll_gen != my_gen:
-                        return
-                    wpm = int(TTS_SPEED * self._speed)
-                    tmp = os.path.join(CACHE_DIR, f"_espeak_{hashlib.md5(text.encode()).hexdigest()[:8]}.wav")
-                    with open(tmp, "wb") as f:
-                        subprocess.run(
-                            [self._espeak, "--stdout", "-s", str(wpm), text],
-                            stdout=f, stderr=subprocess.DEVNULL,
-                            env=self._env, timeout=5,
-                        )
-                    if self._scroll_gen != my_gen:
-                        return
-                    self.stop_sync()
-                    self._start_playback(tmp)
-                except Exception:
-                    pass
-            threading.Thread(target=_espeak_play, daemon=True).start()
-            return
-
-        # --local mode: use configured local backend
+        # --local mode: use configured local backend (espeak/termux)
         if self._local:
             if self._local_backend == "termux" and self._termux_exec:
                 def _termux_play():
@@ -753,9 +731,10 @@ class TTSEngine:
                 threading.Thread(target=_espeak_local, daemon=True).start()
             return
 
-        # Cache miss, API mode — skip silently.
-        # Pregeneration will cache this text for next scroll-through.
-        # No subprocess spawning keeps the scroll path fast.
+        # Cache miss, API mode — use speak_async() to generate and play.
+        # This uses the API TTS voice (not espeak) and caches for next time.
+        self.speak_async(text, voice_override=voice_override,
+                         emotion_override=emotion_override)
 
     def speak_streaming(self, text: str, voice_override: Optional[str] = None,
                         emotion_override: Optional[str] = None,

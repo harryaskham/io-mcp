@@ -137,6 +137,135 @@ class ViewsMixin:
         except Exception:
             pass
 
+    def _send_to_agent_pane(self: "IoMcpApp", session, message: str) -> None:
+        """Send a message directly to an agent's tmux pane via tmux-cli.
+
+        This bypasses the MCP message queue and injects text directly into
+        the agent's Claude Code input, allowing interruption of long operations.
+
+        Uses tmux-cli for reliable delivery (handles Enter key verification).
+        Falls back to tmux send-keys if tmux-cli is unavailable.
+
+        For remote agents, prepends ssh to the command.
+        """
+        pane = getattr(session, 'tmux_pane', '')
+        if not pane:
+            self._speak_ui("No tmux pane registered for this agent.")
+            return
+
+        hostname = getattr(session, 'hostname', '')
+        is_remote = hostname and hostname not in (
+            "", "localhost", os.uname().nodename,
+        )
+        # Also check against Tailscale self-hostname
+        if is_remote:
+            try:
+                result = subprocess.run(
+                    ["tailscale", "status", "--json"],
+                    capture_output=True, text=True, timeout=3,
+                )
+                if result.returncode == 0:
+                    import json
+                    ts_data = json.loads(result.stdout)
+                    self_dns = ts_data.get("Self", {}).get("DNSName", "").rstrip(".")
+                    if self_dns and hostname.rstrip(".") == self_dns:
+                        is_remote = False
+            except Exception:
+                pass
+
+        def _do_send():
+            try:
+                # Try tmux-cli first (more reliable with Enter key handling)
+                tmux_cli = None
+                try:
+                    result = subprocess.run(
+                        ["which", "tmux-cli"], capture_output=True, text=True, timeout=3,
+                    )
+                    if result.returncode == 0:
+                        tmux_cli = result.stdout.strip()
+                except Exception:
+                    pass
+
+                if tmux_cli:
+                    if is_remote:
+                        cmd = [
+                            "ssh", "-o", "ConnectTimeout=5", hostname,
+                            f"tmux-cli send {repr(message)} --pane={pane}",
+                        ]
+                    else:
+                        cmd = [tmux_cli, "send", message, f"--pane={pane}"]
+                else:
+                    # Fallback to tmux send-keys
+                    if is_remote:
+                        cmd = [
+                            "ssh", "-o", "ConnectTimeout=5", hostname,
+                            f"tmux send-keys -t {pane} {repr(message)} Enter",
+                        ]
+                    else:
+                        cmd = ["tmux", "send-keys", "-t", pane, message, "Enter"]
+
+                result = subprocess.run(
+                    cmd, capture_output=True, text=True, timeout=10,
+                )
+                if result.returncode == 0:
+                    try:
+                        self.call_from_thread(
+                            lambda: self._speak_ui(f"Message sent to {session.name}")
+                        )
+                    except Exception:
+                        pass
+                else:
+                    err = result.stderr.strip()[:100] if result.stderr else "unknown error"
+                    try:
+                        self.call_from_thread(
+                            lambda: self._speak_ui(f"Failed to send: {err}")
+                        )
+                    except Exception:
+                        pass
+            except Exception as e:
+                try:
+                    self.call_from_thread(
+                        lambda: self._speak_ui(f"Send error: {str(e)[:80]}")
+                    )
+                except Exception:
+                    pass
+
+        self._speak_ui(f"Sending to {session.name}")
+        threading.Thread(target=_do_send, daemon=True).start()
+
+    def _action_interrupt_agent(self: "IoMcpApp") -> None:
+        """Open text input to send a message directly to the agent's tmux pane.
+
+        Unlike queue message (m), this interrupts the agent immediately by
+        injecting text into its Claude Code input via tmux-cli.
+        """
+        session = self._message_target()
+        if not session:
+            return
+        if not getattr(session, 'tmux_pane', ''):
+            self._speak_ui("No tmux pane for this agent.")
+            return
+
+        # Reuse message mode infrastructure but flag as interrupt
+        self._message_mode = True
+        self._interrupt_mode = True
+        self._message_target_session = session
+        self._freeform_spoken_pos = 0
+        self._inbox_was_visible = self._inbox_pane_visible()
+
+        # UI
+        self.query_one("#main-content").display = False
+        self.query_one("#dwell-bar").display = False
+        from .widgets import SubmitTextArea
+        inp = self.query_one("#freeform-input", SubmitTextArea)
+        inp.clear()
+        inp.styles.display = "block"
+        inp.focus()
+
+        self._tts.stop()
+        self._speak_ui(f"Type message to interrupt {session.name}")
+
+
     @_safe_action
     def action_show_help(self: "IoMcpApp") -> None:
         """Show help screen with all keyboard shortcuts.

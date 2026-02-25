@@ -135,6 +135,52 @@ def _crash_log_hint() -> str:
     )
 
 
+REG_DIR = "/tmp/io-mcp-registrations"
+
+
+def _load_registration(tmux_pane: str = "") -> dict | None:
+    """Load pre-registered agent data from the Start hook.
+
+    The Start hook writes environment data (tmux pane, IP, hostname)
+    to /tmp/io-mcp-registrations/pane-{id}.json before the agent
+    makes any MCP calls.
+
+    If tmux_pane is provided, loads that specific registration.
+    Otherwise, tries to find the most recent registration file.
+    """
+    try:
+        if not os.path.isdir(REG_DIR):
+            return None
+
+        if tmux_pane:
+            # Direct lookup by pane ID
+            pane_key = tmux_pane.replace("%", "")
+            path = os.path.join(REG_DIR, f"pane-{pane_key}.json")
+            if os.path.isfile(path):
+                with open(path) as f:
+                    return json.load(f)
+            return None
+
+        # No pane ID — find the most recent registration file
+        # (for cases where the agent doesn't know its pane)
+        files = []
+        for fname in os.listdir(REG_DIR):
+            if fname.startswith("pane-") and fname.endswith(".json"):
+                fpath = os.path.join(REG_DIR, fname)
+                files.append((os.path.getmtime(fpath), fpath))
+
+        if not files:
+            return None
+
+        # Return the most recently modified registration
+        files.sort(reverse=True)
+        with open(files[0][1]) as f:
+            return json.load(f)
+
+    except Exception:
+        return None
+
+
 def _get_session_id(ctx: Context) -> str:
     """Extract session ID from MCP context."""
     session = ctx.session
@@ -390,6 +436,9 @@ def create_proxy_server(
         - Control agents via tmux (send messages, restart)
         - Reconnect agents after io-mcp restarts
 
+        Environment data (tmux pane, IP, hostname) is auto-gathered by the
+        Start hook — agents don't need to provide these fields manually.
+
         Parameters
         ----------
         cwd:
@@ -414,6 +463,30 @@ def create_proxy_server(
         str
             JSON confirmation with assigned session info.
         """
+        # Enrich with pre-registered data from the Start hook.
+        # The hook writes environment data to /tmp/io-mcp-registrations/
+        # before the agent makes any MCP calls.
+        reg_data = _load_registration(tmux_pane)
+        if reg_data:
+            # Use pre-registered values as defaults (agent-provided values take priority)
+            if not tmux_pane and reg_data.get("tmux_pane"):
+                tmux_pane = reg_data["tmux_pane"]
+            if not tmux_session and reg_data.get("tmux_session"):
+                tmux_session = reg_data["tmux_session"]
+            if not hostname and reg_data.get("tailscale_hostname"):
+                hostname = reg_data["tailscale_hostname"]
+            elif not hostname and reg_data.get("hostname"):
+                hostname = reg_data["hostname"]
+            if not cwd and reg_data.get("cwd"):
+                cwd = reg_data["cwd"]
+            # Store enrichment data in metadata
+            enriched_meta = dict(metadata) if metadata else {}
+            if reg_data.get("ipv4"):
+                enriched_meta["ipv4"] = reg_data["ipv4"]
+            if reg_data.get("tailscale_hostname"):
+                enriched_meta["tailscale_hostname"] = reg_data["tailscale_hostname"]
+            metadata = enriched_meta
+
         return await _fwd("register_session", {
             "cwd": cwd, "hostname": hostname,
             "tmux_session": tmux_session, "tmux_pane": tmux_pane,

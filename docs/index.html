@@ -4,61 +4,110 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>io-mcp — Hands-free Claude Code</title>
-  <meta name="description" content="Control Claude Code with a scroll wheel and earphones. No keyboard needed.">
+  <meta name="description" content="Control Claude Code with a scroll wheel and earphones. No keyboard needed. An MCP server for hands-free AI coding.">
+  <meta name="theme-color" content="#2e3440">
+  <meta property="og:title" content="io-mcp — Hands-free Claude Code">
+  <meta property="og:description" content="Control Claude Code with a scroll wheel and earphones. No keyboard needed.">
+  <meta property="og:type" content="website">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎧</text></svg>">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
 <!-- ─── Hero ──────────────────────────────────────────── -->
 <header class="hero">
-  <h1>io-mcp</h1>
-  <p class="tagline">
-    Control Claude Code with a scroll wheel and earphones.
-    No keyboard needed.
-  </p>
-  <div class="cta">
-    <a href="https://github.com/harryaskham/io-mcp" class="btn btn-primary">View on GitHub</a>
-    <a href="#quickstart" class="btn btn-secondary">Quick Start</a>
+  <div class="hero-glow"></div>
+  <div class="hero-content">
+    <div class="badge">MCP Server for Claude Code</div>
+    <h1>io-mcp</h1>
+    <p class="tagline">
+      Code with AI using only a scroll wheel and earphones.<br>
+      <span class="tagline-accent">No screen. No keyboard. Just your voice and a ring.</span>
+    </p>
+    <div class="cta">
+      <a href="https://github.com/harryaskham/io-mcp" class="btn btn-primary">
+        <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor" style="vertical-align: -3px; margin-right: 6px;"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        View on GitHub
+      </a>
+      <a href="#quickstart" class="btn btn-secondary">Quick Start</a>
+    </div>
   </div>
-
-  <div class="diagram">       ┌─────────────┐
-       │  Smart Ring  │ ── scroll input
-       └──────┬──────┘
-              │
-┌────────┐  ┌─▼──────────┐  ┌────────────┐
-│Claude A│◄►│   io-mcp   │◄►│ Android App│
-│Claude B│◄►│  TUI + MCP │  │  (Compose) │
-└────────┘  └─┬──────────┘  └────────────┘
-              │
-       ┌──────▼──────┐
-       │  Earphones  │ ── TTS audio
-       └─────────────┘</div>
 </header>
+
+<!-- ─── How It Works ─────────────────────────────────── -->
+<section class="how-it-works" id="how-it-works">
+  <h2>How It Works</h2>
+  <p class="subtitle">Three components, one seamless loop.</p>
+  <div class="flow">
+    <div class="flow-step fade-in">
+      <div class="flow-icon">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/></svg>
+      </div>
+      <h3>Scroll & Pick</h3>
+      <p>Claude presents choices. You scroll with a smart ring or your phone. Each option is read aloud through your earphones.</p>
+    </div>
+    <div class="flow-connector fade-in"><svg width="40" height="20" viewBox="0 0 40 20"><path d="M5 10 L35 10" stroke="var(--color-accent)" stroke-width="2" stroke-dasharray="4 4" opacity="0.5"/><path d="M30 5 L35 10 L30 15" stroke="var(--color-accent)" stroke-width="2" fill="none" opacity="0.5"/></svg></div>
+    <div class="flow-step fade-in">
+      <div class="flow-icon">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+      </div>
+      <h3>Speak or Type</h3>
+      <p>Give voice commands, have a conversation, or type when you prefer. io-mcp transcribes and sends your input to the agent.</p>
+    </div>
+    <div class="flow-connector fade-in"><svg width="40" height="20" viewBox="0 0 40 20"><path d="M5 10 L35 10" stroke="var(--color-accent)" stroke-width="2" stroke-dasharray="4 4" opacity="0.5"/><path d="M30 5 L35 10 L30 15" stroke="var(--color-accent)" stroke-width="2" fill="none" opacity="0.5"/></svg></div>
+    <div class="flow-step fade-in">
+      <div class="flow-icon">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+      </div>
+      <h3>Code Ships</h3>
+      <p>Claude writes code, runs tests, commits. You stay eyes-free the entire time. Narrated progress keeps you in the loop.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ─── Architecture Diagram ─────────────────────────── -->
+<section class="arch-section">
+  <div class="arch-wrapper fade-in">
+    <div class="diagram">                    ┌─────────────┐
+                    │  Smart Ring  │ ──── scroll wheel input
+                    └──────┬──────┘
+                           │
+┌──────────┐        ┌──────▼───────┐        ┌──────────────┐
+│ Claude A │◄──────►│   io-mcp     │◄──────►│  Android App │
+│ Claude B │◄──────►│   TUI + MCP  │  SSE   │  (Compose)   │
+│ Claude C │◄──────►│              │        └──────────────┘
+└──────────┘        └──────┬───────┘
+                           │
+                    ┌──────▼──────┐
+                    │  Earphones  │ ──── TTS audio output
+                    └─────────────┘</div>
+  </div>
+</section>
 
 <!-- ─── Interaction Modes ──────────────────────────────── -->
 <section>
   <h2>Four Ways to Interact</h2>
-  <p class="subtitle">From scroll-and-pick to free conversation — choose the mode that fits.</p>
+  <p class="subtitle">From scroll-and-pick to free conversation &mdash; choose the mode that fits the moment.</p>
   <div class="modes">
-    <div class="mode">
-      <span class="mode-icon">🎯</span>
+    <div class="mode fade-in">
+      <div class="mode-icon-wrap"><span class="mode-icon">&#x1F3AF;</span></div>
       <h3>Choice Mode</h3>
-      <p>Scroll through options, hear each one, select with Enter</p>
+      <p>Scroll through options, hear each one read aloud, select with a click or Enter</p>
     </div>
-    <div class="mode">
-      <span class="mode-icon">🗣</span>
+    <div class="mode fade-in">
+      <div class="mode-icon-wrap"><span class="mode-icon">&#x1F5E3;</span></div>
       <h3>Conversation</h3>
-      <p>Continuous voice back-and-forth — like a phone call with AI</p>
+      <p>Continuous voice back-and-forth &mdash; like a phone call with your AI coding partner</p>
     </div>
-    <div class="mode">
-      <span class="mode-icon">⌨</span>
+    <div class="mode fade-in">
+      <div class="mode-icon-wrap"><span class="mode-icon">&#x2328;</span></div>
       <h3>Freeform Input</h3>
-      <p>Type replies with live espeak readback as you type</p>
+      <p>Type replies with live espeak readback so you know what you're writing</p>
     </div>
-    <div class="mode">
-      <span class="mode-icon">📨</span>
+    <div class="mode fade-in">
+      <div class="mode-icon-wrap"><span class="mode-icon">&#x1F4E8;</span></div>
       <h3>Message Queue</h3>
-      <p>Queue messages for the agent's next response</p>
+      <p>Queue messages while the agent works &mdash; they'll arrive at its next response</p>
     </div>
   </div>
 </section>
@@ -68,70 +117,103 @@
   <h2>Features</h2>
   <p class="subtitle">Everything you need for hands-free AI coding.</p>
   <div class="features">
-    <div class="feature">
-      <span class="icon">📡</span>
-      <h3>Multi-Agent Tabs</h3>
-      <p>Run multiple Claude Code instances, each in its own tab with independent state and TTS.</p>
+    <div class="feature fade-in">
+      <div class="feature-header">
+        <span class="icon">&#x1F4E1;</span>
+        <h3>Multi-Agent Tabs</h3>
+      </div>
+      <p>Run multiple Claude Code instances, each in its own tab with independent state and TTS voice.</p>
     </div>
-    <div class="feature">
-      <span class="icon">🎛</span>
-      <h3>Agent Spawner</h3>
+    <div class="feature fade-in">
+      <div class="feature-header">
+        <span class="icon">&#x1F39B;</span>
+        <h3>Agent Spawner</h3>
+      </div>
       <p>Press <code class="inline-code">t</code> to launch new agents locally or on remote hosts via SSH.</p>
     </div>
-    <div class="feature">
-      <span class="icon">📊</span>
-      <h3>Dashboard</h3>
-      <p>Press <code class="inline-code">d</code> for a mission control overview of all active agents.</p>
+    <div class="feature fade-in">
+      <div class="feature-header">
+        <span class="icon">&#x1F4CA;</span>
+        <h3>Dashboard</h3>
+      </div>
+      <p>Press <code class="inline-code">d</code> for a mission control overview of all active agents and their status.</p>
     </div>
-    <div class="feature">
-      <span class="icon">⚡</span>
-      <h3>Quick Actions</h3>
-      <p>Configurable macros: "commit and push", "run tests" — one key away.</p>
+    <div class="feature fade-in">
+      <div class="feature-header">
+        <span class="icon">&#x26A1;</span>
+        <h3>Quick Actions</h3>
+      </div>
+      <p>Configurable macros: &ldquo;commit and push&rdquo;, &ldquo;run tests&rdquo; &mdash; one key away.</p>
     </div>
-    <div class="feature">
-      <span class="icon">📜</span>
-      <h3>Agent Log</h3>
-      <p>Press <code class="inline-code">g</code> for a scrollable transcript of everything the agent said.</p>
+    <div class="feature fade-in">
+      <div class="feature-header">
+        <span class="icon">&#x1F4DC;</span>
+        <h3>Agent Log</h3>
+      </div>
+      <p>Press <code class="inline-code">g</code> for a scrollable transcript of everything the agent said and did.</p>
     </div>
-    <div class="feature">
-      <span class="icon">↩</span>
-      <h3>Undo Selection</h3>
+    <div class="feature fade-in">
+      <div class="feature-header">
+        <span class="icon">&#x21A9;</span>
+        <h3>Undo Selection</h3>
+      </div>
       <p>Press <code class="inline-code">u</code> to go back if you scrolled past the right option.</p>
     </div>
-    <div class="feature">
-      <span class="icon">🔍</span>
-      <h3>Choice Filter</h3>
+    <div class="feature fade-in">
+      <div class="feature-header">
+        <span class="icon">&#x1F50D;</span>
+        <h3>Choice Filter</h3>
+      </div>
       <p>Press <code class="inline-code">/</code> to type and filter choices by name or description.</p>
     </div>
-    <div class="feature">
-      <span class="icon">🎨</span>
-      <h3>Color Schemes</h3>
+    <div class="feature fade-in">
+      <div class="feature-header">
+        <span class="icon">&#x1F3A8;</span>
+        <h3>Color Schemes</h3>
+      </div>
       <p>Nord, Tokyo Night, Catppuccin, or Dracula. Switch from the settings menu.</p>
     </div>
-    <div class="feature">
-      <span class="icon">🔔</span>
-      <h3>Audio Cues</h3>
-      <p>Subtle chimes for new choices, selections, agent connections, and recording.</p>
+    <div class="feature fade-in">
+      <div class="feature-header">
+        <span class="icon">&#x1F514;</span>
+        <h3>Audio Cues</h3>
+      </div>
+      <p>Subtle chimes for new choices, selections, agent connections, and recording state changes.</p>
     </div>
-    <div class="feature">
-      <span class="icon">⏱</span>
-      <h3>Ambient Mode</h3>
-      <p>Escalating TTS updates during long silence: "Still working, 2 minutes in..."</p>
+    <div class="feature fade-in">
+      <div class="feature-header">
+        <span class="icon">&#x23F1;</span>
+        <h3>Ambient Mode</h3>
+      </div>
+      <p>Escalating TTS updates during long silence so you always know what's happening.</p>
     </div>
-    <div class="feature">
-      <span class="icon">📱</span>
-      <h3>Android App</h3>
-      <p>Jetpack Compose companion — touch, scroll, mic, notifications. TTS stays on the phone.</p>
+    <div class="feature fade-in">
+      <div class="feature-header">
+        <span class="icon">&#x1F4F1;</span>
+        <h3>Android App</h3>
+      </div>
+      <p>Jetpack Compose companion &mdash; touch, scroll, mic, notifications. TTS stays on the phone.</p>
     </div>
-    <div class="feature">
-      <span class="icon">💬</span>
-      <h3>CLI Messaging</h3>
-      <p><code class="inline-code">io-mcp-msg "check this"</code> — send messages from any terminal pane.</p>
+    <div class="feature fade-in">
+      <div class="feature-header">
+        <span class="icon">&#x1F4AC;</span>
+        <h3>CLI Messaging</h3>
+      </div>
+      <p><code class="inline-code">io-mcp-msg "check this"</code> &mdash; send messages from any terminal pane.</p>
     </div>
-    <div class="feature">
-      <span class="icon">📳</span>
-      <h3>Haptic Feedback</h3>
+    <div class="feature fade-in">
+      <div class="feature-header">
+        <span class="icon">&#x1F4F3;</span>
+        <h3>Haptic Feedback</h3>
+      </div>
       <p>Vibration on scroll and selection. Feels tactile even without seeing the screen.</p>
+    </div>
+    <div class="feature fade-in">
+      <div class="feature-header">
+        <span class="icon">&#x1F6E1;</span>
+        <h3>Health Monitoring</h3>
+      </div>
+      <p>Automatic detection of stuck or crashed agents with webhook notifications via ntfy, Slack, or Discord.</p>
     </div>
   </div>
 </section>
@@ -139,39 +221,65 @@
 <!-- ─── Keyboard Shortcuts ─────────────────────────────── -->
 <section>
   <h2>Keyboard Shortcuts</h2>
-  <p class="subtitle">All configurable via <code class="inline-code">config.keyBindings</code>.</p>
+  <p class="subtitle">All configurable via <code class="inline-code">config.keyBindings</code>. Designed for one-handed use.</p>
   <div class="shortcuts">
-    <div class="shortcut"><kbd>j</kbd><kbd>k</kbd> <span>Navigate choices</span></div>
-    <div class="shortcut"><kbd>⏎</kbd> <span>Select / stop recording</span></div>
-    <div class="shortcut"><kbd>u</kbd> <span>Undo last selection</span></div>
-    <div class="shortcut"><kbd>/</kbd> <span>Filter choices</span></div>
-    <div class="shortcut"><kbd>t</kbd> <span>Spawn new agent</span></div>
-    <div class="shortcut"><kbd>x</kbd> <span>Quick actions</span></div>
-    <div class="shortcut"><kbd>c</kbd> <span>Conversation mode</span></div>
-    <div class="shortcut"><kbd>d</kbd> <span>Dashboard</span></div>
-    <div class="shortcut"><kbd>g</kbd> <span>Agent log</span></div>
-    <div class="shortcut"><kbd>h</kbd><kbd>l</kbd> <span>Switch tabs</span></div>
-    <div class="shortcut"><kbd>␣</kbd> <span>Voice input</span></div>
-    <div class="shortcut"><kbd>i</kbd> <span>Freeform text input</span></div>
-    <div class="shortcut"><kbd>m</kbd> <span>Queue message</span></div>
-    <div class="shortcut"><kbd>s</kbd> <span>Settings</span></div>
-    <div class="shortcut"><kbd>1</kbd>–<kbd>9</kbd> <span>Instant select</span></div>
+    <div class="shortcut fade-in"><kbd>j</kbd><kbd>k</kbd> <span>Navigate choices</span></div>
+    <div class="shortcut fade-in"><kbd>&#x23CE;</kbd> <span>Select / stop recording</span></div>
+    <div class="shortcut fade-in"><kbd>1</kbd>&ndash;<kbd>9</kbd> <span>Instant select</span></div>
+    <div class="shortcut fade-in"><kbd>u</kbd> <span>Undo last selection</span></div>
+    <div class="shortcut fade-in"><kbd>/</kbd> <span>Filter choices</span></div>
+    <div class="shortcut fade-in"><kbd>t</kbd> <span>Spawn new agent</span></div>
+    <div class="shortcut fade-in"><kbd>x</kbd> <span>Quick actions</span></div>
+    <div class="shortcut fade-in"><kbd>c</kbd> <span>Conversation mode</span></div>
+    <div class="shortcut fade-in"><kbd>d</kbd> <span>Dashboard</span></div>
+    <div class="shortcut fade-in"><kbd>g</kbd> <span>Agent log</span></div>
+    <div class="shortcut fade-in"><kbd>h</kbd><kbd>l</kbd> <span>Switch tabs</span></div>
+    <div class="shortcut fade-in"><kbd>&#x2423;</kbd> <span>Voice input</span></div>
+    <div class="shortcut fade-in"><kbd>i</kbd> <span>Freeform text input</span></div>
+    <div class="shortcut fade-in"><kbd>m</kbd> <span>Queue message</span></div>
+    <div class="shortcut fade-in"><kbd>s</kbd> <span>Settings</span></div>
+    <div class="shortcut fade-in"><kbd>v</kbd> <span>Pane view (live tmux)</span></div>
   </div>
 </section>
 
 <!-- ─── Quick Start ────────────────────────────────────── -->
-<section id="quickstart">
+<section id="quickstart" class="quickstart-section">
   <h2>Quick Start</h2>
-  <p class="subtitle">Get running in three commands.</p>
-<pre><span style="color:#616e88"># Install and run</span>
-nix develop
-uv run io-mcp
+  <p class="subtitle">Up and running in seconds.</p>
+  <div class="quickstart-steps">
+    <div class="qs-step fade-in">
+      <div class="qs-number">1</div>
+      <div class="qs-content">
+        <h3>Install &amp; Run</h3>
+        <pre><span class="code-comment"># Clone and enter dev shell</span>
+git clone https://github.com/harryaskham/io-mcp
+cd io-mcp && nix develop
 
-<span style="color:#616e88"># Demo mode (no agent needed)</span>
+<span class="code-comment"># Start io-mcp</span>
+uv run io-mcp</pre>
+      </div>
+    </div>
+    <div class="qs-step fade-in">
+      <div class="qs-number">2</div>
+      <div class="qs-content">
+        <h3>Connect Claude Code</h3>
+        <pre><span class="code-comment"># In Claude Code, add as MCP server</span>
+<span class="code-comment"># io-mcp auto-starts its proxy on :8444</span>
+<span class="code-comment"># Agents register and get their own tabs</span></pre>
+      </div>
+    </div>
+    <div class="qs-step fade-in">
+      <div class="qs-number">3</div>
+      <div class="qs-content">
+        <h3>Try Demo Mode</h3>
+        <pre><span class="code-comment"># No agent needed — test the scroll UI</span>
 uv run io-mcp --demo
 
-<span style="color:#616e88"># Send a message from another terminal</span>
+<span class="code-comment"># Send a message from another terminal</span>
 io-mcp-msg "check this file"</pre>
+      </div>
+    </div>
+  </div>
 </section>
 
 <!-- ─── Configuration ──────────────────────────────────── -->
@@ -181,55 +289,162 @@ io-mcp-msg "check this file"</pre>
     Global config at <code class="inline-code">~/.config/io-mcp/config.yml</code>,
     project overrides in <code class="inline-code">.io-mcp.yml</code>.
   </p>
-<pre><span style="color:#81a1c1">config</span>:
-  <span style="color:#81a1c1">colorScheme</span>: <span style="color:#a3be8c">nord</span>
-  <span style="color:#81a1c1">tts</span>:
-    <span style="color:#81a1c1">model</span>: <span style="color:#a3be8c">gpt-4o-mini-tts</span>
-    <span style="color:#81a1c1">speed</span>: <span style="color:#b48ead">1.3</span>
-    <span style="color:#81a1c1">emotion</span>: <span style="color:#a3be8c">happy</span>
-  <span style="color:#81a1c1">ambient</span>:
-    <span style="color:#81a1c1">enabled</span>: <span style="color:#b48ead">true</span>
-    <span style="color:#81a1c1">initialDelaySecs</span>: <span style="color:#b48ead">30</span>
-  <span style="color:#81a1c1">agents</span>:
-    <span style="color:#81a1c1">hosts</span>:
-      - <span style="color:#81a1c1">name</span>: <span style="color:#a3be8c">Desktop</span>
-        <span style="color:#81a1c1">host</span>: <span style="color:#a3be8c">desktop.local</span>
-
-<span style="color:#616e88"># Project-local quick actions</span>
-<span style="color:#81a1c1">quickActions</span>:
-  - <span style="color:#81a1c1">key</span>: <span style="color:#a3be8c">"!"</span>
-    <span style="color:#81a1c1">label</span>: <span style="color:#a3be8c">Commit and push</span>
-    <span style="color:#81a1c1">action</span>: <span style="color:#a3be8c">message</span>
-    <span style="color:#81a1c1">value</span>: <span style="color:#a3be8c">"commit all changes and push"</span></pre>
+  <div class="config-grid fade-in">
+    <div class="config-block">
+      <div class="config-label">TTS &amp; Voice</div>
+<pre><span class="code-key">config</span>:
+  <span class="code-key">tts</span>:
+    <span class="code-key">model</span>: <span class="code-value">gpt-4o-mini-tts</span>
+    <span class="code-key">speed</span>: <span class="code-num">1.3</span>
+    <span class="code-key">emotion</span>: <span class="code-value">friendly</span>
+    <span class="code-key">voiceRotation</span>:
+      - <span class="code-value">sage</span>
+      - <span class="code-value">coral</span>
+      - <span class="code-value">vale</span></pre>
+    </div>
+    <div class="config-block">
+      <div class="config-label">Quick Actions</div>
+<pre><span class="code-key">quickActions</span>:
+  - <span class="code-key">key</span>: <span class="code-value">"!"</span>
+    <span class="code-key">label</span>: <span class="code-value">Commit and push</span>
+    <span class="code-key">action</span>: <span class="code-value">message</span>
+    <span class="code-key">value</span>: <span class="code-value">"commit all changes and push"</span>
+  - <span class="code-key">key</span>: <span class="code-value">"@"</span>
+    <span class="code-key">label</span>: <span class="code-value">Run tests</span>
+    <span class="code-key">action</span>: <span class="code-value">command</span>
+    <span class="code-key">value</span>: <span class="code-value">"pytest tests/ -q"</span></pre>
+    </div>
+    <div class="config-block">
+      <div class="config-label">Remote Agents</div>
+<pre><span class="code-key">config</span>:
+  <span class="code-key">agents</span>:
+    <span class="code-key">hosts</span>:
+      - <span class="code-key">name</span>: <span class="code-value">Desktop</span>
+        <span class="code-key">host</span>: <span class="code-value">desktop.local</span>
+        <span class="code-key">workdir</span>: <span class="code-value">~/projects</span>
+      - <span class="code-key">name</span>: <span class="code-value">Server</span>
+        <span class="code-key">host</span>: <span class="code-value">gpu-box.tail</span>
+        <span class="code-key">workdir</span>: <span class="code-value">~/ml</span></pre>
+    </div>
+    <div class="config-block">
+      <div class="config-label">Notifications</div>
+<pre><span class="code-key">config</span>:
+  <span class="code-key">notifications</span>:
+    <span class="code-key">enabled</span>: <span class="code-num">true</span>
+    <span class="code-key">channels</span>:
+      - <span class="code-key">name</span>: <span class="code-value">phone</span>
+        <span class="code-key">type</span>: <span class="code-value">ntfy</span>
+        <span class="code-key">events</span>:
+          - <span class="code-value">health_warning</span>
+          - <span class="code-value">health_unresponsive</span></pre>
+    </div>
+  </div>
 </section>
 
 <!-- ─── Architecture ───────────────────────────────────── -->
 <section>
   <h2>Architecture</h2>
-  <p class="subtitle">Modular design with clean separation of concerns.</p>
-<pre>src/io_mcp/
-├── __main__.py   <span style="color:#616e88"># CLI entry, server startup, watchdog</span>
-├── api.py        <span style="color:#616e88"># Frontend API: SSE events, REST</span>
-├── cli.py        <span style="color:#616e88"># io-mcp-msg CLI tool</span>
-├── config.py     <span style="color:#616e88"># YAML config, env expansion</span>
-├── server.py     <span style="color:#616e88"># 15 MCP tools, Frontend protocol</span>
-├── session.py    <span style="color:#616e88"># Per-agent session state</span>
-├── tui/          <span style="color:#616e88"># Textual TUI package</span>
-│   ├── app.py    <span style="color:#616e88"># Main app, choices, TTS, actions</span>
-│   ├── themes.py <span style="color:#616e88"># Color schemes, CSS generation</span>
-│   └── widgets.py<span style="color:#616e88"># ChoiceItem, DwellBar, extras</span>
-└── tts.py        <span style="color:#616e88"># TTS engine: cache, stream, tones</span>
-android/          <span style="color:#616e88"># Jetpack Compose companion app</span></pre>
+  <p class="subtitle">Modular design &mdash; the proxy survives backend restarts so agents stay connected.</p>
+  <div class="arch-grid fade-in">
+    <div class="arch-component">
+      <div class="arch-label">MCP Proxy</div>
+      <div class="arch-port">:8444</div>
+      <p>Thin FastMCP proxy. Agents connect here. Survives TUI restarts.</p>
+    </div>
+    <div class="arch-component">
+      <div class="arch-label">Backend</div>
+      <div class="arch-port">:8446</div>
+      <p>Main process with TUI, TTS engine, session management, and tool dispatch.</p>
+    </div>
+    <div class="arch-component">
+      <div class="arch-label">Frontend API</div>
+      <div class="arch-port">:8445</div>
+      <p>REST + SSE for remote frontends. Powers the Android app.</p>
+    </div>
+    <div class="arch-component">
+      <div class="arch-label">TUI</div>
+      <div class="arch-port">Textual</div>
+      <p>Tabbed terminal interface with scroll navigation, TTS, voice input, and themes.</p>
+    </div>
+  </div>
+  <div class="arch-source fade-in">
+<pre><span class="code-tree">src/io_mcp/</span>
+├── __main__.py       <span class="code-comment"># CLI entry, two-process startup, watchdog</span>
+├── api.py            <span class="code-comment"># Frontend API: SSE events, REST endpoints</span>
+├── backend.py        <span class="code-comment"># Backend HTTP: /handle-mcp, /health</span>
+├── proxy.py          <span class="code-comment"># MCP proxy: forwards tools to backend</span>
+├── session.py        <span class="code-comment"># Per-agent session state, history</span>
+├── config.py         <span class="code-comment"># YAML config, env expansion, validation</span>
+├── notifications.py  <span class="code-comment"># Webhooks: ntfy, Slack, Discord</span>
+├── tts.py            <span class="code-comment"># TTS: caching, streaming, chimes</span>
+├── tui/
+│   ├── app.py        <span class="code-comment"># Main app: choices, TTS, actions</span>
+│   ├── views.py      <span class="code-comment"># Dashboard, timeline, pane view</span>
+│   ├── themes.py     <span class="code-comment"># Color schemes, CSS generation</span>
+│   └── widgets.py    <span class="code-comment"># ChoiceItem, DwellBar, extras</span>
+<span class="code-tree">android/</span>              <span class="code-comment"># Jetpack Compose companion app</span></pre>
+  </div>
+</section>
+
+<!-- ─── MCP Tools ──────────────────────────────────────── -->
+<section>
+  <h2>MCP Tools</h2>
+  <p class="subtitle">16 tools for agent interaction, speech, and control.</p>
+  <div class="tools-grid fade-in">
+    <div class="tool-group">
+      <h3>Interaction</h3>
+      <div class="tool"><code>present_choices</code> <span>Scroll-wheel selection</span></div>
+      <div class="tool"><code>present_multi_select</code> <span>Checkable batch list</span></div>
+      <div class="tool"><code>run_command</code> <span>Shell with approval</span></div>
+      <div class="tool"><code>check_inbox</code> <span>Poll user messages</span></div>
+    </div>
+    <div class="tool-group">
+      <h3>Speech</h3>
+      <div class="tool"><code>speak</code> <span>Blocking TTS</span></div>
+      <div class="tool"><code>speak_async</code> <span>Non-blocking TTS</span></div>
+      <div class="tool"><code>speak_urgent</code> <span>Interrupt &amp; speak</span></div>
+    </div>
+    <div class="tool-group">
+      <h3>Configuration</h3>
+      <div class="tool"><code>set_speed / set_voice</code> <span>Runtime TTS config</span></div>
+      <div class="tool"><code>set_emotion</code> <span>Voice style preset</span></div>
+      <div class="tool"><code>set_tts_model / set_stt_model</code> <span>Switch models</span></div>
+      <div class="tool"><code>get_settings / reload_config</code> <span>Read &amp; refresh</span></div>
+    </div>
+    <div class="tool-group">
+      <h3>Management</h3>
+      <div class="tool"><code>register_session</code> <span>Register on connect</span></div>
+      <div class="tool"><code>rename_session</code> <span>Set tab name</span></div>
+      <div class="tool"><code>get_logs</code> <span>Debug logs</span></div>
+      <div class="tool"><code>pull_latest</code> <span>Git pull + reload</span></div>
+    </div>
+  </div>
 </section>
 
 <!-- ─── Footer ─────────────────────────────────────────── -->
 <footer>
-  <p>
-    <a href="https://github.com/harryaskham/io-mcp">GitHub</a> &middot;
-    MIT License &middot;
-    Built for <a href="https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview">Claude Code</a>
-  </p>
+  <div class="footer-content">
+    <div class="footer-brand">io-mcp</div>
+    <p>
+      <a href="https://github.com/harryaskham/io-mcp">GitHub</a> &middot;
+      MIT License &middot;
+      Built for <a href="https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview">Claude Code</a>
+    </p>
+  </div>
 </footer>
+
+<!-- ─── Scroll Animations ──────────────────────────────── -->
+<script>
+const observer = new IntersectionObserver((entries) => {
+  entries.forEach(entry => {
+    if (entry.isIntersecting) {
+      entry.target.classList.add('visible');
+    }
+  });
+}, { threshold: 0.1, rootMargin: '0px 0px -40px 0px' });
+
+document.querySelectorAll('.fade-in').forEach(el => observer.observe(el));
+</script>
 
 </body>
 </html>

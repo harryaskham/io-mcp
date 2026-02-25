@@ -186,6 +186,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         # Message queue mode
         self._message_mode = False
+        self._message_target_session = None  # session to queue message to (inbox-aware)
+        self._interrupt_mode = False  # True when sending directly to agent pane
         self._restart_requested = False
 
         # Settings (global, not per-session)
@@ -261,6 +263,27 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
     def _focused(self) -> Optional[Session]:
         """Get the currently focused session."""
         return self.manager.focused()
+
+    def _message_target(self) -> Optional["Session"]:
+        """Get the session that should receive a queued message.
+
+        If the inbox is visible and an item is highlighted, returns the
+        session that owns that inbox item. Otherwise falls back to the
+        active (focused) session. This ensures messages go to the agent
+        the user is currently interacting with in the inbox.
+        """
+        if self._inbox_pane_visible():
+            try:
+                inbox_list = self.query_one("#inbox-list", ListView)
+                if inbox_list.index is not None and inbox_list.index < len(inbox_list.children):
+                    item = inbox_list.children[inbox_list.index]
+                    if isinstance(item, InboxListItem) and item.session_id:
+                        sess = self.manager.sessions.get(item.session_id)
+                        if sess:
+                            return sess
+            except Exception:
+                pass
+        return self._focused()
 
     def _is_focused(self, session_id: str) -> bool:
         """Check if a session is the focused one."""
@@ -2071,6 +2094,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                     session_name=sess.name if multi_agent else "",
                     accent_color=accent_color if multi_agent else "",
                     kind=item.kind,
+                    session_id=sess.session_id,
                 ))
                 idx += 1
 
@@ -2084,6 +2108,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                     session_name=sess.name if multi_agent else "",
                     accent_color=accent_color if multi_agent else "",
                     kind=item.kind,
+                    session_id=sess.session_id,
                 ))
                 idx += 1
 
@@ -3884,14 +3909,18 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
     def action_queue_message(self) -> None:
         """Open text input to queue a message for the agent's next response.
         Also supports voice input — press space to record a voice message.
+
+        Routes to the inbox-highlighted session if inbox is visible,
+        otherwise to the active (focused) session.
         """
-        session = self._focused()
+        session = self._message_target()
         if not session:
             return
         # Allow queueing even when session is not active (agent is working)
         if getattr(session, 'input_mode', False) or getattr(session, 'voice_recording', False):
             return
         self._message_mode = True
+        self._message_target_session = session  # store target for _submit_freeform
         self._freeform_spoken_pos = 0
         self._inbox_was_visible = self._inbox_pane_visible()
 
@@ -3911,13 +3940,15 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         Like pressing m then space, but as a single key (M). Records voice,
         transcribes, and queues the result as a pending message for the agent.
+        Routes to inbox-highlighted session if inbox is visible.
         """
-        session = self._focused()
+        session = self._message_target()
         if not session:
             return
         if getattr(session, 'input_mode', False) or getattr(session, 'voice_recording', False):
             return
         self._message_mode = True
+        self._message_target_session = session  # store target for submission
         self._freeform_spoken_pos = 0
         self._inbox_was_visible = self._inbox_pane_visible()
         self._tts.stop()
@@ -4042,9 +4073,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             chunk = text[self._freeform_spoken_pos:].strip()
             if chunk:
                 self._freeform_tts.stop()
-                self._freeform_tts.speak_with_local_fallback(
-                    chunk, nonblocking=True,
-                )
+                self._freeform_tts.speak_with_local_fallback(chunk)
             self._freeform_spoken_pos = len(text)
 
     @on(SubmitTextArea.Submitted, "#freeform-input")
@@ -4054,7 +4083,11 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
     def _submit_freeform(self) -> None:
         """Submit the freeform text input (called on Enter key)."""
-        session = self._focused()
+        # In message mode, use the stored target session (from inbox highlight)
+        if self._message_mode:
+            session = getattr(self, '_message_target_session', None) or self._focused()
+        else:
+            session = self._focused()
         if not session:
             return
         inp = self.query_one("#freeform-input", SubmitTextArea)
@@ -4077,22 +4110,34 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         # Message queue mode — queue the message, don't select
         if self._message_mode:
             inbox_was_visible = self._inbox_was_visible
+            is_interrupt = getattr(self, '_interrupt_mode', False)
             self._message_mode = False
+            self._interrupt_mode = False
             self._inbox_was_visible = False
+            target = self._message_target_session or session
+            self._message_target_session = None  # clear target
             inp.styles.display = "none"
-            msgs = getattr(session, 'pending_messages', None)
-            if msgs is not None:
-                msgs.append(text)
             self._freeform_tts.stop()
             self._tts.stop()
-            count = len(msgs) if msgs else 1
-            self._speak_ui(f"Message queued. {count} pending.")
-            if session.active:
+
+            if is_interrupt:
+                # Interrupt mode — send directly to agent's tmux pane
+                self._send_to_agent_pane(target, text)
+            else:
+                # Normal queue mode — queue for next MCP response
+                msgs = getattr(target, 'pending_messages', None)
+                if msgs is not None:
+                    msgs.append(text)
+                count = len(msgs) if msgs else 1
+                agent_name = target.name or "agent"
+                self._speak_ui(f"Message queued for {agent_name}. {count} pending.")
+
+            if target.active:
                 self._show_choices()  # Rebuild — choices may have arrived during input
             else:
                 # Restore inbox view if it was visible before entering message mode
                 self._ensure_main_content_visible(show_inbox=inbox_was_visible)
-                self._show_session_waiting(session)
+                self._show_session_waiting(target)
             return
 
         # Normal freeform input — select with the text
@@ -4112,6 +4157,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             session.input_mode = False
         inbox_was_visible = self._inbox_was_visible
         self._message_mode = False
+        self._interrupt_mode = False
+        self._message_target_session = None  # clear target
         self._inbox_was_visible = False
         self._freeform_tts.stop()
         inp = self.query_one("#freeform-input", SubmitTextArea)
@@ -4531,6 +4578,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             self.action_voice_input()
         elif label == "Multi select":
             self._enter_multi_select_mode()
+        elif label == "Interrupt agent":
+            self._action_interrupt_agent()
         elif label == "Branch to worktree":
             self._enter_worktree_mode()
         elif label == "Compact context":

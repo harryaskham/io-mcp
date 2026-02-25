@@ -77,6 +77,7 @@ PRIMARY_EXTRAS = [
 # Secondary extras: hidden behind "More options ›" header
 SECONDARY_EXTRAS = [
     {"label": "Queue message", "summary": "Type or speak a message to queue for the agent's next response"},
+    {"label": "Interrupt agent", "summary": "Send text directly to the agent's tmux pane via tmux-cli"},
     {"label": "Multi select", "summary": "Toggle multiple choices then confirm -- do several things at once"},
     {"label": "Branch to worktree", "summary": "Create a git worktree for isolated work on a new branch"},
     {"label": "Compact context", "summary": "Compact the agent's context window to free up space"},
@@ -141,6 +142,7 @@ class InboxListItem(ListItem):
                  is_active: bool = False, inbox_index: int = 0,
                  n_choices: int = 0, session_name: str = "",
                  accent_color: str = "", kind: str = "choices",
+                 session_id: str = "",
                  **kwargs) -> None:
         super().__init__(**kwargs)
         self.inbox_preamble = preamble
@@ -151,6 +153,7 @@ class InboxListItem(ListItem):
         self.session_name = session_name  # agent name (shown in multi-agent mode)
         self.accent_color = accent_color  # color for agent name tag
         self.kind = kind  # "choices" or "speech"
+        self.session_id = session_id  # session ID for message routing
 
     def compose(self) -> ComposeResult:
         # Status icon — varies by kind

@@ -496,8 +496,8 @@ class TestSpeakWithLocalFallback:
 
             os.unlink(f.name)
 
-    def test_no_local_backend_falls_through_silently(self):
-        """Cache miss with no local backend: does nothing (pregeneration will cache later)."""
+    def test_no_local_backend_falls_back_to_speak_async(self):
+        """Cache miss with no local backend: uses speak_async() for API TTS."""
         config = FakeConfig(local_backend="none")
         with mock.patch("io_mcp.tts._find_binary", return_value="/usr/bin/tts"):
             engine = TTSEngine(local=False, speed=1.0, config=config)
@@ -505,8 +505,9 @@ class TestSpeakWithLocalFallback:
 
         with mock.patch.object(engine, "speak_async") as mock_async:
             engine.speak_with_local_fallback("uncached text")
-            # Cache miss in API mode with no local backend → skip silently
-            mock_async.assert_not_called()
+            # Cache miss in API mode → falls back to speak_async (not espeak)
+            mock_async.assert_called_once_with(
+                "uncached text", voice_override=None, emotion_override=None)
 
     def test_termux_backend_calls_speak_termux(self):
         config = FakeConfig(local_backend="termux")
