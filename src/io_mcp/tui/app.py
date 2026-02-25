@@ -2136,6 +2136,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         If the item is pending, switch it to be the active item and show
         its choices in the right pane.
         If the item is done, show its resolved result as read-only info.
+        Speech items show the speech text; choice items show the selection.
         """
         session = self._focused()
         if not session:
@@ -2147,7 +2148,32 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             return
 
         if inbox_item.done:
-            # Show resolved result in the right pane
+            s = self._cs
+
+            # Speech items: show the speech text
+            if inbox_item.kind == "speech":
+                text = inbox_item.text or inbox_item.preamble
+                preamble_widget = self.query_one("#preamble", Label)
+                preamble_widget.update(f"[dim][{s['blue']}]♪[/{s['blue']}] {text}[/dim]")
+                preamble_widget.display = True
+                self.query_one("#status").display = False
+
+                list_view = self.query_one("#choices", ListView)
+                list_view.clear()
+                list_view.append(ChoiceItem(
+                    f"[{s['fg_dim']}]Speech played[/{s['fg_dim']}]", "",
+                    index=-999, display_index=0,
+                ))
+                list_view.display = True
+                list_view.index = 0
+                self._inbox_pane_focused = False
+                list_view.focus()
+                self._inbox_scroll_index = idx
+                self._update_inbox_list()
+                self._speak_ui(text[:100])
+                return
+
+            # Choice items: show the resolved result
             result = inbox_item.result or {}
             label = result.get("selected", "(no selection)")
             summary = result.get("summary", "")
@@ -2383,17 +2409,15 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         try:
             s = self._cs
             preamble_widget = self.query_one("#preamble", Label)
-            preamble_widget.update(f"[{s['blue']}]♪[/{s['blue']}] {text}")
+            # Show the speech text with a music note icon
+            preamble_widget.update(f"[{s['blue']}]♪[/{s['blue']}] [{s['fg']}]{text}[/{s['fg']}]")
             preamble_widget.display = True
             self.query_one("#status").display = False
             self._ensure_main_content_visible(show_inbox=True)
 
+            # Show a simple "playing" indicator in the choices area
             list_view = self.query_one("#choices", ListView)
             list_view.clear()
-            list_view.append(ChoiceItem(
-                f"[{s['fg_dim']}]Speaking...[/{s['fg_dim']}]", "",
-                index=-999, display_index=0,
-            ))
             list_view.display = True
         except Exception:
             pass
