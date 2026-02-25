@@ -127,6 +127,11 @@ class TTSEngine:
         self._cache: dict[str, str] = {}
         os.makedirs(CACHE_DIR, exist_ok=True)
 
+        # Scroll generation counter — incremented on each speak_with_local_fallback
+        # call. Background threads check this before playing to avoid stale audio
+        # overlapping with newer requests.
+        self._scroll_gen = 0
+
         mode = "espeak-ng (local)" if self._local else "tts CLI (API)"
         if not self._local and self._config:
             mode = f"{self._config.tts_model_name} ({self._config.tts_voice})"
@@ -440,26 +445,29 @@ class TTSEngine:
 
         Detects immediate paplay failures (e.g. PulseAudio connection refused)
         and retries up to _max_retries times. Logs failures for diagnostics.
+
+        IMPORTANT: Popen is called OUTSIDE the lock to avoid blocking stop()
+        on the main thread. On proot/Android, Popen can take 200-300ms due
+        to syscall interception. The lock is only held briefly to update
+        self._process.
         """
         for attempt in range(1 + self._max_retries):
+            try:
+                proc = subprocess.Popen(
+                    [self._paplay, path],
+                    env=self._env,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    preexec_fn=os.setsid,
+                )
+            except Exception as e:
+                self._record_failure(f"Failed to start paplay: {e}")
+                continue
+
             with self._lock:
-                try:
-                    self._process = subprocess.Popen(
-                        [self._paplay, path],
-                        env=self._env,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.PIPE,
-                        preexec_fn=os.setsid,
-                    )
-                except Exception as e:
-                    self._process = None
-                    self._record_failure(f"Failed to start paplay: {e}")
-                    continue
+                self._process = proc
 
             # Give paplay a moment to fail on connection errors
-            proc = self._process
-            if proc is None:
-                continue
             try:
                 retcode = proc.wait(timeout=0.3)
                 # Process exited immediately — likely a connection error
@@ -632,6 +640,11 @@ class TTSEngine:
         if self._muted:
             return
 
+        # Increment scroll generation — background threads check this
+        # before playing to prevent stale audio from overlapping.
+        self._scroll_gen += 1
+        my_gen = self._scroll_gen
+
         key = self._cache_key(text, voice_override, emotion_override)
         path = self._cache.get(key)
 
@@ -640,8 +653,12 @@ class TTSEngine:
             # to avoid blocking the main Textual event loop (stop + sleep +
             # _start_playback can take 350ms+ on proot/Android).
             def _play_cached():
+                if self._scroll_gen != my_gen:
+                    return  # stale — newer scroll superseded us
                 self.stop()
                 _time_mod.sleep(0.05)
+                if self._scroll_gen != my_gen:
+                    return  # stale — newer scroll superseded us
                 self._start_playback(path)
             threading.Thread(target=_play_cached, daemon=True).start()
             return
@@ -660,9 +677,10 @@ class TTSEngine:
         # Cache miss — use configured local backend for instant readout
         if effective_backend == "termux" and self._termux_exec:
             # termux-tts-speak: direct Android TTS, no PulseAudio needed
-            # Stop any current audio first so we don't overlap
-            self.stop()
             def _termux_play():
+                if self._scroll_gen != my_gen:
+                    return
+                self.stop()
                 self._speak_termux(text)
             threading.Thread(target=_termux_play, daemon=True).start()
 
@@ -677,6 +695,8 @@ class TTSEngine:
             # espeak-ng: generate WAV and play via paplay
             def _espeak_play():
                 try:
+                    if self._scroll_gen != my_gen:
+                        return  # stale
                     wpm = int(TTS_SPEED * self._speed)
                     # Generate espeak audio to a temp file and play it
                     tmp = os.path.join(CACHE_DIR, f"_espeak_{hashlib.md5(text.encode()).hexdigest()[:8]}.wav")
@@ -686,6 +706,8 @@ class TTSEngine:
                             stdout=f, stderr=subprocess.DEVNULL,
                             env=self._env, timeout=5,
                         )
+                    if self._scroll_gen != my_gen:
+                        return  # stale
                     self.stop()
                     _time_mod.sleep(0.05)
                     self._start_playback(tmp)
