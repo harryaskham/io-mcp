@@ -211,9 +211,7 @@ quickActions:               # macros accessible via 'x' key
 | `t` | Spawn new Claude Code agent (local or remote) |
 | `x` | Quick actions (configurable macros) |
 | `c` | Toggle conversation mode (continuous voice chat) |
-| `d` | Dashboard (overview of all agent sessions with summaries) |
 | `v` | Pane view (live tmux output for focused agent) |
-| `g` | Timeline (unified speech + selection history for focused agent) |
 | `i` | Freeform text input (wrapping, multi-line) |
 | `m` | Queue message for agent (text) |
 | `M` | Queue voice message (direct STT recording) |
@@ -275,6 +273,14 @@ echo "msg" | io-mcp-msg              # Pipe from stdin
 ```
 
 ## Important Notes for Agents
+
+### NEVER Enter Plan Mode or Ask Questions
+
+**NEVER use `EnterPlanMode` or `AskUserQuestion` tools.** The user interacts only via scroll wheel — they cannot type responses to questions or approve plans. These tools will block forever and make the app unresponsive. Instead:
+
+- **Plan mode**: Just do the work directly. Use `speak_async()` to explain what you're about to do, then do it. Present choices via `present_choices()` if the user needs to make a decision.
+- **Clarifying questions**: Present options via `present_choices()` instead of asking open-ended questions. The user can only select from a list.
+- **All decisions** must go through `present_choices()` — never through text prompts.
 
 ### Register Your Session First
 

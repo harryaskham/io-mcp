@@ -28,7 +28,6 @@ if TYPE_CHECKING:
 TTS_SPEED = 160
 
 # Path to the gpt-4o-mini-tts wrapper
-TTS_TOOL_DIR = os.path.expanduser("~/mono/tools/tts")
 
 # LD_LIBRARY_PATH needed for sounddevice/portaudio on NOD
 PORTAUDIO_LIB = os.path.expanduser("~/.nix-profile/lib")
@@ -118,10 +117,8 @@ class TTSEngine:
             print("WARNING: espeak-ng not found — TTS disabled", flush=True)
 
         if not self._local and not self._tts_bin:
-            tts_main = os.path.join(TTS_TOOL_DIR, "src", "tts", "__main__.py")
-            if not os.path.isfile(tts_main):
-                print("WARNING: tts tool not found — falling back to espeak-ng", flush=True)
-                self._local = True
+            print("WARNING: tts tool not found in PATH — falling back to espeak-ng", flush=True)
+            self._local = True
 
         # Audio cache: text hash → file path
         self._cache: dict[str, str] = {}
