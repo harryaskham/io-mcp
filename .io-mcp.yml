@@ -2,6 +2,9 @@
 # These options appear at the end of every choice list (silent = not read during intro)
 
 extraOptions:
+  - title: Check for issues in recent swarm work
+    description: Look at recently merged PRs on main and the beads backlog and ensure quality is high
+    silent: true
   - title: Propose next work
     description: Suggest the next 3 most impactful things to work on
     silent: true
