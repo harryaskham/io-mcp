@@ -651,7 +651,10 @@ class TestCLIArgs:
 
     def test_tts_args_with_overrides(self, config_with_defaults, monkeypatch):
         monkeypatch.setenv("AZURE_SPEECH_API_KEY", "test-key")
+        monkeypatch.setenv("AZURE_SPEECH_ENDPOINT", "https://test.endpoint")
         c = IoMcpConfig.load(config_with_defaults.config_path)
+        # Switch to azure model to test azure-specific override behavior
+        c.set_tts_model("mai-voice-1")
         args = c.tts_cli_args("hello", voice_override="en-US-Teo:MAI-Voice-1",
                               emotion_override="happy")
         assert "en-US-Teo:MAI-Voice-1" in args
