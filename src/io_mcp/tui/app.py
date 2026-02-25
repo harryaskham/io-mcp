@@ -232,15 +232,11 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         # Conversation mode — continuous voice back-and-forth
         self._conversation_mode = False
 
-        # (Log viewer mode removed — timeline view deleted)
-
         # System logs mode (TUI errors, proxy logs, speech history)
         self._system_logs_mode = False
 
         # Help screen mode
         self._help_mode = False
-
-        # (Unified inbox mode removed — inbox is now the default view)
 
         # Tab picker mode
         self._tab_picker_mode = False
@@ -2758,7 +2754,6 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         self._setting_edit_mode = False
         self._spawn_options = None
         self._quick_action_options = None
-        self._dashboard_mode = False
         self._system_logs_mode = False
         self._help_mode = False
         self._history_mode = False
@@ -3174,7 +3169,6 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         self._setting_edit_mode = False
         self._spawn_options = None
         self._quick_action_options = None
-        self._dashboard_mode = False
         self._help_mode = False
         self._tab_picker_mode = True
 
@@ -5062,7 +5056,6 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         self._setting_edit_mode = False
         self._spawn_options = None
         self._quick_action_options = None
-        self._dashboard_mode = False  # clear any spawn state
         self._quick_action_options = options
 
         preamble_widget = self.query_one("#preamble", Label)
