@@ -394,7 +394,7 @@ class TTSEngine:
             # Fast path: cached — kill current and play immediately
             self.stop()
             _time_mod.sleep(0.05)  # Brief pause to let PulseAudio settle
-            if not self._start_playback(path):
+            if not self._start_playback(path, max_attempts=self._max_retries):
                 self._log_tts_error("paplay failed for cached audio", text)
             elif block:
                 self._wait_for_playback()
@@ -404,7 +404,7 @@ class TTSEngine:
             if p:
                 self.stop()
                 _time_mod.sleep(0.05)  # Brief pause to let PulseAudio settle
-                if not self._start_playback(p):
+                if not self._start_playback(p, max_attempts=self._max_retries):
                     self._log_tts_error("paplay failed after generation", text)
                 elif block:
                     self._wait_for_playback()
@@ -440,18 +440,22 @@ class TTSEngine:
         except Exception:
             pass
 
-    def _start_playback(self, path: str) -> bool:
+    def _start_playback(self, path: str, max_attempts: int = 0) -> bool:
         """Start paplay for a WAV file. Returns True if playback started ok.
 
         Detects immediate paplay failures (e.g. PulseAudio connection refused)
-        and retries up to _max_retries times. Logs failures for diagnostics.
+        and retries up to max_attempts times (default: self._max_retries).
+        Use max_attempts=0 for scroll readout where speed matters more than
+        reliability.
 
         IMPORTANT: Popen is called OUTSIDE the lock to avoid blocking stop()
         on the main thread. On proot/Android, Popen can take 200-300ms due
         to syscall interception. The lock is only held briefly to update
         self._process.
         """
-        for attempt in range(1 + self._max_retries):
+        if max_attempts < 0:
+            max_attempts = self._max_retries
+        for attempt in range(1 + max_attempts):
             try:
                 proc = subprocess.Popen(
                     [self._paplay, path],
@@ -469,7 +473,7 @@ class TTSEngine:
 
             # Give paplay a moment to fail on connection errors
             try:
-                retcode = proc.wait(timeout=0.3)
+                retcode = proc.wait(timeout=0.15)
                 # Process exited immediately — likely a connection error
                 stderr_out = ""
                 try:
@@ -483,11 +487,11 @@ class TTSEngine:
                     with self._lock:
                         self._process = None
                     # Brief pause before retry to let PulseAudio settle
-                    if attempt < self._max_retries:
-                        _time_mod.sleep(0.2 * (attempt + 1))
+                    if attempt < max_attempts:
+                        _time_mod.sleep(0.1 * (attempt + 1))
                     continue
             except subprocess.TimeoutExpired:
-                # Still running after 0.3s — playback started successfully
+                # Still running after 0.15s — playback started successfully
                 pass
 
             # Success
@@ -656,7 +660,6 @@ class TTSEngine:
                 if self._scroll_gen != my_gen:
                     return  # stale — newer scroll superseded us
                 self.stop()
-                _time_mod.sleep(0.05)
                 if self._scroll_gen != my_gen:
                     return  # stale — newer scroll superseded us
                 self._start_playback(path)
@@ -709,7 +712,6 @@ class TTSEngine:
                     if self._scroll_gen != my_gen:
                         return  # stale
                     self.stop()
-                    _time_mod.sleep(0.05)
                     self._start_playback(tmp)
                 except Exception:
                     pass
@@ -749,7 +751,7 @@ class TTSEngine:
         cached = self._cache.get(key)
         if cached and os.path.isfile(cached):
             self.stop()
-            self._start_playback(cached)
+            self._start_playback(cached, max_attempts=self._max_retries)
             if block:
                 self._wait_for_playback()
             return
