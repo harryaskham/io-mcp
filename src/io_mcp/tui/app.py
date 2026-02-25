@@ -3042,7 +3042,13 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         self._tts.speak_async("Multi-select mode. Enter to toggle choices. Press x to confirm, q to cancel.")
 
     def _refresh_multi_select(self) -> None:
-        """Redraw the choice list with checkbox state."""
+        """Redraw the choice list with checkbox state.
+
+        Updates existing ChoiceItem widgets in-place when possible to avoid
+        ListView scroll-position reset.  Falls back to a full clear+rebuild
+        only on the initial call (when the list is empty or has the wrong
+        number of children).
+        """
         session = self._focused()
         if not session:
             return
@@ -3061,20 +3067,23 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         list_view = self.query_one("#choices", ListView)
 
-        # Remember current position
-        current_idx = list_view.index or 0
+        # Expected item count: 1 (select-all) + total (choices) + 3 (confirm/team/cancel)
+        expected_count = 1 + total + 3
 
-        list_view.clear()
-
-        # Select all / Deselect all toggle at top
+        # --- Build labels/summaries for every row ---
         all_selected = all(self._multi_select_checked) if self._multi_select_checked else False
-        toggle_label = f"[{s['accent']}][ ] Deselect all[/{s['accent']}]" if all_selected else f"[{s['accent']}][*] Select all[/{s['accent']}]"
-        list_view.append(ChoiceItem(
-            toggle_label, f"{'Deselect' if all_selected else 'Select'} all {total} items",
-            index=-99, display_index=0,
-        ))
 
-        # Choices with checkboxes
+        # Row 0: select-all / deselect-all toggle
+        toggle_label = (
+            f"[{s['accent']}][ ] Deselect all[/{s['accent']}]"
+            if all_selected
+            else f"[{s['accent']}][*] Select all[/{s['accent']}]"
+        )
+        toggle_summary = f"{'Deselect' if all_selected else 'Select'} all {total} items"
+
+        # Rows 1..total: checkable choices
+        choice_labels: list[str] = []
+        choice_summaries: list[str] = []
         for i, c in enumerate(session.choices):
             is_checked = i < len(self._multi_select_checked) and self._multi_select_checked[i]
             if is_checked:
@@ -3083,12 +3092,10 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 check = f"[{s['fg_dim']}][ ][/{s['fg_dim']}]"
             num = str(i + 1)
             pad = " " * (2 - len(num))
-            label = f"{pad}{num}. {check}  {c.get('label', '')}"
-            summary = c.get('summary', '')
-            list_view.append(ChoiceItem(label, summary, index=i + 1, display_index=i + 1))
+            choice_labels.append(f"{pad}{num}. {check}  {c.get('label', '')}")
+            choice_summaries.append(c.get("summary", ""))
 
-        # Confirm options
-        confirm_offset = total + 1  # +1 for the select-all row
+        # Confirm summary
         if checked_count > 0:
             selected_labels = [
                 session.choices[i].get("label", "")
@@ -3101,14 +3108,53 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         else:
             selected_summary = "Nothing selected yet"
 
+        confirm_label = f"[bold {s['success']}]✅ Confirm ({checked_count})[/bold {s['success']}]"
+        team_label = f"[bold {s['accent']}]🚀 Team mode ({checked_count})[/bold {s['accent']}]"
+        team_summary = f"Delegate {checked_count} task{'s' if checked_count != 1 else ''} to parallel sub-agents"
+
+        # --- In-place update path (same number of children) ---
+        if len(list_view.children) == expected_count:
+            items: list[ChoiceItem] = list(list_view.children)  # type: ignore[arg-type]
+
+            # Row 0: select-all toggle
+            items[0].update_content(toggle_label, toggle_summary)
+
+            # Rows 1..total: choices
+            for i in range(total):
+                items[i + 1].update_content(choice_labels[i], choice_summaries[i])
+
+            # Confirm / Team mode / Cancel
+            items[total + 1].update_content(confirm_label, selected_summary)
+            items[total + 2].update_content(team_label, team_summary)
+            # Cancel row text is static — no update needed
+
+            list_view.display = True
+            list_view.focus()
+            return
+
+        # --- Full rebuild path (initial call or structural change) ---
+        current_idx = list_view.index or 0
+
+        list_view.clear()
+
         list_view.append(ChoiceItem(
-            f"[bold {s['success']}]✅ Confirm ({checked_count})[/bold {s['success']}]",
-            selected_summary,
+            toggle_label, toggle_summary,
+            index=-99, display_index=0,
+        ))
+
+        for i in range(total):
+            list_view.append(ChoiceItem(
+                choice_labels[i], choice_summaries[i],
+                index=i + 1, display_index=i + 1,
+            ))
+
+        confirm_offset = total + 1
+        list_view.append(ChoiceItem(
+            confirm_label, selected_summary,
             index=total + 1, display_index=confirm_offset,
         ))
         list_view.append(ChoiceItem(
-            f"[bold {s['accent']}]🚀 Team mode ({checked_count})[/bold {s['accent']}]",
-            f"Delegate {checked_count} task{'s' if checked_count != 1 else ''} to parallel sub-agents",
+            team_label, team_summary,
             index=total + 2, display_index=confirm_offset + 1,
         ))
         list_view.append(ChoiceItem(
