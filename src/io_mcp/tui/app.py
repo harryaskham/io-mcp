@@ -2318,10 +2318,13 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         """Called from tool dispatch when a new item is enqueued.
 
         Kicks the drain loop so speech items at the front of the queue
-        get played immediately. Also updates the inbox UI.
+        get played immediately. Also updates the inbox UI and scrolls
+        to the top to show the newest item.
         """
         self._touch_session(session)
         session.drain_kick.set()
+        # Scroll inbox to top so newest item is visible
+        self._inbox_scroll_index = 0
         self._safe_call(self._update_tab_bar)
         self._safe_call(self._update_inbox_list)
 
