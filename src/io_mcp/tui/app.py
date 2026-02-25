@@ -320,6 +320,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         Uses termux-exec if available (needed on Nix-on-Droid/proot),
         otherwise falls back to direct termux-vibrate.
+        Runs in a background thread to avoid blocking the event loop
+        (subprocess.Popen on proot can take 100ms+).
 
         Args:
             duration_ms: Vibration duration in milliseconds.
@@ -327,22 +329,36 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         """
         if not self._haptic_enabled:
             return
-        try:
-            cmd: list[str] = []
-            termux_exec = _find_binary("termux-exec")
+        # Use cached binary path (found at __init__ or first call)
+        cmd = getattr(self, '_vibrate_cmd', None)
+        if cmd is None:
+            # Build and cache the command template on first use
+            termux_exec = getattr(self, '_cached_termux_exec', None)
+            if termux_exec is None:
+                termux_exec = _find_binary("termux-exec")
+                self._cached_termux_exec = termux_exec or ""
             if termux_exec:
-                cmd = [termux_exec, "termux-vibrate", "-d", str(duration_ms), "-f"]
+                cmd = [termux_exec, "termux-vibrate", "-d", "DUR", "-f"]
             elif self._termux_vibrate:
-                cmd = [self._termux_vibrate, "-d", str(duration_ms), "-f"]
+                cmd = [self._termux_vibrate, "-d", "DUR", "-f"]
             else:
+                self._vibrate_cmd = []  # no vibration available
                 return
-            subprocess.Popen(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        except Exception:
-            pass  # Don't let vibration errors affect UX
+            self._vibrate_cmd = cmd
+        if not cmd:
+            return
+        # Replace placeholder duration and fire in background
+        actual_cmd = [c if c != "DUR" else str(duration_ms) for c in cmd]
+        def _run():
+            try:
+                subprocess.Popen(
+                    actual_cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except Exception:
+                pass
+        threading.Thread(target=_run, daemon=True).start()
 
     def _vibrate_pattern(self, pattern: str = "pulse") -> None:
         """Play a vibration pattern for semantic haptic feedback.
@@ -3260,7 +3276,6 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
     @on(ListView.Highlighted)
     def on_highlight_changed(self, event: ListView.Highlighted) -> None:
         """Speak label + description when highlight changes."""
-        _hl_t0 = time.time()
         if event.item is None:
             return
 
@@ -3431,18 +3446,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                     self._last_spoken_text = text
                     self._last_spoken_time = now
                     # Use espeak fallback for instant readout when scrolling options
-                    _tts_t0 = time.time()
                     self._tts.speak_with_local_fallback(text)
-                    _tts_t1 = time.time()
-                    _hl_total = _tts_t1 - _hl_t0
-                    if _hl_total > 0.1:
-                        try:
-                            with open("/tmp/io-mcp-tui-error.log", "a") as f:
-                                f.write(f"\n--- SLOW highlight ({_hl_total:.3f}s) ---\n"
-                                        f"  speak_with_local_fallback: {_tts_t1-_tts_t0:.3f}s\n"
-                                        f"  text: {text[:60]}\n")
-                        except Exception:
-                            pass
 
             if self._dwell_time > 0:
                 self._start_dwell()
@@ -3604,30 +3608,15 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         return self.query_one("#choices", ListView)
 
     def action_cursor_down(self) -> None:
-        t0 = time.time()
         session = self._focused()
         if session and (session.input_mode or session.voice_recording):
             return
         self._interrupt_readout()
-        t1 = time.time()
         list_view = self._active_list_view()
-        t2 = time.time()
         if list_view.display:
             if not list_view.has_focus:
                 list_view.focus()
             list_view.action_cursor_down()
-        t3 = time.time()
-        # Log timing if any step took >100ms
-        total = t3 - t0
-        if total > 0.1:
-            try:
-                with open("/tmp/io-mcp-tui-error.log", "a") as f:
-                    f.write(f"\n--- SLOW cursor_down ({total:.3f}s) ---\n"
-                            f"  interrupt_readout: {t1-t0:.3f}s\n"
-                            f"  active_list_view: {t2-t1:.3f}s\n"
-                            f"  action_cursor_down: {t3-t2:.3f}s\n")
-            except Exception:
-                pass
 
     def action_cursor_up(self) -> None:
         session = self._focused()

@@ -636,24 +636,14 @@ class TTSEngine:
         path = self._cache.get(key)
 
         if path and os.path.isfile(path):
-            # Cache hit — play the full quality version
-            _swlf_t0 = _time_mod.time()
-            self.stop()
-            _swlf_t1 = _time_mod.time()
-            _time_mod.sleep(0.05)
-            _swlf_t2 = _time_mod.time()
-            self._start_playback(path)
-            _swlf_t3 = _time_mod.time()
-            _swlf_total = _swlf_t3 - _swlf_t0
-            if _swlf_total > 0.1:
-                try:
-                    with open("/tmp/io-mcp-tui-error.log", "a") as f:
-                        f.write(f"\n--- SLOW speak_with_local_fallback cache hit ({_swlf_total:.3f}s) ---\n"
-                                f"  stop: {_swlf_t1-_swlf_t0:.3f}s\n"
-                                f"  sleep: {_swlf_t2-_swlf_t1:.3f}s\n"
-                                f"  start_playback: {_swlf_t3-_swlf_t2:.3f}s\n")
-                except Exception:
-                    pass
+            # Cache hit — play the full quality version in background thread
+            # to avoid blocking the main Textual event loop (stop + sleep +
+            # _start_playback can take 350ms+ on proot/Android).
+            def _play_cached():
+                self.stop()
+                _time_mod.sleep(0.05)
+                self._start_playback(path)
+            threading.Thread(target=_play_cached, daemon=True).start()
             return
 
         # Determine effective backend — skip termux when nonblocking requested
