@@ -101,6 +101,7 @@ class Session:
 
     # ── Per-session TTS overrides (for voice/emotion rotation) ────
     voice_override: Optional[str] = None
+    model_override: Optional[str] = None       # TTS model override (for voice rotation across providers)
     emotion_override: Optional[str] = None
 
     # ── Activity tracking (for auto-cleanup) ──────────────────────

@@ -605,9 +605,24 @@ class IoMcpConfig:
         return list(self._emotion_presets_for_provider().keys())
 
     @property
-    def tts_voice_rotation(self) -> list[str]:
-        """List of voices to cycle through for multi-session tab assignment."""
-        return self.runtime.get("tts", {}).get("voiceRotation", [])
+    def tts_voice_rotation(self) -> list[dict]:
+        """List of voice+model pairs to cycle through for multi-session tab assignment.
+
+        Supports two formats:
+        - Strings (backward compat): ["sage", "ballad"] → uses current model
+        - Dicts (triple): [{"voice": "sage", "model": "gpt-4o-mini-tts"}, ...]
+
+        Returns normalized list of dicts: [{"voice": "...", "model": "..."}, ...]
+        where "model" may be None for string entries.
+        """
+        raw = self.runtime.get("tts", {}).get("voiceRotation", [])
+        result = []
+        for entry in raw:
+            if isinstance(entry, str):
+                result.append({"voice": entry, "model": None})
+            elif isinstance(entry, dict):
+                result.append({"voice": entry.get("voice", ""), "model": entry.get("model")})
+        return result
 
     @property
     def tts_emotion_rotation(self) -> list[str]:
@@ -1013,11 +1028,12 @@ class IoMcpConfig:
     # ─── TTS CLI args ───────────────────────────────────────────────
 
     def tts_cli_args(self, text: str, voice_override: Optional[str] = None,
-                     emotion_override: Optional[str] = None) -> list[str]:
+                     emotion_override: Optional[str] = None,
+                     model_override: Optional[str] = None) -> list[str]:
         """Build CLI args for the tts tool based on current config.
 
         Returns the full argument list (excluding the 'tts' binary itself).
-        Optional overrides for voice/emotion (used for per-session rotation).
+        Optional overrides for voice/emotion/model (used for per-session rotation).
 
         Emotion handling:
         - ``--style <name>`` is sent for both providers when an emotion preset
@@ -1028,20 +1044,25 @@ class IoMcpConfig:
         - Custom freeform emotion text uses ``--instructions`` for openai and
           ``--style`` for azure-speech.
         """
-        provider = self.tts_provider_name
+        model_name = model_override or self.tts_model_name
+        model_def = self.models.get("tts", {}).get(model_name, {})
+        provider = model_def.get("provider", "openai")
+        provider_def = self.providers.get(provider, {})
+        base_url = provider_def.get("baseUrl", "https://api.openai.com")
+        api_key = provider_def.get("apiKey", "")
         voice = voice_override or self.tts_voice
         args = [text]
 
         if provider == "azure-speech":
             args.extend(["--provider", "azure-speech"])
-            args.extend(["--base-url", self.tts_base_url])
-            args.extend(["--api-key", self.tts_api_key])
+            args.extend(["--base-url", base_url])
+            args.extend(["--api-key", api_key])
             args.extend(["--voice", voice])
         else:
             # openai provider
-            args.extend(["--base-url", self.tts_base_url])
-            args.extend(["--api-key", self.tts_api_key])
-            args.extend(["--model", self.tts_model_name])
+            args.extend(["--base-url", base_url])
+            args.extend(["--api-key", api_key])
+            args.extend(["--model", model_name])
             args.extend(["--voice", voice])
 
         args.extend(["--speed", str(self.tts_speed)])

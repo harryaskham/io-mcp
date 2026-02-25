@@ -140,15 +140,17 @@ class TTSEngine:
         print(f"  TTS local: {local_mode}", flush=True)
 
     def _cache_key(self, text: str, voice_override: Optional[str] = None,
-                   emotion_override: Optional[str] = None) -> str:
+                   emotion_override: Optional[str] = None,
+                   model_override: Optional[str] = None) -> str:
         # Include backend, speed, and config-based settings in cache key
         # so cache is invalidated when voice/model/speed changes
         if self._config and not self._local:
             voice = voice_override or self._config.tts_voice
             emotion = emotion_override or self._config.tts_emotion
+            model = model_override or self._config.tts_model_name
             params = (
                 f"{text}|local={self._local}"
-                f"|model={self._config.tts_model_name}"
+                f"|model={model}"
                 f"|voice={voice}"
                 f"|speed={self._config.tts_speed}"
                 f"|emotion={emotion}"
@@ -256,13 +258,15 @@ class TTSEngine:
         return result
 
     def _generate_to_file(self, text: str, voice_override: Optional[str] = None,
-                          emotion_override: Optional[str] = None) -> Optional[str]:
+                          emotion_override: Optional[str] = None,
+                          model_override: Optional[str] = None) -> Optional[str]:
         """Generate audio for text and save to a WAV file. Returns file path.
 
         Tracks consecutive API failures so callers can skip background
         generation when the API is known-broken (e.g. missing key).
         """
-        key = self._cache_key(text, voice_override, emotion_override)
+        key = self._cache_key(text, voice_override, emotion_override,
+                              model_override=model_override)
 
         # Check cache
         cached = self._cache.get(key)
@@ -303,7 +307,8 @@ class TTSEngine:
                 if self._config:
                     cmd = [self._tts_bin] + self._config.tts_cli_args(
                         text, voice_override=voice_override,
-                        emotion_override=emotion_override)
+                        emotion_override=emotion_override,
+                        model_override=model_override)
                 else:
                     # Legacy fallback: no config, use env vars
                     cmd = [self._tts_bin, text, "--stdout", "--response-format", "wav"]
@@ -377,7 +382,8 @@ class TTSEngine:
 
     def play_cached(self, text: str, block: bool = False,
                     voice_override: Optional[str] = None,
-                    emotion_override: Optional[str] = None) -> None:
+                    emotion_override: Optional[str] = None,
+                    model_override: Optional[str] = None) -> None:
         """Play a pregenerated audio clip. Falls back to live generation.
 
         If block=True, waits for playback to finish before returning.
@@ -387,7 +393,8 @@ class TTSEngine:
         if not self._paplay or self._muted:
             return
 
-        key = self._cache_key(text, voice_override, emotion_override)
+        key = self._cache_key(text, voice_override, emotion_override,
+                              model_override=model_override)
         path = self._cache.get(key)
 
         if path and os.path.isfile(path):
@@ -400,7 +407,8 @@ class TTSEngine:
                 self._wait_for_playback()
         else:
             # Slow path: generate on demand
-            p = self._generate_to_file(text, voice_override, emotion_override)
+            p = self._generate_to_file(text, voice_override, emotion_override,
+                                       model_override=model_override)
             if p:
                 self.stop_sync()
                 _time_mod.sleep(0.05)  # Brief pause to let PulseAudio settle
@@ -525,7 +533,8 @@ class TTSEngine:
                 pass
 
     def speak(self, text: str, voice_override: Optional[str] = None,
-              emotion_override: Optional[str] = None) -> None:
+              emotion_override: Optional[str] = None,
+              model_override: Optional[str] = None) -> None:
         """Speak text and BLOCK until playback finishes.
 
         When in local mode, uses the configured local backend (termux-tts-speak
@@ -535,10 +544,12 @@ class TTSEngine:
             self._speak_termux(text)
             return
         self.play_cached(text, block=True, voice_override=voice_override,
-                        emotion_override=emotion_override)
+                        emotion_override=emotion_override,
+                        model_override=model_override)
 
     def speak_async(self, text: str, voice_override: Optional[str] = None,
-                    emotion_override: Optional[str] = None) -> None:
+                    emotion_override: Optional[str] = None,
+                    model_override: Optional[str] = None) -> None:
         """Speak text without blocking. Used for agent narration.
 
         Uses streaming TTS when possible (API mode, uncached) to reduce
@@ -557,23 +568,27 @@ class TTSEngine:
                 # Use streaming for uncached API audio — pipes tts stdout
                 # directly to paplay, eliminating the file generation delay.
                 # For cached audio, play_cached is still faster.
-                key = self._cache_key(text, voice_override, emotion_override)
+                key = self._cache_key(text, voice_override, emotion_override,
+                                      model_override=model_override)
                 cached = self._cache.get(key)
                 if cached and os.path.isfile(cached):
                     # Cache hit — use play_cached for instant playback
                     self.play_cached(text, block=False, voice_override=voice_override,
-                                   emotion_override=emotion_override)
+                                   emotion_override=emotion_override,
+                                   model_override=model_override)
                 elif not self._local and self._tts_bin and self._config:
                     # Cache miss with API backend — use streaming to avoid
                     # the race condition where file generation takes seconds
                     # and stop() kills playback before it starts.
                     self.speak_streaming(text, voice_override=voice_override,
                                        emotion_override=emotion_override,
+                                       model_override=model_override,
                                        block=False)
                 else:
                     # Local mode or no config — fall back to play_cached
                     self.play_cached(text, block=False, voice_override=voice_override,
-                                   emotion_override=emotion_override)
+                                   emotion_override=emotion_override,
+                                   model_override=model_override)
             except Exception as e:
                 try:
                     with open("/tmp/io-mcp-tui-error.log", "a") as f:
@@ -742,6 +757,7 @@ class TTSEngine:
 
     def speak_streaming(self, text: str, voice_override: Optional[str] = None,
                         emotion_override: Optional[str] = None,
+                        model_override: Optional[str] = None,
                         block: bool = True) -> None:
         """Speak text by piping tts stdout directly to paplay (no file).
 
@@ -754,13 +770,15 @@ class TTSEngine:
             text: Text to speak.
             voice_override: Optional voice name for per-session rotation.
             emotion_override: Optional emotion preset for per-session rotation.
+            model_override: Optional model name for cross-provider rotation.
             block: If True, wait for playback to finish before returning.
         """
         if not self._paplay or self._muted:
             return
 
         # Check cache first — if we have a cached file, no need to stream
-        key = self._cache_key(text, voice_override, emotion_override)
+        key = self._cache_key(text, voice_override, emotion_override,
+                              model_override=model_override)
         cached = self._cache.get(key)
         if cached and os.path.isfile(cached):
             self.stop_sync()
@@ -777,7 +795,8 @@ class TTSEngine:
                 return
             # Fall back to non-streaming (espeak file generation)
             self.play_cached(text, block=block, voice_override=voice_override,
-                           emotion_override=emotion_override)
+                           emotion_override=emotion_override,
+                           model_override=model_override)
             return
 
         # Skip streaming when API is known-broken — go straight to local fallback
@@ -788,7 +807,8 @@ class TTSEngine:
         # Build tts command
         cmd = [self._tts_bin] + self._config.tts_cli_args(
             text, voice_override=voice_override,
-            emotion_override=emotion_override)
+            emotion_override=emotion_override,
+            model_override=model_override)
 
         self.stop_sync()
 
@@ -908,14 +928,17 @@ class TTSEngine:
             self._record_failure(f"Streaming TTS setup failed: {e}")
             # Fall back to non-streaming on any error
             self.play_cached(text, block=block, voice_override=voice_override,
-                           emotion_override=emotion_override)
+                           emotion_override=emotion_override,
+                           model_override=model_override)
 
     def speak_streaming_async(self, text: str, voice_override: Optional[str] = None,
-                              emotion_override: Optional[str] = None) -> None:
+                              emotion_override: Optional[str] = None,
+                              model_override: Optional[str] = None) -> None:
         """Speak text via streaming pipe without blocking caller."""
         def _do():
             self.speak_streaming(text, voice_override=voice_override,
-                               emotion_override=emotion_override, block=False)
+                               emotion_override=emotion_override,
+                               model_override=model_override, block=False)
         threading.Thread(target=_do, daemon=True).start()
 
     def stop(self) -> None:

@@ -2225,6 +2225,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         if self._is_focused(session.session_id):
             # Foreground: play immediately
             voice_ov = getattr(session, 'voice_override', None)
+            model_ov = getattr(session, 'model_override', None)
             # Per-call emotion > session override > config default
             emotion_ov = emotion if emotion else getattr(session, 'emotion_override', None)
 
@@ -2237,10 +2238,12 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 # Use cached play for blocking calls to avoid
                 # streaming truncation (audio starting mid-sentence)
                 self._tts.speak(text, voice_override=voice_ov,
-                                emotion_override=emotion_ov)
+                                emotion_override=emotion_ov,
+                                model_override=model_ov)
             else:
                 self._tts.speak_async(text, voice_override=voice_ov,
-                                     emotion_override=emotion_ov)
+                                     emotion_override=emotion_ov,
+                                     model_override=model_ov)
             self._fg_speaking = False
         else:
             # Background: queue (urgent goes to front)
@@ -3139,7 +3142,10 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             session_idx = self.manager.count() - 1  # 0-based
 
             if voice_rot:
-                session.voice_override = voice_rot[session_idx % len(voice_rot)]
+                entry = voice_rot[session_idx % len(voice_rot)]
+                session.voice_override = entry.get("voice")
+                if entry.get("model"):
+                    session.model_override = entry["model"]
             if emotion_rot:
                 session.emotion_override = emotion_rot[session_idx % len(emotion_rot)]
 
