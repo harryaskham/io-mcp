@@ -1987,33 +1987,27 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         return [i for i in deduped if i is not None]
 
     def _update_inbox_list(self) -> None:
-        """Update the inbox list (left pane) with items from the focused session.
+        """Update the inbox list (left pane) with items from ALL sessions.
 
-        Shows pending and done inbox items. Active item is highlighted.
-        Hides the inbox list entirely when there are ≤1 items (looks like
-        the current single-pane layout).
+        Shows a unified inbox across all agents. Each item shows the agent
+        name prefix so the user knows which agent sent it. Items are sorted
+        by timestamp (newest first for pending, oldest first for done).
 
-        Uses a generation counter from the session to skip rebuilds when the
-        inbox hasn't changed — avoids expensive widget teardown/recreation on
-        the ~1-second _update_speech_log timer.
-
-        In multi-agent mode (>1 connected agent), each item shows the
-        agent/session name so the user knows which agent is asking.
+        Uses a combined generation counter to skip no-op rebuilds.
         """
         try:
-            session = self._focused()
             inbox_list = self.query_one("#inbox-list", ListView)
+            sessions = self.manager.all_sessions()
 
-            if session is None:
+            if not sessions:
                 inbox_list.clear()
                 inbox_list.display = False
                 self._inbox_last_generation = -1
                 return
 
-            # Skip rebuild if the inbox hasn't mutated since the last render
-            gen = session._inbox_generation
+            # Combined generation counter across all sessions
+            gen = sum(s._inbox_generation for s in sessions)
             if gen == self._inbox_last_generation:
-                # Still update the highlight in case scroll index changed
                 if self._inbox_scroll_index < len(inbox_list.children):
                     inbox_list.index = self._inbox_scroll_index
                 return
@@ -2021,58 +2015,76 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
             inbox_list.clear()
 
-            # Collect all inbox items: pending (from inbox deque) + done
-            # Include both choices and speech items
-            pending = [item for item in session.inbox if not item.done]
-            done = [item for item in session.inbox_done]
+            # Collect items from all sessions
+            all_pending: list[tuple[InboxItem, Session]] = []
+            all_done: list[tuple[InboxItem, Session]] = []
+            any_registered = False
 
-            # Deduplicate done items — collapse entries with identical preambles
-            done_deduped = self._dedup_done_items(done)
+            for sess in sessions:
+                if sess.registered:
+                    any_registered = True
+                for item in sess.inbox:
+                    if not item.done:
+                        all_pending.append((item, sess))
+                for item in sess.inbox_done:
+                    all_done.append((item, sess))
 
-            # Total displayable items
-            total = len(pending) + len(done_deduped)
+            # Deduplicate done items per session
+            done_deduped: list[tuple[InboxItem, Session]] = []
+            for sess in sessions:
+                sess_done = [item for item in sess.inbox_done]
+                deduped = self._dedup_done_items(sess_done)
+                for item in deduped[-5:]:  # Last 5 done per session
+                    done_deduped.append((item, sess))
 
-            # Always show inbox pane when agent is connected (even if empty/single)
-            if total == 0 and not session.registered:
+            total = len(all_pending) + len(done_deduped)
+
+            if total == 0 and not any_registered:
                 inbox_list.display = False
                 return
 
-            # Show the inbox pane
             inbox_list.display = True
 
-            # In multi-agent mode, show agent name on each inbox item
+            s = getattr(self, '_cs', {})
+            accent_color = s.get('accent', '#88c0d0')
             multi_agent = self.manager.count() > 1
-            agent_name = session.name if multi_agent else ""
-            accent_color = getattr(self, '_cs', {}).get('accent', '#88c0d0') if multi_agent else ""
 
-            # Determine which item is currently active
-            active_item = getattr(session, '_active_inbox_item', None)
+            # Determine active items across all sessions
+            active_items = set()
+            for sess in sessions:
+                ai = getattr(sess, '_active_inbox_item', None)
+                if ai is not None:
+                    active_items.add(id(ai))
 
-            # Add items: pending first (newest at top), then done
+            # Sort pending by timestamp (newest first)
+            all_pending.sort(key=lambda x: x[0].timestamp, reverse=True)
+            # Sort done by timestamp (newest first)
+            done_deduped.sort(key=lambda x: x[0].timestamp, reverse=True)
+
             idx = 0
-            for item in reversed(list(pending)):
-                is_active = (item is active_item)
+            for item, sess in all_pending:
+                is_active = id(item) in active_items
                 inbox_list.append(InboxListItem(
                     preamble=item.preamble or item.text,
                     is_done=False,
                     is_active=is_active,
                     inbox_index=idx,
                     n_choices=len(item.choices),
-                    session_name=agent_name,
-                    accent_color=accent_color,
+                    session_name=sess.name if multi_agent else "",
+                    accent_color=accent_color if multi_agent else "",
                     kind=item.kind,
                 ))
                 idx += 1
 
-            for item in reversed(done_deduped[-10:]):  # Show last 10 done items
+            for item, sess in done_deduped[:10]:  # Show last 10 done total
                 inbox_list.append(InboxListItem(
                     preamble=item.preamble or item.text,
                     is_done=True,
                     is_active=False,
                     inbox_index=idx,
                     n_choices=len(item.choices),
-                    session_name=agent_name,
-                    accent_color=accent_color,
+                    session_name=sess.name if multi_agent else "",
+                    accent_color=accent_color if multi_agent else "",
                     kind=item.kind,
                 ))
                 idx += 1
@@ -2089,20 +2101,29 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
     def _get_inbox_item_at_index(self, idx: int):
         """Get the InboxItem corresponding to an inbox list position.
 
-        Returns the InboxItem from the session's inbox/inbox_done, or None.
+        Mirrors the unified inbox ordering from _update_inbox_list:
+        all pending items sorted by timestamp desc, then done items.
+        Returns the InboxItem or None.
         """
-        session = self._focused()
-        if not session:
+        sessions = self.manager.all_sessions()
+        if not sessions:
             return None
 
-        pending = [item for item in session.inbox if not item.done]
-        done = [item for item in session.inbox_done]
+        # Collect from all sessions (same logic as _update_inbox_list)
+        all_pending: list[InboxItem] = []
+        all_done: list[InboxItem] = []
 
-        # Deduplicate done items to match _update_inbox_list display
-        done_deduped = self._dedup_done_items(done)
+        for sess in sessions:
+            for item in sess.inbox:
+                if not item.done:
+                    all_pending.append(item)
+            sess_done = self._dedup_done_items(list(sess.inbox_done))
+            all_done.extend(sess_done[-5:])
 
-        # Mirror the order in _update_inbox_list: reversed pending, then reversed done_deduped[-10:]
-        ordered = list(reversed(list(pending))) + list(reversed(done_deduped[-10:]))
+        all_pending.sort(key=lambda x: x.timestamp, reverse=True)
+        all_done.sort(key=lambda x: x.timestamp, reverse=True)
+
+        ordered = all_pending + all_done[:10]
 
         if 0 <= idx < len(ordered):
             return ordered[idx]
