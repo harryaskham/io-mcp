@@ -2572,6 +2572,17 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         status.update(f"[{self._cs['warning']}]⧗[/{self._cs['warning']}] [{session.name}] Waiting for agent...{msg_info} [dim](u=undo)[/dim]")
         status.display = True
 
+        # Clear the right pane and show a clean waiting state
+        # (prevents stale extras/activity feed from persisting)
+        s = self._cs
+        list_view = self.query_one("#choices", ListView)
+        list_view.clear()
+        list_view.append(ChoiceItem(
+            f"[{s['fg_dim']}]Waiting for agent...[/{s['fg_dim']}]", "",
+            index=-999, display_index=0,
+        ))
+        list_view.display = True
+
     # ─── Dialog system ────────────────────────────────────────────
 
     def _show_dialog(
