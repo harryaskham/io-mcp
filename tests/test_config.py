@@ -147,7 +147,7 @@ class TestConfigLoading:
         assert not os.path.isfile(tmp_config)
         config = IoMcpConfig.load(tmp_config)
         assert os.path.isfile(tmp_config)
-        assert config.tts_model_name == "mai-voice-1"
+        assert config.tts_model_name == "gpt-4o-mini-tts"
 
     def test_loads_existing_file(self, tmp_config):
         # Write a custom config
@@ -167,7 +167,7 @@ class TestConfigLoading:
         # Speed overridden
         assert config.tts_speed == 1.5
         # Model comes from defaults
-        assert config.tts_model_name == "mai-voice-1"
+        assert config.tts_model_name == "gpt-4o-mini-tts"
         # Providers come from defaults
         assert "openai" in config.providers
 
@@ -241,10 +241,10 @@ class TestConfigLoading:
 class TestConfigAccessors:
     def test_tts_defaults(self, config_with_defaults):
         c = config_with_defaults
-        assert c.tts_model_name == "mai-voice-1"
-        assert c.tts_voice == "en-US-Noa:MAI-Voice-1"
+        assert c.tts_model_name == "gpt-4o-mini-tts"
+        assert c.tts_voice == "sage"
         assert c.tts_speed == 1.3
-        assert c.tts_provider_name == "azure-speech"
+        assert c.tts_provider_name == "openai"
 
     def test_stt_defaults(self, config_with_defaults):
         c = config_with_defaults
@@ -264,7 +264,8 @@ class TestConfigAccessors:
 
     def test_tts_voice_options(self, config_with_defaults):
         options = config_with_defaults.tts_voice_options
-        assert "en-US-Noa:MAI-Voice-1" in options
+        # Default model is now gpt-4o-mini-tts → openai voices
+        assert "sage" in options
 
     def test_emotion_defaults(self, config_with_defaults):
         c = config_with_defaults
@@ -274,15 +275,16 @@ class TestConfigAccessors:
 
     def test_tts_instructions_from_preset(self, config_with_defaults):
         c = config_with_defaults
-        # Default provider is azure-speech, default emotion is "friendly"
-        # azure-speech presets map to SSML style names
+        # Default provider is now openai, default emotion is "friendly"
+        # openai presets map to full text instructions
         instructions = c.tts_instructions
-        assert instructions == "friendly"
+        assert "friendly" in instructions.lower() or "conversational" in instructions.lower()
 
     def test_per_provider_presets_azure(self, config_with_defaults):
         """Azure-speech presets return SSML style names."""
         c = config_with_defaults
-        # Default model is mai-voice-1 → azure-speech provider
+        # Switch to mai-voice-1 to test azure-speech provider presets
+        c.set_tts_model("mai-voice-1")
         assert c.tts_provider_name == "azure-speech"
         presets = c._emotion_presets_for_provider()
         assert presets["happy"] == "joy"
@@ -293,7 +295,7 @@ class TestConfigAccessors:
     def test_per_provider_presets_openai(self, config_with_defaults):
         """OpenAI presets return full text instructions."""
         c = config_with_defaults
-        c.set_tts_model("gpt-4o-mini-tts")
+        # Default model is now gpt-4o-mini-tts → openai provider
         assert c.tts_provider_name == "openai"
         presets = c._emotion_presets_for_provider()
         assert "warm" in presets["happy"].lower()
@@ -302,20 +304,20 @@ class TestConfigAccessors:
     def test_emotion_preset_names_provider_aware(self, config_with_defaults):
         """emotion_preset_names returns names for the current provider."""
         c = config_with_defaults
-        # azure-speech provider
-        az_names = c.emotion_preset_names
-        assert "curious" in az_names
-        assert "empathetic" in az_names
-        # shy is openai-only
-        assert "shy" not in az_names
-
-        # Switch to openai
-        c.set_tts_model("gpt-4o-mini-tts")
+        # Default is now openai provider
         oa_names = c.emotion_preset_names
         assert "shy" in oa_names
         assert "calm" in oa_names
         # curious is azure-speech-only
         assert "curious" not in oa_names
+
+        # Switch to azure-speech
+        c.set_tts_model("mai-voice-1")
+        az_names = c.emotion_preset_names
+        assert "curious" in az_names
+        assert "empathetic" in az_names
+        # shy is openai-only
+        assert "shy" not in az_names
 
     def test_voice_rotation_default_empty(self, config_with_defaults):
         assert config_with_defaults.tts_voice_rotation == []
@@ -564,6 +566,21 @@ class TestConfigMutation:
 
     def test_set_tts_voice(self, config_with_defaults):
         c = config_with_defaults
+        # Default model is gpt-4o-mini-tts — set a valid openai voice
+        c.set_tts_voice("coral")
+        assert c.tts_voice == "coral"
+
+    def test_set_tts_voice_invalid(self, config_with_defaults):
+        c = config_with_defaults
+        # Setting an Azure voice on an OpenAI model should raise
+        import pytest
+        with pytest.raises(ValueError, match="not valid for model"):
+            c.set_tts_voice("en-US-Teo:MAI-Voice-1")
+
+    def test_set_tts_voice_cross_model(self, config_with_defaults):
+        c = config_with_defaults
+        # Switch to Azure model, then set an Azure voice — should work
+        c.set_tts_model("mai-voice-1")
         c.set_tts_voice("en-US-Teo:MAI-Voice-1")
         assert c.tts_voice == "en-US-Teo:MAI-Voice-1"
 
@@ -576,8 +593,8 @@ class TestConfigMutation:
         c = config_with_defaults
         c.set_tts_emotion("excited")
         assert c.tts_emotion == "excited"
-        # Default provider is azure-speech; "excited" maps to SSML style "excitement"
-        assert c.tts_instructions == "excitement"
+        # Default provider is now openai; "excited" maps to full text instructions
+        assert "energy" in c.tts_instructions.lower() or "excited" in c.tts_instructions.lower()
 
     def test_set_stt_model(self, config_with_defaults):
         c = config_with_defaults
@@ -610,6 +627,8 @@ class TestCLIArgs:
         monkeypatch.setenv("AZURE_SPEECH_API_KEY", "test-key")
         monkeypatch.setenv("AZURE_SPEECH_ENDPOINT", "https://test.endpoint")
         c = IoMcpConfig.load(config_with_defaults.config_path)
+        # Switch to azure model first since default is now openai
+        c.set_tts_model("mai-voice-1")
         args = c.tts_cli_args("hello world")
         assert args[0] == "hello world"
         assert "--provider" in args
@@ -712,7 +731,7 @@ class TestConfigReset:
         # Speed should be the default, not the custom value
         assert config.tts_speed == 1.3
         # Model should be the default
-        assert config.tts_model_name == "mai-voice-1"
+        assert config.tts_model_name == "gpt-4o-mini-tts"
 
     def test_reset_when_no_file_exists(self, tmp_path):
         """reset() works fine when the file doesn't exist yet."""

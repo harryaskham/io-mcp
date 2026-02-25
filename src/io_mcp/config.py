@@ -122,9 +122,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "model": "gpt-realtime",
         },
         "tts": {
-            "model": "mai-voice-1",
-            "voice": "en-US-Noa:MAI-Voice-1",
-            "uiVoice": "en-US-Teo:MAI-Voice-1",
+            "model": "gpt-4o-mini-tts",
+            "voice": "sage",
+            "uiVoice": "",
             "speed": 1.3,
             "emotion": "friendly",
             "localBackend": "termux",  # "termux", "espeak", or "none"
@@ -943,7 +943,17 @@ class IoMcpConfig:
         self.expanded = _expand_config(self.raw)
 
     def set_tts_voice(self, voice: str) -> None:
-        """Set the TTS voice."""
+        """Set the TTS voice. Validates against the current model's provider."""
+        # Check if the voice is valid for the current model
+        model_name = self.tts_model_name
+        model_def = self.raw.get("models", {}).get("tts", {}).get(model_name, {})
+        voice_def = model_def.get("voice", {})
+        options = voice_def.get("options", [])
+        if options and voice not in options:
+            raise ValueError(
+                f"Voice '{voice}' is not valid for model '{model_name}'. "
+                f"Valid voices: {', '.join(options)}"
+            )
         self.raw.setdefault("config", {}).setdefault("tts", {})["voice"] = voice
         self.expanded = _expand_config(self.raw)
 
