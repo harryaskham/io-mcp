@@ -12,6 +12,7 @@ Usage:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -154,9 +155,20 @@ def create_proxy_server(
     """
     server = FastMCP("io-mcp", host=host, port=port)
 
-    def _fwd(tool_name: str, args: dict, ctx: Context) -> str:
+    async def _fwd(tool_name: str, args: dict, ctx: Context) -> str:
+        """Forward a tool call to the backend without blocking the event loop.
+
+        Runs the synchronous HTTP request in a thread executor so the
+        asyncio event loop stays alive. This is critical for streamable-http:
+        if the event loop blocks (e.g. during a long present_choices wait),
+        the SSE stream to the MCP client goes silent, the client times out,
+        and retries the tool call — causing duplicate presentations and TTS.
+        """
         sid = _get_session_id(ctx)
-        return _forward_to_backend(backend_url, tool_name, args, sid)
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None, _forward_to_backend, backend_url, tool_name, args, sid
+        )
 
     # ─── Tool definitions (thin proxies) ──────────────────────────
 
@@ -183,7 +195,7 @@ def create_proxy_server(
         str
             JSON string: {"selected": "chosen label", "summary": "chosen summary"}
         """
-        return _fwd("present_choices", {"preamble": preamble, "choices": choices}, ctx)
+        return await _fwd("present_choices", {"preamble": preamble, "choices": choices}, ctx)
 
     @server.tool()
     async def present_multi_select(preamble: str, choices: list[dict], ctx: Context) -> str:
@@ -207,7 +219,7 @@ def create_proxy_server(
         str
             JSON string: {"selected": [{"label": "...", "summary": "..."}]}
         """
-        return _fwd("present_multi_select", {"preamble": preamble, "choices": choices}, ctx)
+        return await _fwd("present_multi_select", {"preamble": preamble, "choices": choices}, ctx)
 
     @server.tool()
     async def speak(text: str, ctx: Context) -> str:
@@ -226,7 +238,7 @@ def create_proxy_server(
         str
             Confirmation message.
         """
-        return _fwd("speak", {"text": text}, ctx)
+        return await _fwd("speak", {"text": text}, ctx)
 
     @server.tool()
     async def speak_async(text: str, ctx: Context) -> str:
@@ -245,7 +257,7 @@ def create_proxy_server(
         str
             Confirmation message.
         """
-        return _fwd("speak_async", {"text": text}, ctx)
+        return await _fwd("speak_async", {"text": text}, ctx)
 
     @server.tool()
     async def speak_urgent(text: str, ctx: Context) -> str:
@@ -264,7 +276,7 @@ def create_proxy_server(
         str
             Confirmation message.
         """
-        return _fwd("speak_urgent", {"text": text}, ctx)
+        return await _fwd("speak_urgent", {"text": text}, ctx)
 
     @server.tool()
     async def set_speed(speed: float, ctx: Context) -> str:
@@ -280,7 +292,7 @@ def create_proxy_server(
         str
             Confirmation of the new speed setting.
         """
-        return _fwd("set_speed", {"speed": speed}, ctx)
+        return await _fwd("set_speed", {"speed": speed}, ctx)
 
     @server.tool()
     async def set_voice(voice: str, ctx: Context) -> str:
@@ -296,7 +308,7 @@ def create_proxy_server(
         str
             Confirmation of the new voice setting.
         """
-        return _fwd("set_voice", {"voice": voice}, ctx)
+        return await _fwd("set_voice", {"voice": voice}, ctx)
 
     @server.tool()
     async def set_tts_model(model: str, ctx: Context) -> str:
@@ -312,7 +324,7 @@ def create_proxy_server(
         str
             Confirmation of the new model and voice.
         """
-        return _fwd("set_tts_model", {"model": model}, ctx)
+        return await _fwd("set_tts_model", {"model": model}, ctx)
 
     @server.tool()
     async def set_stt_model(model: str, ctx: Context) -> str:
@@ -328,7 +340,7 @@ def create_proxy_server(
         str
             Confirmation of the new STT model.
         """
-        return _fwd("set_stt_model", {"model": model}, ctx)
+        return await _fwd("set_stt_model", {"model": model}, ctx)
 
     @server.tool()
     async def set_emotion(emotion: str, ctx: Context) -> str:
@@ -345,7 +357,7 @@ def create_proxy_server(
         str
             Confirmation of the new emotion setting.
         """
-        return _fwd("set_emotion", {"emotion": emotion}, ctx)
+        return await _fwd("set_emotion", {"emotion": emotion}, ctx)
 
     @server.tool()
     async def get_settings(ctx: Context) -> str:
@@ -356,7 +368,7 @@ def create_proxy_server(
         str
             JSON string with current TTS model, voice, speed, and STT model.
         """
-        return _fwd("get_settings", {}, ctx)
+        return await _fwd("get_settings", {}, ctx)
 
     @server.tool()
     async def register_session(
@@ -402,7 +414,7 @@ def create_proxy_server(
         str
             JSON confirmation with assigned session info.
         """
-        return _fwd("register_session", {
+        return await _fwd("register_session", {
             "cwd": cwd, "hostname": hostname,
             "tmux_session": tmux_session, "tmux_pane": tmux_pane,
             "name": name, "voice": voice, "emotion": emotion,
@@ -423,7 +435,7 @@ def create_proxy_server(
         str
             Confirmation of the new name.
         """
-        return _fwd("rename_session", {"name": name}, ctx)
+        return await _fwd("rename_session", {"name": name}, ctx)
 
     @server.tool()
     async def reload_config(ctx: Context) -> str:
@@ -437,7 +449,7 @@ def create_proxy_server(
         str
             Confirmation with the reloaded settings.
         """
-        return _fwd("reload_config", {}, ctx)
+        return await _fwd("reload_config", {}, ctx)
 
     @server.tool()
     async def pull_latest(ctx: Context) -> str:
@@ -451,7 +463,7 @@ def create_proxy_server(
         str
             The git output or error message.
         """
-        return _fwd("pull_latest", {}, ctx)
+        return await _fwd("pull_latest", {}, ctx)
 
     @server.tool()
     async def run_command(command: str, ctx: Context) -> str:
@@ -474,7 +486,7 @@ def create_proxy_server(
         str
             JSON with status, stdout, stderr, and return code.
         """
-        return _fwd("run_command", {"command": command}, ctx)
+        return await _fwd("run_command", {"command": command}, ctx)
 
     @server.tool()
     async def request_restart(ctx: Context) -> str:
@@ -489,7 +501,7 @@ def create_proxy_server(
         str
             JSON with status: "accepted", "rejected", or "error".
         """
-        return _fwd("request_restart", {}, ctx)
+        return await _fwd("request_restart", {}, ctx)
 
     @server.tool()
     async def request_proxy_restart(ctx: Context) -> str:
@@ -515,7 +527,7 @@ def create_proxy_server(
             JSON with status and reconnect instructions.
         """
         # Ask the backend to confirm with the user
-        result_str = _fwd("request_proxy_restart", {}, ctx)
+        result_str = await _fwd("request_proxy_restart", {}, ctx)
         try:
             result = json.loads(result_str)
         except (json.JSONDecodeError, TypeError):
@@ -561,7 +573,7 @@ def create_proxy_server(
         str
             JSON with messages array and count.
         """
-        return _fwd("check_inbox", {}, ctx)
+        return await _fwd("check_inbox", {}, ctx)
 
     @server.tool()
     async def get_logs(lines: int = 50, ctx: Context = None) -> str:
@@ -580,7 +592,7 @@ def create_proxy_server(
         str
             JSON with tui_errors, proxy, and speech_log arrays.
         """
-        return _fwd("get_logs", {"lines": lines}, ctx)
+        return await _fwd("get_logs", {"lines": lines}, ctx)
 
     return server
 
