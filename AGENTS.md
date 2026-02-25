@@ -122,9 +122,10 @@ config:
     model: gpt-4o-mini-tts
     speed: 1.3
     emotion: friendly
+    styleDegree: null         # Azure Speech style intensity (0.01-2.0, null=default)
     localBackend: termux      # termux (Android TTS), espeak (espeak-ng), none
     uiVoice: ""             # separate voice for UI narration (settings, prompts)
-    voiceRotation: []       # cycle voices across agent tabs
+    voiceRotation: []       # cycle voices across agent tabs (strings or {voice, model} objects)
     emotionRotation: []
   stt:
     model: whisper
@@ -314,7 +315,7 @@ register_session(
 
 - Config is at `~/.config/io-mcp/config.yml` — use `set_*` tools or `reload_config` to change settings
 - Local `.io-mcp.yml` in cwd is merged on top (for project-specific extra options)
-- Per-session voice/emotion rotation: set `voiceRotation`/`emotionRotation` lists in config
+- Per-session voice/emotion rotation: set `voiceRotation`/`emotionRotation` lists in config. Voice rotation supports cross-provider triples: `[{voice: sage, model: gpt-4o-mini-tts}, {voice: en-US-Noa:MAI-Voice-1, model: mai-voice-1}]`
 - Key bindings are configurable in `config.keyBindings`
 - Use `rename_session()` on connect to set a descriptive tab name
 - Use `run_command()` to execute shell commands on the server device with user approval
