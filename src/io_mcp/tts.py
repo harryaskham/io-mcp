@@ -590,23 +590,20 @@ class TTSEngine:
         path = self._cache.get(key)
         return path is not None and os.path.isfile(path)
 
-    def _speak_termux(self, text: str) -> None:
+    def _speak_termux(self, text: str, block: bool = True) -> None:
         """Speak text via termux-tts-speak (Android native TTS).
 
         Uses the MUSIC audio stream for nice output quality.
-        Blocks until speech finishes. No files, no PulseAudio needed.
+
+        Args:
+            block: If True, wait for speech to finish. If False, fire-and-forget.
+                   Use block=False for scroll readout where speed matters.
         """
         if not self._termux_exec:
             return
 
-        # Kill any previous termux-tts-speak
-        with self._lock:
-            if self._termux_proc and self._termux_proc.poll() is None:
-                try:
-                    self._termux_proc.kill()
-                except (OSError, ProcessLookupError):
-                    pass
-                self._termux_proc = None
+        # Kill any previous termux-tts-speak via process group
+        self._kill_termux_proc()
 
         try:
             speed = self._config.tts_speed if self._config else self._speed
@@ -616,30 +613,48 @@ class TTSEngine:
                 cmd,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                preexec_fn=os.setsid,
             )
             with self._lock:
                 self._termux_proc = proc
-            proc.wait(timeout=30)
+            if block:
+                try:
+                    proc.wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    self._kill_termux_proc()
         except Exception:
             pass
+
+    def _kill_termux_proc(self) -> None:
+        """Kill the current termux-tts-speak process and its entire process group."""
+        with self._lock:
+            proc = self._termux_proc
+            self._termux_proc = None
+        if proc and proc.poll() is None:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (OSError, ProcessLookupError):
+                try:
+                    proc.kill()
+                except (OSError, ProcessLookupError):
+                    pass
 
     def speak_with_local_fallback(self, text: str,
                                    voice_override: Optional[str] = None,
                                    emotion_override: Optional[str] = None,
                                    nonblocking: bool = False) -> None:
-        """Speak text instantly: use cache if available, else local fallback.
+        """Speak text for scroll readout: cached API audio or async generation.
 
-        For scroll-through option readout where latency matters more than
-        voice quality. If the API TTS is cached, plays the nice version.
-        If not, uses the configured local backend (termux-tts-speak or espeak)
-        immediately and kicks off background generation so the next visit
-        to this option will use the full API TTS.
+        Simple two-path model:
+        1. Cache hit → play immediately in background thread
+        2. Cache miss → speak_async (API generates + plays, no local engine)
+
+        Local engines (termux-tts-speak, espeak) are ONLY used when running
+        in --local mode. The one exception is espeak for freeform text entry
+        readback (nonblocking=True), which needs instant low-latency audio.
 
         Args:
-            nonblocking: If True, avoid termux-tts-speak (which blocks until
-                speech finishes) and use espeak file-based TTS instead.
-                Use this for freeform text readback where rapid-fire calls
-                would otherwise hang the TUI.
+            nonblocking: If True, use espeak for instant readback (text entry).
         """
         if self._muted:
             return
@@ -654,8 +669,7 @@ class TTSEngine:
 
         if path and os.path.isfile(path):
             # Cache hit — play the full quality version in background thread
-            # to avoid blocking the main Textual event loop (stop + sleep +
-            # _start_playback can take 350ms+ on proot/Android).
+            # to avoid blocking the main Textual event loop.
             def _play_cached():
                 if self._scroll_gen != my_gen:
                     return  # stale — newer scroll superseded us
@@ -666,42 +680,13 @@ class TTSEngine:
             threading.Thread(target=_play_cached, daemon=True).start()
             return
 
-        # Determine effective backend — skip termux when nonblocking requested
-        effective_backend = self._local_backend
-        if nonblocking and effective_backend == "termux":
-            # termux-tts-speak blocks until speech finishes which hangs the
-            # TUI during rapid freeform text readback.  Fall through to
-            # espeak (file-based, non-blocking) if available, else "none".
-            if self._espeak and self._paplay:
-                effective_backend = "espeak"
-            else:
-                effective_backend = "none"
-
-        # Cache miss — use configured local backend for instant readout
-        if effective_backend == "termux" and self._termux_exec:
-            # termux-tts-speak: direct Android TTS, no PulseAudio needed
-            def _termux_play():
-                if self._scroll_gen != my_gen:
-                    return
-                self.stop()
-                self._speak_termux(text)
-            threading.Thread(target=_termux_play, daemon=True).start()
-
-            # Also kick off background API generation for next time
-            # (skip if API is known-broken to avoid 10s-timeout processes)
-            if not self._local and self._api_gen_available():
-                def _gen():
-                    self._generate_to_file(text, voice_override, emotion_override)
-                threading.Thread(target=_gen, daemon=True).start()
-
-        elif effective_backend == "espeak" and self._espeak and self._paplay:
-            # espeak-ng: generate WAV and play via paplay
+        # Special case: nonblocking text entry readback via espeak
+        if nonblocking and self._espeak and self._paplay:
             def _espeak_play():
                 try:
                     if self._scroll_gen != my_gen:
-                        return  # stale
+                        return
                     wpm = int(TTS_SPEED * self._speed)
-                    # Generate espeak audio to a temp file and play it
                     tmp = os.path.join(CACHE_DIR, f"_espeak_{hashlib.md5(text.encode()).hexdigest()[:8]}.wav")
                     with open(tmp, "wb") as f:
                         subprocess.run(
@@ -710,22 +695,47 @@ class TTSEngine:
                             env=self._env, timeout=5,
                         )
                     if self._scroll_gen != my_gen:
-                        return  # stale
+                        return
                     self.stop()
                     self._start_playback(tmp)
                 except Exception:
                     pass
             threading.Thread(target=_espeak_play, daemon=True).start()
+            return
 
-            # Also kick off background API generation for next time
-            # (skip if API is known-broken to avoid 10s-timeout processes)
-            if not self._local and self._api_gen_available():
-                def _gen():
-                    self._generate_to_file(text, voice_override, emotion_override)
-                threading.Thread(target=_gen, daemon=True).start()
-        else:
-            # No local backend — fall back to normal async (will generate and play)
-            self.speak_async(text, voice_override, emotion_override)
+        # --local mode: use configured local backend
+        if self._local:
+            if self._local_backend == "termux" and self._termux_exec:
+                def _termux_play():
+                    if self._scroll_gen != my_gen:
+                        return
+                    self.stop()
+                    self._speak_termux(text, block=False)
+                threading.Thread(target=_termux_play, daemon=True).start()
+            elif self._local_backend == "espeak" and self._espeak and self._paplay:
+                def _espeak_local():
+                    try:
+                        if self._scroll_gen != my_gen:
+                            return
+                        wpm = int(TTS_SPEED * self._speed)
+                        tmp = os.path.join(CACHE_DIR, f"_espeak_{hashlib.md5(text.encode()).hexdigest()[:8]}.wav")
+                        with open(tmp, "wb") as f:
+                            subprocess.run(
+                                [self._espeak, "--stdout", "-s", str(wpm), text],
+                                stdout=f, stderr=subprocess.DEVNULL,
+                                env=self._env, timeout=5,
+                            )
+                        if self._scroll_gen != my_gen:
+                            return
+                        self.stop()
+                        self._start_playback(tmp)
+                    except Exception:
+                        pass
+                threading.Thread(target=_espeak_local, daemon=True).start()
+            return
+
+        # Cache miss, API mode — use speak_async to generate and play via API
+        self.speak_async(text, voice_override, emotion_override)
 
     def speak_streaming(self, text: str, voice_override: Optional[str] = None,
                         emotion_override: Optional[str] = None,
@@ -916,13 +926,8 @@ class TTSEngine:
                         pass
             self._process = None
             self._streaming_tts_proc = None
-            # Also kill termux-tts-speak (doesn't use process groups)
-            if self._termux_proc and self._termux_proc.poll() is None:
-                try:
-                    self._termux_proc.kill()
-                except (OSError, ProcessLookupError):
-                    pass
-            self._termux_proc = None
+        # Kill termux-tts-speak via process group (outside lock to avoid contention)
+        self._kill_termux_proc()
 
     def mute(self) -> None:
         """Stop playback and prevent any new audio from playing."""

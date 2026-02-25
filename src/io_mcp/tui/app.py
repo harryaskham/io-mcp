@@ -218,9 +218,10 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         # Flag: is foreground currently speaking (blocks bg playback)
         self._fg_speaking = False
 
-        # Haptic feedback
+        # Haptic feedback — disabled by default, enabled via config.haptic.enabled
         self._termux_vibrate = _find_binary("termux-vibrate")
-        self._haptic_enabled = self._termux_vibrate is not None
+        haptic_cfg = config.haptic_enabled if config else False
+        self._haptic_enabled = haptic_cfg and self._termux_vibrate is not None
 
         # TTS deduplication — track last spoken text to avoid repeats
         self._last_spoken_text: str = ""
@@ -3555,15 +3556,23 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         self._do_select()
 
     def _interrupt_readout(self) -> None:
-        """Interrupt intro/options readout when user scrolls."""
+        """Interrupt intro/options readout when user scrolls.
+
+        Runs stop() in a background thread to avoid blocking the main
+        event loop — on proot/Android, lock acquisition can take 10-100ms
+        if a background TTS thread is mid-operation.
+        """
         session = self._focused()
         if session:
+            need_stop = False
             if getattr(session, 'intro_speaking', False):
                 session.intro_speaking = False
-                self._tts.stop()
+                need_stop = True
             if getattr(session, 'reading_options', False):
                 session.reading_options = False
-                self._tts.stop()
+                need_stop = True
+            if need_stop:
+                threading.Thread(target=self._tts.stop, daemon=True).start()
 
     def _sync_inbox_focus_from_widget(self) -> None:
         """Sync _inbox_pane_focused with actual widget focus.

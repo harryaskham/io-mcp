@@ -148,6 +148,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "maxReconnectAttempts": 3,          # max consecutive reconnect attempts before giving up
             "reconnectCooldownSecs": 30,       # min seconds between reconnect attempts
         },
+        "haptic": {
+            "enabled": False,                  # disabled by default; enable on Android/Termux
+        },
         "healthMonitor": {
             "enabled": True,
             "warningThresholdSecs": 300,      # 5 minutes with no tool call → warning
@@ -823,6 +826,15 @@ class IoMcpConfig:
         )
 
     # ─── Health monitor settings ─────────────────────────────────
+
+    @property
+    def haptic_enabled(self) -> bool:
+        """Whether haptic feedback (vibration) is enabled."""
+        return bool(
+            self.expanded.get("config", {})
+            .get("haptic", {})
+            .get("enabled", False)
+        )
 
     @property
     def health_monitor_enabled(self) -> bool:
