@@ -420,15 +420,15 @@ class TTSEngine:
     def _local_tts_fallback(self, text: str) -> None:
         """Fall back to local TTS when API TTS fails (e.g. missing API key).
 
-        Tries termux-tts-speak first (if available), then espeak-ng.
-        This ensures the user always hears something even when API keys
-        are missing or the TTS service is down.
+        Only uses local backends (termux/espeak) when explicitly configured.
+        When localBackend is "none", this is a no-op — espeak is never used
+        as a fallback in API mode.
         """
         try:
             if self._local_backend == "termux" and self._termux_exec:
                 self._speak_termux(text)
-            elif self._espeak and self._paplay:
-                # espeak file-based fallback
+            elif self._local_backend == "espeak" and self._espeak and self._paplay:
+                # espeak file-based fallback — only when espeak is the configured backend
                 wpm = int(TTS_SPEED * self._speed)
                 cmd = [self._espeak, "--stdout", "-s", str(wpm), text]
                 proc = subprocess.run(

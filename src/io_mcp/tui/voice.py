@@ -52,11 +52,13 @@ class VoiceMixin:
             self._start_voice_recording()
 
     def _start_voice_recording(self) -> None:
-        """Start recording audio via termux-microphone-record.
+        """Start recording audio for speech-to-text.
 
-        Uses termux-exec to invoke termux-microphone-record in native Termux
-        (outside proot) which has access to Android mic hardware. On stop,
-        the recorded file is converted via ffmpeg and piped to stt --stdin.
+        Platform detection:
+        - Android (termux-exec available): Uses termux-microphone-record for
+          mic access, then ffmpeg + stt --stdin for transcription.
+        - Desktop (stt available, no termux-exec): Uses stt directly — it
+          handles mic recording and transcription in one step.
         """
         session = self._focused()
         if not session:
@@ -93,16 +95,6 @@ class VoiceMixin:
         termux_exec_bin = _find_binary("termux-exec")
         stt_bin = _find_binary("stt")
 
-        if not termux_exec_bin:
-            session.voice_recording = False
-            if hasattr(self._tts, 'unmute'):
-                self._tts.unmute()
-            else:
-                self._tts._muted = False
-            self._tts.speak_async("Voice recording not available on this device")
-            self._restore_choices()
-            return
-
         if not stt_bin:
             session.voice_recording = False
             if hasattr(self._tts, 'unmute'):
@@ -113,33 +105,80 @@ class VoiceMixin:
             self._restore_choices()
             return
 
-        # Record to shared storage (accessible from both native Termux and proot)
-        rec_dir = "/sdcard/io-mcp"
-        os.makedirs(rec_dir, exist_ok=True)
-        self._voice_rec_file = os.path.join(rec_dir, "voice-recording.ogg")
-        # Native Termux sees /storage/emulated/0 instead of /sdcard
-        native_rec_file = "/storage/emulated/0/io-mcp/voice-recording.ogg"
+        if termux_exec_bin:
+            # Android path: use termux-microphone-record
+            self._desktop_stt_mode = False
+            self._voice_stt_process = None
 
-        try:
-            # Start recording via termux-exec (runs in native Termux context)
-            self._voice_process = subprocess.Popen(
-                [termux_exec_bin, "termux-microphone-record",
-                 "-f", native_rec_file,
-                 "-e", "opus", "-r", "24000", "-c", "1"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
-        except Exception as e:
-            session.voice_recording = False
-            self._tts.speak_async(f"Voice input failed: {str(e)[:80]}")
-            self._voice_process = None
-            self._restore_choices()
+            # Record to shared storage (accessible from both native Termux and proot)
+            rec_dir = "/sdcard/io-mcp"
+            os.makedirs(rec_dir, exist_ok=True)
+            self._voice_rec_file = os.path.join(rec_dir, "voice-recording.ogg")
+            # Native Termux sees /storage/emulated/0 instead of /sdcard
+            native_rec_file = "/storage/emulated/0/io-mcp/voice-recording.ogg"
+
+            try:
+                # Start recording via termux-exec (runs in native Termux context)
+                self._voice_process = subprocess.Popen(
+                    [termux_exec_bin, "termux-microphone-record",
+                     "-f", native_rec_file,
+                     "-e", "opus", "-r", "24000", "-c", "1"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+            except Exception as e:
+                session.voice_recording = False
+                if hasattr(self._tts, 'unmute'):
+                    self._tts.unmute()
+                else:
+                    self._tts._muted = False
+                self._tts.speak_async(f"Voice input failed: {str(e)[:80]}")
+                self._voice_process = None
+                self._restore_choices()
+        else:
+            # Desktop path: use stt directly (handles mic + transcription)
+            self._desktop_stt_mode = True
+            self._voice_rec_file = None
+
+            try:
+                # Build stt command from config
+                if self._config:
+                    stt_args = [stt_bin] + self._config.stt_cli_args()
+                    # Remove --stdin if present (we want mic input, not stdin)
+                    stt_args = [a for a in stt_args if a != "--stdin"]
+                else:
+                    stt_args = [stt_bin]
+
+                env = os.environ.copy()
+
+                self._voice_stt_process = subprocess.Popen(
+                    stt_args,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    env=env,
+                    preexec_fn=os.setsid,
+                )
+                self._voice_process = self._voice_stt_process
+            except Exception as e:
+                session.voice_recording = False
+                if hasattr(self._tts, 'unmute'):
+                    self._tts.unmute()
+                else:
+                    self._tts._muted = False
+                self._tts.speak_async(f"Voice input failed: {str(e)[:80]}")
+                self._voice_process = None
+                self._voice_stt_process = None
+                self._restore_choices()
 
     def _stop_voice_recording(self) -> None:
         """Stop recording and process transcription.
 
-        Stops termux-microphone-record, then runs ffmpeg to convert the
-        recorded opus file to raw PCM16 24kHz mono, piped into stt --stdin.
+        Desktop mode: Sends SIGINT to the stt process to stop recording.
+        stt outputs the transcript on stdout.
+
+        Android mode: Stops termux-microphone-record, then runs ffmpeg to
+        convert the recorded opus file to raw PCM16 24kHz mono, piped into
+        stt --stdin.
         """
         session = self._focused()
         if not session:
@@ -150,6 +189,9 @@ class VoiceMixin:
         self._tts.play_chime("record_stop")
         proc = self._voice_process
         self._voice_process = None
+        desktop_mode = getattr(self, '_desktop_stt_mode', False)
+        stt_proc = getattr(self, '_voice_stt_process', None)
+        self._voice_stt_process = None
 
         # Emit recording state for remote frontends
         try:
@@ -161,6 +203,37 @@ class VoiceMixin:
         status.update(f"[{self._cs['blue']}]⧗[/{self._cs['blue']}] Transcribing...")
 
         def _process():
+            if desktop_mode and stt_proc:
+                # Desktop: send SIGINT to stt process to stop mic recording
+                # stt will finish transcribing and output the result on stdout
+                try:
+                    import signal
+                    os.killpg(os.getpgid(stt_proc.pid), signal.SIGINT)
+                except (OSError, ProcessLookupError):
+                    pass
+
+                try:
+                    stdout, stderr = stt_proc.communicate(timeout=30)
+                    transcript = stdout.decode("utf-8", errors="replace").strip()
+                    stderr_text = stderr.decode("utf-8", errors="replace").strip() if stderr else ""
+                except Exception as e:
+                    transcript = ""
+                    stderr_text = str(e)
+                    try:
+                        os.killpg(os.getpgid(stt_proc.pid), 9)
+                    except Exception:
+                        pass
+
+                # Unmute TTS
+                if hasattr(self._tts, 'unmute'):
+                    self._tts.unmute()
+                else:
+                    self._tts._muted = False
+
+                self._handle_transcript(session, transcript, stderr_text)
+                return
+
+            # Android path: stop termux-microphone-record and transcribe
             termux_exec_bin = _find_binary("termux-exec")
             stt_bin = _find_binary("stt")
             rec_file = getattr(self, '_voice_rec_file', None)
@@ -271,39 +344,48 @@ class VoiceMixin:
                 except Exception:
                     pass
 
-            if transcript:
-                self._tts.stop()
+            self._handle_transcript(session, transcript, stderr_text)
 
-                # If in message queue mode, queue instead of selecting
-                if self._message_mode:
-                    self._message_mode = False
-                    msgs = getattr(session, 'pending_messages', None)
-                    if msgs is not None:
-                        msgs.append(transcript)
-                    count = len(msgs) if msgs else 1
-                    self._tts.speak_async(f"Message queued: {transcript[:50]}. {count} pending.")
-                    if session.active:
-                        self._safe_call_from_thread(self._restore_choices)
-                    else:
-                        self._safe_call_from_thread(self._show_session_waiting, session)
+        threading.Thread(target=_process, daemon=True).start()
+
+    def _handle_transcript(self, session, transcript: str, stderr_text: str = "") -> None:
+        """Handle the result of voice transcription (shared by desktop and Android paths)."""
+        if transcript:
+            self._tts.stop()
+
+            # If in message queue mode, queue instead of selecting
+            if self._message_mode:
+                self._message_mode = False
+                target = getattr(self, '_message_target_session', None) or session
+                self._message_target_session = None
+                msgs = getattr(target, 'pending_messages', None)
+                if msgs is not None:
+                    msgs.append(transcript)
+                count = len(msgs) if msgs else 1
+                agent_name = target.name or "agent"
+                self._tts.speak_async(f"Message queued for {agent_name}: {transcript[:50]}. {count} pending.")
+                if target.active:
+                    self._safe_call_from_thread(self._restore_choices)
                 else:
-                    self._tts.speak_async(f"Got: {transcript}")
-
-                    wrapped = (
-                        f"<transcription>\n{transcript}\n</transcription>\n"
-                        "Note: This is a speech-to-text transcription that may contain "
-                        "slight errors or similar-sounding words. Please interpret "
-                        "charitably. If completely uninterpretable, present the same "
-                        "options again and ask the user to retry."
-                    )
-                    self._resolve_selection(session, {"selected": wrapped, "summary": "(voice input)"})
-                    self._safe_call_from_thread(self._show_waiting, f"🎙 {transcript[:50]}")
+                    self._safe_call_from_thread(self._show_session_waiting, target)
             else:
-                if stderr_text:
-                    self._tts.speak_async(f"Recording failed: {stderr_text[:100]}")
-                else:
-                    self._tts.speak_async("No speech detected. Back to choices.")
-                self._safe_call_from_thread(self._restore_choices)
+                self._tts.speak_async(f"Got: {transcript}")
+
+                wrapped = (
+                    f"<transcription>\n{transcript}\n</transcription>\n"
+                    "Note: This is a speech-to-text transcription that may contain "
+                    "slight errors or similar-sounding words. Please interpret "
+                    "charitably. If completely uninterpretable, present the same "
+                    "options again and ask the user to retry."
+                )
+                self._resolve_selection(session, {"selected": wrapped, "summary": "(voice input)"})
+                self._safe_call_from_thread(self._show_waiting, f"🎙 {transcript[:50]}")
+        else:
+            if stderr_text:
+                self._tts.speak_async(f"Recording failed: {stderr_text[:100]}")
+            else:
+                self._tts.speak_async("No speech detected. Back to choices.")
+            self._safe_call_from_thread(self._restore_choices)
 
         threading.Thread(target=_process, daemon=True).start()
 
