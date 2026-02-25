@@ -11,7 +11,7 @@ import threading
 from textual.widgets import ListView
 
 from io_mcp.tui.app import IoMcpApp
-from io_mcp.tui.widgets import ChoiceItem, SubmitTextArea, EXTRA_OPTIONS, PRIMARY_EXTRAS
+from io_mcp.tui.widgets import ChoiceItem, SubmitTextArea, TextInputModal, EXTRA_OPTIONS, PRIMARY_EXTRAS
 from io_mcp.session import Session
 
 
@@ -148,7 +148,7 @@ async def test_default_focus_is_first_real_choice():
 
 @pytest.mark.asyncio
 async def test_freeform_input_opens_and_closes():
-    """Pressing 'i' opens freeform input, Escape closes it."""
+    """Pressing 'i' opens freeform input modal, Escape closes it."""
     app = make_app()
     async with app.run_test() as pilot:
         session, _ = app.manager.get_or_create("test-1")
@@ -165,19 +165,19 @@ async def test_freeform_input_opens_and_closes():
         app._show_choices()
         await pilot.pause(0.1)
 
-        # Open freeform
+        # Open freeform — should push a TextInputModal
         await pilot.press("i")
         await pilot.pause(0.2)
 
-        inp = app.query_one("#freeform-input", SubmitTextArea)
-        assert inp.styles.display != "none"
         assert session.input_mode is True
+        assert isinstance(app.screen, TextInputModal)
 
-        # Close with Escape
+        # Close with Escape — modal should be dismissed
         await pilot.press("escape")
         await pilot.pause(0.2)
 
         assert session.input_mode is False
+        assert not isinstance(app.screen, TextInputModal)
 
 
 @pytest.mark.asyncio
@@ -225,7 +225,7 @@ async def test_settings_menu_opens():
 
 @pytest.mark.asyncio
 async def test_message_mode_opens():
-    """Pressing 'm' opens message input mode."""
+    """Pressing 'm' opens message input modal."""
     app = make_app()
     async with app.run_test() as pilot:
         session, _ = app.manager.get_or_create("test-1")
@@ -237,14 +237,13 @@ async def test_message_mode_opens():
         await pilot.pause(0.2)
 
         assert app._message_mode is True
-
-        inp = app.query_one("#freeform-input", SubmitTextArea)
-        assert inp.styles.display != "none"
+        assert isinstance(app.screen, TextInputModal)
 
         # Escape cancels
         await pilot.press("escape")
         await pilot.pause(0.2)
         assert app._message_mode is False
+        assert not isinstance(app.screen, TextInputModal)
 
 
 # ─── Inbox two-column layout tests ──────────────────────────────────────

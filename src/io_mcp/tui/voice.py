@@ -16,7 +16,7 @@ from textual.widgets import Input, Label, ListView
 
 from ..tts import _find_binary
 
-from .widgets import SubmitTextArea, _safe_action
+from .widgets import _safe_action
 
 if TYPE_CHECKING:
     from .app import IoMcpApp
@@ -45,10 +45,6 @@ class VoiceMixin:
         if session.voice_recording:
             self._stop_voice_recording()
         else:
-            # Hide the freeform input if we're in message mode
-            if self._message_mode:
-                inp = self.query_one("#freeform-input", SubmitTextArea)
-                inp.styles.display = "none"
             self._start_voice_recording()
 
     def _start_voice_recording(self) -> None:
