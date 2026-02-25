@@ -1,5 +1,12 @@
 # io-mcp development recipes
 
+rmconfig:
+    rm $HOME/.config/io-mcp/config.yml || true
+
+# Base: run io-mcp with any extra flags (e.g. just run --local --default-config)
+run *FLAGS:
+    uv run io-mcp {{ FLAGS }}
+
 # Base: run io-mcp --dev with any extra flags (e.g. just dev --local --default-config)
 dev *FLAGS:
     uv run io-mcp --dev {{ FLAGS }}
@@ -15,11 +22,13 @@ dev-desktop *FLAGS:
     uv run io-mcp --dev {{ FLAGS }}
 
 # Desktop with default config
-default-desktop *FLAGS:
+dev-desktop-rmconfig *FLAGS:
+    just rmconfig
+    just dev-desktop {{ FLAGS }}
+
+dev-desktop-rmconfig-tmux *FLAGS:
+    tmux new -A -s io-mcp-tui "while true; do just dev-desktop-rmconfig {{ FLAGS }}; sleep 3; done"
+
+# Desktop with default config
+dev-desktop-default *FLAGS:
     just dev-desktop --default-config {{ FLAGS }}
-
-tmux *FLAGS:
-    tmux new -A -s io-mcp-tui "while true; do just rmconfig; just dev-desktop {{ FLAGS }}; sleep 3; done"
-
-rmconfig:
-    rm $HOME/.config/io-mcp/config.yml || true

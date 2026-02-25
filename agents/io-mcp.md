@@ -16,6 +16,11 @@ disallowedTools:
 permissionMode: bypassPermissions
 memory: project
 hooks:
+  Start:
+    - hooks:
+        - type: command
+          command: "${CLAUDE_PLUGIN_ROOT}/hooks/start-register.sh"
+          timeout: 10
   Stop:
     - hooks:
         - type: command
