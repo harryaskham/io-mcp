@@ -486,6 +486,11 @@ class TTSEngine:
                 except Exception:
                     pass
                 if retcode != 0:
+                    # Negative return code = killed by signal (intentional stop)
+                    if retcode < 0:
+                        with self._lock:
+                            self._process = None
+                        return False  # Don't retry — was killed intentionally
                     self._record_failure(
                         f"paplay exited immediately (code {retcode}): {stderr_out or 'no stderr'}"
                     )
@@ -847,7 +852,10 @@ class TTSEngine:
                         self._record_failure(
                             f"paplay (streaming) exited with code {retcode}: {stderr_out or 'no stderr'}"
                         )
-                        tts_failed = True
+                        # Negative return code = killed by signal (e.g. stop())
+                        # This is intentional interruption, not a real failure
+                        if retcode > 0:
+                            tts_failed = True
                     else:
                         self._total_plays += 1
                         self._consecutive_failures = 0
@@ -891,7 +899,10 @@ class TTSEngine:
                             self._record_failure(
                                 f"paplay (streaming async) exited with code {retcode}: {stderr_out or 'no stderr'}"
                             )
-                            tts_failed = True
+                            # Negative return code = killed by signal (e.g. stop())
+                            # This is intentional interruption, not a real failure
+                            if retcode > 0:
+                                tts_failed = True
                         else:
                             self._total_plays += 1
                             self._consecutive_failures = 0
