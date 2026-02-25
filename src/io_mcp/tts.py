@@ -313,7 +313,7 @@ class TTSEngine:
                 with open(out_path, "wb") as f:
                     proc = subprocess.run(
                         cmd, stdout=f, stderr=subprocess.PIPE,
-                        env=self._env, timeout=10,
+                        env=self._env, timeout=5,
                     )
                 if proc.returncode != 0:
                     stderr_out = (proc.stderr or b"").decode("utf-8", errors="replace").strip()

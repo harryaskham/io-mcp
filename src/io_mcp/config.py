@@ -128,7 +128,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "speed": 1.3,
             "style": "friendly",
             "styleDegree": None,               # Azure Speech style intensity (0.01-2.0, None=default)
-            "localBackend": "espeak",  # "termux", "espeak", or "none"
+            "localBackend": "none",  # "termux", "espeak", or "none"
             "voiceRotation": [
                 {"voice": "alloy", "model": "gpt-4o-mini-tts"},
                 {"voice": "ash", "model": "gpt-4o-mini-tts"},
