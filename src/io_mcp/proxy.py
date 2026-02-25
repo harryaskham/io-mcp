@@ -634,6 +634,32 @@ def create_proxy_server(
         })
 
     @server.tool()
+    async def request_close(ctx: Context, reason: str = "Work complete") -> str:
+        """Request closing this agent's session with user confirmation.
+
+        Presents the user with Accept/Decline choices. If the user accepts,
+        the session is closed and the tab is removed. If the user declines,
+        they provide a reason (e.g. "keep working", "review changes") and
+        the agent receives that reason to continue accordingly.
+
+        Use this when the agent has finished its work and has no more
+        choices to present, to prevent orphaned empty tabs.
+
+        Parameters
+        ----------
+        reason:
+            Why the agent wants to close (e.g. "Work complete", "Task failed").
+            Shown to the user in the confirmation prompt.
+
+        Returns
+        -------
+        str
+            JSON with status: "closed" if accepted, or "declined" with the
+            user's reason text if they want the agent to continue.
+        """
+        return await _fwd("request_close", {"reason": reason}, ctx)
+
+    @server.tool()
     async def check_inbox(ctx: Context) -> str:
         """Check for queued user messages without waiting for another tool call.
 

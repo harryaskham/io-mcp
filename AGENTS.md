@@ -82,6 +82,7 @@ android/
 | `speak_urgent(text)` | High-priority TTS — interrupts current playback |
 | `rename_session(name)` | Set descriptive tab name |
 | `run_command(command)` | Run shell command with user approval |
+| `request_close(reason)` | Request closing session with user confirmation |
 | `set_speed(speed)` | Change TTS speed (0.5-2.5) |
 | `set_voice(voice)` | Change TTS voice |
 | `set_tts_model(model)` | Switch TTS model (resets voice) |

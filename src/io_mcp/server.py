@@ -614,7 +614,7 @@ def create_mcp_server(
                 "set_speed", "set_voice", "set_emotion",
                 "set_tts_model", "set_stt_model",
                 "rename_session", "get_settings", "reload_config",
-                "pull_latest", "run_command",
+                "pull_latest", "run_command", "request_close",
             ],
         })
 
@@ -773,5 +773,73 @@ def create_mcp_server(
         except Exception as e:
             return json.dumps({"status": "error", "command": command,
                              "error": str(e)})
+
+    @server.tool()
+    @_safe_tool
+    async def request_close(ctx: Context, reason: str = "Work complete") -> str:
+        """Request closing this agent's session with user confirmation.
+
+        Presents the user with Accept/Decline choices. If the user accepts,
+        the session is closed and the tab is removed. If the user declines,
+        they provide a reason (e.g. "keep working", "review changes") and
+        the agent receives that reason to continue accordingly.
+
+        Use this when the agent has finished its work and has no more
+        choices to present, to prevent orphaned empty tabs.
+
+        Parameters
+        ----------
+        reason:
+            Why the agent wants to close (e.g. "Work complete", "Task failed").
+            Shown to the user in the confirmation prompt.
+
+        Returns
+        -------
+        str
+            JSON with status: "closed" if accepted, or "declined" with the
+            user's reason text if they want the agent to continue.
+        """
+        session = _safe_get_session(ctx)
+        loop = asyncio.get_event_loop()
+
+        # Present confirmation to user
+        result = await loop.run_in_executor(
+            None,
+            frontend.present_choices,
+            session,
+            f"Agent wants to close session: {reason}",
+            [{"label": "Accept", "summary": f"Close this session ({session.name})"},
+             {"label": "Decline", "summary": "Keep the session open"}],
+        )
+
+        if result.get("selected", "").lower() == "accept":
+            # Close the session
+            name = session.name
+            try:
+                frontend.on_session_created  # verify frontend is alive
+                # Use manager to remove the session
+                frontend.manager.remove(session.session_id)
+                frontend.update_tab_bar()
+            except Exception:
+                pass
+            return json.dumps({"status": "closed", "message": f"Session '{name}' closed."})
+
+        # User declined — ask for a reason
+        decline_result = await loop.run_in_executor(
+            None,
+            frontend.present_choices,
+            session,
+            "Why should the agent continue?",
+            [{"label": "Keep working", "summary": "Continue with more tasks"},
+             {"label": "Review changes", "summary": "Review what was done before closing"},
+             {"label": "Something else", "summary": "I have other instructions"}],
+        )
+
+        decline_reason = decline_result.get("selected", "Keep working")
+        return _attach_messages(json.dumps({
+            "status": "declined",
+            "reason": decline_reason,
+            "message": f"User wants the agent to continue: {decline_reason}",
+        }), session)
 
     return server
