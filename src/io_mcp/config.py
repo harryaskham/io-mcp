@@ -1031,9 +1031,17 @@ class IoMcpConfig:
         # Add emotion/instructions (override or default)
         emotion = emotion_override or self.tts_emotion
         presets = self._emotion_presets_for_provider()
-        instructions = presets.get(emotion, emotion) if emotion else self.tts_instructions
-        if instructions:
-            args.extend(["--instructions", instructions])
+        resolved = presets.get(emotion, emotion) if emotion else None
+
+        if provider == "azure-speech" or (provider == "openai" and self.tts_model_name.startswith("azure")):
+            # Azure Speech: use --style for SSML style name
+            if resolved:
+                args.extend(["--style", resolved])
+        else:
+            # OpenAI: use --instructions for text instructions
+            instructions = resolved or self.tts_instructions
+            if instructions:
+                args.extend(["--instructions", instructions])
 
         args.extend(["--stdout", "--response-format", "wav"])
         return args

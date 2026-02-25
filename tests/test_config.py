@@ -656,9 +656,9 @@ class TestCLIArgs:
                               emotion_override="happy")
         assert "en-US-Teo:MAI-Voice-1" in args
         # azure-speech provider: "happy" maps to SSML style via _emotion_presets_for_provider
-        instructions_idx = args.index("--instructions")
+        style_idx = args.index("--style")
         # The preset should resolve through the provider-aware presets
-        assert args[instructions_idx + 1] is not None
+        assert args[style_idx + 1] is not None
 
     def test_stt_args_basic(self, config_with_defaults, monkeypatch):
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
