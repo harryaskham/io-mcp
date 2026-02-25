@@ -22,7 +22,7 @@ from textual.events import MouseScrollDown, MouseScrollUp
 from textual.reactive import reactive
 from textual.timer import Timer
 from textual.widget import Widget
-from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, RichLog, Static, TextArea
+from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, RichLog, Static
 
 from ..session import Session, SessionManager, SpeechEntry, HistoryEntry, InboxItem
 from ..settings import Settings
@@ -33,7 +33,7 @@ from ..notifications import (
 )
 
 from .themes import COLOR_SCHEMES, DEFAULT_SCHEME, get_scheme, build_css
-from .widgets import ChoiceItem, InboxListItem, DwellBar, ManagedListView, SubmitTextArea, EXTRA_OPTIONS, PRIMARY_EXTRAS, SECONDARY_EXTRAS, MORE_OPTIONS_ITEM, _safe_action
+from .widgets import ChoiceItem, InboxListItem, DwellBar, ManagedListView, TextInputModal, VOICE_REQUESTED, EXTRA_OPTIONS, PRIMARY_EXTRAS, SECONDARY_EXTRAS, MORE_OPTIONS_ITEM, _safe_action
 from .views import ViewsMixin
 from .voice import VoiceMixin
 from .settings_menu import SettingsMixin
@@ -422,7 +422,6 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 yield ManagedListView(id="choices")
                 yield DwellBar(id="dwell-bar")
         yield RichLog(id="pane-view", markup=False, highlight=False, auto_scroll=True, max_lines=200)
-        yield SubmitTextArea(id="freeform-input", soft_wrap=True, show_line_numbers=False, tab_behavior="focus")
         yield Input(placeholder="Filter choices...", id="filter-input")
         yield Static("[dim]↕[/dim] Scroll  [dim]⏎[/dim] Select  [dim]x[/dim] Multi  [dim]u[/dim] Undo  [dim]i[/dim] Type  [dim]m[/dim] Msg  [dim]␣[/dim] Voice  [dim]/[/dim] Filter  [dim]v[/dim] Pane  [dim]s[/dim] Settings  [dim]q[/dim] Back/Quit", id="footer-help")
 
@@ -2439,6 +2438,9 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
     def _show_speech_item(self, text: str) -> None:
         """Show a speech item's text in the right pane (runs on textual thread)."""
+        # Don't update the main screen UI when a modal (text input) is open
+        if isinstance(self.screen, TextInputModal):
+            return
         try:
             s = self._cs
             preamble_widget = self.query_one("#preamble", Label)
@@ -2867,32 +2869,45 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             return
 
         if action == "branch_here":
-            # Ask for branch name via freeform input
-            self._worktree_action = "branch_here"
-            self._message_mode = False
-            session.input_mode = True
-            self._freeform_spoken_pos = 0
-
-            self.query_one("#main-content").display = False
-            inp = self.query_one("#freeform-input", SubmitTextArea)
-            inp.clear()
-            inp.styles.display = "block"
-            inp.focus()
-
+            # Ask for branch name via modal input
             self._tts.speak_async("Type the branch name")
 
+            def _on_branch_name(result: str | None) -> None:
+                if result:
+                    self._create_worktree(session, result, "branch_here")
+                else:
+                    self._speak_ui("Cancelled.")
+                    if session.active:
+                        self._show_choices()
+
+            self.push_screen(
+                TextInputModal(
+                    title="Branch name",
+                    message_mode=False,
+                    scheme=self._cs,
+                ),
+                callback=_on_branch_name,
+            )
+
         elif action == "fork_agent":
-            self._worktree_action = "fork_agent"
-            session.input_mode = True
-            self._freeform_spoken_pos = 0
-
-            self.query_one("#main-content").display = False
-            inp = self.query_one("#freeform-input", SubmitTextArea)
-            inp.clear()
-            inp.styles.display = "block"
-            inp.focus()
-
             self._tts.speak_async("Type branch name for the new agent's worktree")
+
+            def _on_fork_branch_name(result: str | None) -> None:
+                if result:
+                    self._create_worktree(session, result, "fork_agent")
+                else:
+                    self._speak_ui("Cancelled.")
+                    if session.active:
+                        self._show_choices()
+
+            self.push_screen(
+                TextInputModal(
+                    title="Branch name for new agent",
+                    message_mode=False,
+                    scheme=self._cs,
+                ),
+                callback=_on_fork_branch_name,
+            )
 
         elif action == "push_pr":
             # Queue message to agent to push and create PR
@@ -3907,7 +3922,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         # is done by on_list_selected via the ListView.Selected event.
 
     def action_freeform_input(self) -> None:
-        """Switch to freeform text input mode."""
+        """Switch to freeform text input mode using a popup modal."""
         session = self._focused()
         if not session or not session.active or session.input_mode or session.voice_recording:
             return
@@ -3916,20 +3931,51 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         session.reading_options = False
         self._cancel_dwell()
 
-        # UI first
-        self.query_one("#main-content").display = False
-        self.query_one("#dwell-bar").display = False
-        inp = self.query_one("#freeform-input", SubmitTextArea)
-        inp.clear()
-        inp.styles.display = "block"
-        inp.focus()
-
-        # TTS after UI
         self._tts.stop()
         self._speak_ui("Type your reply")
 
+        def _on_text_changed(text: str) -> None:
+            """TTS readback of typed text at delimiter boundaries."""
+            if len(text) <= self._freeform_spoken_pos:
+                self._freeform_spoken_pos = len(text)
+                return
+            if text and text[-1] in self._freeform_delimiters:
+                chunk = text[self._freeform_spoken_pos:].strip()
+                if chunk:
+                    self._freeform_tts.stop()
+                    self._freeform_tts.speak_with_local_fallback(chunk)
+                self._freeform_spoken_pos = len(text)
+
+        def _on_modal_dismiss(result: str | None) -> None:
+            """Handle the modal result for freeform input."""
+            session.input_mode = False
+            if result is None:
+                # Cancelled
+                self._freeform_tts.stop()
+                if session.active:
+                    self._show_choices()
+                self._speak_ui("Cancelled.")
+            else:
+                # Submitted
+                self._freeform_tts.stop()
+                self._tts.stop()
+                self._vibrate(100)
+                self._tts.speak_async(f"Selected: {result}")
+                self._resolve_selection(session, {"selected": result, "summary": "(freeform input)"})
+                self._show_waiting(result)
+
+        self.push_screen(
+            TextInputModal(
+                title="Type your reply",
+                message_mode=False,
+                scheme=self._cs,
+                on_text_changed=_on_text_changed,
+            ),
+            callback=_on_modal_dismiss,
+        )
+
     def action_queue_message(self) -> None:
-        """Open text input to queue a message for the agent's next response.
+        """Open text input modal to queue a message for the agent's next response.
         Also supports voice input — press space to record a voice message.
 
         Routes to the inbox-highlighted session if inbox is visible,
@@ -3942,20 +3988,83 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         if getattr(session, 'input_mode', False) or getattr(session, 'voice_recording', False):
             return
         self._message_mode = True
-        self._message_target_session = session  # store target for _submit_freeform
+        self._message_target_session = session
         self._freeform_spoken_pos = 0
         self._inbox_was_visible = self._inbox_pane_visible()
 
-        # UI
-        self.query_one("#main-content").display = False
-        self.query_one("#dwell-bar").display = False
-        inp = self.query_one("#freeform-input", SubmitTextArea)
-        inp.clear()
-        inp.styles.display = "block"
-        inp.focus()
-
         self._tts.stop()
         self._speak_ui("Type or speak a message for the agent")
+
+        def _on_text_changed(text: str) -> None:
+            """TTS readback of typed text at delimiter boundaries."""
+            if len(text) <= self._freeform_spoken_pos:
+                self._freeform_spoken_pos = len(text)
+                return
+            if text and text[-1] in self._freeform_delimiters:
+                chunk = text[self._freeform_spoken_pos:].strip()
+                if chunk:
+                    self._freeform_tts.stop()
+                    self._freeform_tts.speak_with_local_fallback(chunk)
+                self._freeform_spoken_pos = len(text)
+
+        def _on_modal_dismiss(result: str | None) -> None:
+            """Handle the modal result for message queueing."""
+            inbox_was_visible = self._inbox_was_visible
+            is_interrupt = getattr(self, '_interrupt_mode', False)
+
+            if result == VOICE_REQUESTED:
+                # User pressed space — start voice recording.
+                # _message_mode stays True so _handle_transcript queues the message.
+                self.action_voice_input()
+                return
+
+            # Clear message mode state
+            self._message_mode = False
+            self._interrupt_mode = False
+            self._inbox_was_visible = False
+            target = self._message_target_session or session
+            self._message_target_session = None
+
+            if result is None:
+                # Cancelled
+                self._freeform_tts.stop()
+                if target.active:
+                    self._show_choices()
+                else:
+                    self._ensure_main_content_visible(show_inbox=inbox_was_visible)
+                    self._show_session_waiting(target)
+                self._speak_ui("Cancelled.")
+            else:
+                # Submitted
+                self._freeform_tts.stop()
+                self._tts.stop()
+                self._vibrate(100)
+
+                if is_interrupt:
+                    self._send_to_agent_pane(target, result)
+                else:
+                    msgs = getattr(target, 'pending_messages', None)
+                    if msgs is not None:
+                        msgs.append(result)
+                    count = len(msgs) if msgs else 1
+                    agent_name = target.name or "agent"
+                    self._speak_ui(f"Message queued for {agent_name}. {count} pending.")
+
+                if target.active:
+                    self._show_choices()
+                else:
+                    self._ensure_main_content_visible(show_inbox=inbox_was_visible)
+                    self._show_session_waiting(target)
+
+        self.push_screen(
+            TextInputModal(
+                title="Type or speak a message",
+                message_mode=True,
+                scheme=self._cs,
+                on_text_changed=_on_text_changed,
+            ),
+            callback=_on_modal_dismiss,
+        )
 
     def action_voice_message(self) -> None:
         """Start voice recording directly in message mode.
@@ -4081,142 +4190,17 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         count = sum(1 for c in list_view.children if isinstance(c, ChoiceItem) and c.choice_index > 0)
         self._speak_ui(f"{count} matches")
 
-    @on(TextArea.Changed, "#freeform-input")
-    def on_freeform_changed(self, event: TextArea.Changed) -> None:
-        session = self._focused()
-        # Readback works for both freeform input and message queue mode
-        if not session or (not session.input_mode and not self._message_mode):
-            return
-        text = event.text_area.text
-        if len(text) <= self._freeform_spoken_pos:
-            self._freeform_spoken_pos = len(text)
-            return
-        if text and text[-1] in self._freeform_delimiters:
-            chunk = text[self._freeform_spoken_pos:].strip()
-            if chunk:
-                self._freeform_tts.stop()
-                self._freeform_tts.speak_with_local_fallback(chunk)
-            self._freeform_spoken_pos = len(text)
-
-    @on(SubmitTextArea.Submitted, "#freeform-input")
-    def on_freeform_submitted(self, event: SubmitTextArea.Submitted) -> None:
-        """Handle Enter in the freeform text area."""
-        self._submit_freeform()
-
-    def _submit_freeform(self) -> None:
-        """Submit the freeform text input (called on Enter key)."""
-        # In message mode, use the stored target session (from inbox highlight)
-        if self._message_mode:
-            session = getattr(self, '_message_target_session', None) or self._focused()
-        else:
-            session = self._focused()
-        if not session:
-            return
-        inp = self.query_one("#freeform-input", SubmitTextArea)
-        text = inp.text.strip()
-        if not text:
-            return
-
-        self._vibrate(100)  # Haptic feedback on submit
-
-        # Worktree branch name input
-        worktree_action = getattr(self, '_worktree_action', None)
-        if worktree_action:
-            self._worktree_action = None
-            session.input_mode = False
-            inp.styles.display = "none"
-            self._freeform_tts.stop()
-            self._create_worktree(session, text, worktree_action)
-            return
-
-        # Message queue mode — queue the message, don't select
-        if self._message_mode:
-            inbox_was_visible = self._inbox_was_visible
-            is_interrupt = getattr(self, '_interrupt_mode', False)
-            self._message_mode = False
-            self._interrupt_mode = False
-            self._inbox_was_visible = False
-            target = self._message_target_session or session
-            self._message_target_session = None  # clear target
-            inp.styles.display = "none"
-            self._freeform_tts.stop()
-            self._tts.stop()
-
-            if is_interrupt:
-                # Interrupt mode — send directly to agent's tmux pane
-                self._send_to_agent_pane(target, text)
-            else:
-                # Normal queue mode — queue for next MCP response
-                msgs = getattr(target, 'pending_messages', None)
-                if msgs is not None:
-                    msgs.append(text)
-                count = len(msgs) if msgs else 1
-                agent_name = target.name or "agent"
-                self._speak_ui(f"Message queued for {agent_name}. {count} pending.")
-
-            if target.active:
-                self._show_choices()  # Rebuild — choices may have arrived during input
-            else:
-                # Restore inbox view if it was visible before entering message mode
-                self._ensure_main_content_visible(show_inbox=inbox_was_visible)
-                self._show_session_waiting(target)
-            return
-
-        # Normal freeform input — select with the text
-        session.input_mode = False
-        inp.styles.display = "none"
-
-        self._freeform_tts.stop()
-        self._tts.stop()
-        self._tts.speak_async(f"Selected: {text}")
-
-        self._resolve_selection(session, {"selected": text, "summary": "(freeform input)"})
-        self._show_waiting(text)
-
-    def _cancel_freeform(self) -> None:
-        session = self._focused()
-        if session:
-            session.input_mode = False
-        inbox_was_visible = self._inbox_was_visible
-        self._message_mode = False
-        self._interrupt_mode = False
-        self._message_target_session = None  # clear target
-        self._inbox_was_visible = False
-        self._freeform_tts.stop()
-        inp = self.query_one("#freeform-input", SubmitTextArea)
-        inp.styles.display = "none"
-        if session and session.active:
-            self._show_choices()  # Rebuild — choices may have arrived during input
-        elif session:
-            # Restore inbox view if it was visible before entering message mode
-            self._ensure_main_content_visible(show_inbox=inbox_was_visible)
-            self._show_session_waiting(session)
-        else:
-            self._restore_choices()
-        self._speak_ui("Cancelled.")
+    # NOTE: Old on_freeform_changed, on_freeform_submitted, _submit_freeform,
+    # and _cancel_freeform have been removed. Text input now uses TextInputModal
+    # (a Textual ModalScreen) which handles its own submit/cancel/change events.
+    # See action_freeform_input() and action_queue_message().
 
     def on_key(self, event) -> None:
-        """Handle Escape/Enter in freeform/voice/settings/filter mode.
-        Also intercepts space in message mode to trigger voice recording.
-        """
+        """Handle Escape in voice/settings/filter mode."""
         session = self._focused()
-        # In message mode, space triggers voice recording instead of typing
-        if self._message_mode and event.key == "space" and not (session and session.voice_recording):
-            event.prevent_default()
-            event.stop()
-            self.action_voice_input()
-            return
         if self._filter_mode and event.key == "escape":
             self._exit_filter()
             self._speak_ui("Filter cleared")
-            event.prevent_default()
-            event.stop()
-        elif self._message_mode and event.key == "escape":
-            self._cancel_freeform()
-            event.prevent_default()
-            event.stop()
-        elif session and session.input_mode and event.key == "escape":
-            self._cancel_freeform()
             event.prevent_default()
             event.stop()
         elif session and session.voice_recording and event.key == "escape":
@@ -4456,14 +4440,14 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 self._show_choices()
             return
 
-        # Session has active input mode → cancel input
+        # Session has active input mode → dismiss modal if present
         session = self._focused()
         if session and session.input_mode:
             session.input_mode = False
-            inp = self.query_one("#freeform-input", SubmitTextArea)
-            inp.clear()
-            inp.styles.display = "none"
-            if session.active:
+            # If a TextInputModal is on screen, pop it
+            if isinstance(self.screen, TextInputModal):
+                self.screen.dismiss(None)
+            elif session.active:
                 self._show_choices()
             return
 

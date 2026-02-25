@@ -1,16 +1,19 @@
 """Reusable widgets and constants for io-mcp TUI.
 
 Contains the ChoiceItem list item, DwellBar progress indicator,
-EXTRA_OPTIONS constant, and the _safe_action decorator.
+TextInputModal, EXTRA_OPTIONS constant, and the _safe_action decorator.
 """
 
 from __future__ import annotations
 
 import functools
+from typing import Optional
 
 from textual.app import ComposeResult
+from textual.containers import Vertical
 from textual.events import MouseScrollDown, MouseScrollUp
 from textual.reactive import reactive
+from textual.screen import ModalScreen
 from textual.widgets import Label, ListItem, ListView, Static, TextArea
 
 
@@ -236,3 +239,135 @@ class SubmitTextArea(TextArea):
             self.post_message(self.Submitted(text_area=self))
             return
         return super()._on_key(event)
+
+
+# ─── Text Input Modal ──────────────────────────────────────────────────────
+
+# Sentinel value to indicate the user requested voice recording from within the modal
+VOICE_REQUESTED = "__voice_requested__"
+
+
+class TextInputModal(ModalScreen[Optional[str]]):
+    """True popup modal for text input (freeform reply or agent message).
+
+    Overlays on top of the main TUI, preventing background inbox/choice
+    updates from disrupting the input. Dismisses with:
+    - The entered text (on Enter)
+    - None (on Escape / cancel)
+    - VOICE_REQUESTED sentinel (on Space in message mode)
+
+    Args:
+        title: Prompt text shown above the text area.
+        message_mode: If True, space triggers voice recording via the app.
+        allow_voice: If True, show voice hint in the title bar.
+        scheme: Color scheme dict for styled labels.
+    """
+
+    BINDINGS = [
+        ("escape", "cancel", "Cancel"),
+    ]
+
+    DEFAULT_CSS = """
+    TextInputModal {
+        align: center middle;
+    }
+
+    TextInputModal > Vertical {
+        width: 80%;
+        max-width: 100;
+        height: auto;
+        max-height: 20;
+        border: tall $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+
+    TextInputModal > Vertical > #modal-title {
+        width: 1fr;
+        height: auto;
+        margin-bottom: 1;
+        text-style: bold;
+    }
+
+    TextInputModal > Vertical > #modal-hint {
+        width: 1fr;
+        height: auto;
+        margin-bottom: 1;
+    }
+
+    TextInputModal > Vertical > SubmitTextArea {
+        height: auto;
+        min-height: 3;
+        max-height: 10;
+    }
+    """
+
+    def __init__(
+        self,
+        title: str = "Type your reply",
+        message_mode: bool = False,
+        allow_voice: bool = True,
+        scheme: Optional[dict[str, str]] = None,
+        on_text_changed: Optional[callable] = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(**kwargs)
+        self._title_text = title
+        self._message_mode = message_mode
+        self._allow_voice = allow_voice
+        self._scheme = scheme or {}
+        self._on_text_changed = on_text_changed
+
+    def compose(self) -> ComposeResult:
+        s = self._scheme
+        accent = s.get("accent", "#88c0d0")
+
+        with Vertical():
+            yield Label(
+                f"[bold {accent}]{self._title_text}[/bold {accent}]",
+                id="modal-title",
+            )
+            # Show hint for available actions
+            hints = ["[dim]Enter[/dim] submit", "[dim]Esc[/dim] cancel"]
+            if self._message_mode and self._allow_voice:
+                hints.insert(1, "[dim]Space[/dim] voice")
+            yield Label("  ".join(hints), id="modal-hint")
+            yield SubmitTextArea(
+                id="modal-text-input",
+                soft_wrap=True,
+                show_line_numbers=False,
+                tab_behavior="focus",
+            )
+
+    def on_mount(self) -> None:
+        """Focus the text area on mount."""
+        self.query_one("#modal-text-input", SubmitTextArea).focus()
+
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        """Forward text changes to the callback for TTS readback."""
+        if self._on_text_changed:
+            try:
+                self._on_text_changed(event.text_area.text)
+            except Exception:
+                pass
+
+    def on_submit_text_area_submitted(
+        self, event: SubmitTextArea.Submitted
+    ) -> None:
+        """Submit text on Enter."""
+        text = event.text_area.text.strip()
+        if text:
+            self.dismiss(text)
+        # If empty, do nothing — user can press Escape to cancel
+
+    def action_cancel(self) -> None:
+        """Cancel input on Escape."""
+        self.dismiss(None)
+
+    def on_key(self, event) -> None:
+        """Intercept space in message mode to trigger voice recording."""
+        if self._message_mode and event.key == "space":
+            event.prevent_default()
+            event.stop()
+            # Dismiss with sentinel — the app will start voice recording
+            self.dismiss(VOICE_REQUESTED)

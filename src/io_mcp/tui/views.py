@@ -234,7 +234,7 @@ class ViewsMixin:
         threading.Thread(target=_do_send, daemon=True).start()
 
     def _action_interrupt_agent(self: "IoMcpApp") -> None:
-        """Open text input to send a message directly to the agent's tmux pane.
+        """Open text input modal to send a message directly to the agent's tmux pane.
 
         Unlike queue message (m), this interrupts the agent immediately by
         injecting text into its Claude Code input via tmux-cli.
@@ -246,24 +246,57 @@ class ViewsMixin:
             self._speak_ui("No tmux pane for this agent.")
             return
 
-        # Reuse message mode infrastructure but flag as interrupt
+        # Set interrupt mode — the modal dismiss callback uses this
         self._message_mode = True
         self._interrupt_mode = True
         self._message_target_session = session
         self._freeform_spoken_pos = 0
         self._inbox_was_visible = self._inbox_pane_visible()
 
-        # UI
-        self.query_one("#main-content").display = False
-        self.query_one("#dwell-bar").display = False
-        from .widgets import SubmitTextArea
-        inp = self.query_one("#freeform-input", SubmitTextArea)
-        inp.clear()
-        inp.styles.display = "block"
-        inp.focus()
-
         self._tts.stop()
         self._speak_ui(f"Type message to interrupt {session.name}")
+
+        # Use the shared queue_message modal flow — it checks _interrupt_mode
+        from .widgets import TextInputModal
+
+        def _on_interrupt_dismiss(result):
+            from .widgets import VOICE_REQUESTED
+            inbox_was_visible = self._inbox_was_visible
+
+            if result == VOICE_REQUESTED:
+                self.action_voice_input()
+                return
+
+            self._message_mode = False
+            self._interrupt_mode = False
+            self._inbox_was_visible = False
+            target = self._message_target_session or session
+            self._message_target_session = None
+
+            if result is None:
+                if target.active:
+                    self._show_choices()
+                else:
+                    self._ensure_main_content_visible(show_inbox=inbox_was_visible)
+                    self._show_session_waiting(target)
+                self._speak_ui("Cancelled.")
+            else:
+                self._vibrate(100)
+                self._send_to_agent_pane(target, result)
+                if target.active:
+                    self._show_choices()
+                else:
+                    self._ensure_main_content_visible(show_inbox=inbox_was_visible)
+                    self._show_session_waiting(target)
+
+        self.push_screen(
+            TextInputModal(
+                title=f"Interrupt {session.name}",
+                message_mode=True,
+                scheme=self._cs,
+            ),
+            callback=_on_interrupt_dismiss,
+        )
 
 
     @_safe_action

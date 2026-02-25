@@ -309,21 +309,50 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
 
     /* ─── Input fields ────────────────────────────────────── */
 
-    #freeform-input {{
-        margin: 1 1;
-        display: none;
-        border: tall {s['accent']};
-        background: {s['bg_alt']};
-        height: auto;
-        max-height: 12;
-        min-height: 3;
-    }}
-
     #filter-input {{
         margin: 0 1;
         display: none;
         border: tall {s['purple']};
         background: {s['bg_alt']};
+    }}
+
+    /* ─── Text Input Modal ─────────────────────────────────── */
+
+    TextInputModal {{
+        align: center middle;
+    }}
+
+    TextInputModal > Vertical {{
+        width: 80%;
+        max-width: 100;
+        height: auto;
+        max-height: 20;
+        border: tall {s['accent']};
+        background: {s['bg_alt']};
+        padding: 1 2;
+    }}
+
+    TextInputModal > Vertical > #modal-title {{
+        width: 1fr;
+        height: auto;
+        margin-bottom: 1;
+        color: {s['accent']};
+        text-style: bold;
+    }}
+
+    TextInputModal > Vertical > #modal-hint {{
+        width: 1fr;
+        height: auto;
+        margin-bottom: 1;
+        color: {s['fg_dim']};
+    }}
+
+    TextInputModal > Vertical > #modal-text-input {{
+        height: auto;
+        min-height: 3;
+        max-height: 10;
+        border: tall {s['border']};
+        background: {s['bg']};
     }}
 
     /* ─── Hide Textual Header (replaced by tab-bar) ───────── */
