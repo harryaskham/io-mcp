@@ -319,6 +319,7 @@ class TTSEngine:
 
         If block=True, waits for playback to finish before returning.
         If block=False, starts playback and returns immediately.
+        Falls back to local TTS (termux/espeak) when API generation fails.
         """
         if not self._paplay or self._muted:
             return
@@ -345,8 +346,36 @@ class TTSEngine:
                 elif block:
                     self._wait_for_playback()
             else:
-                # Generation failed — already logged by _generate_to_file
-                pass
+                # API generation failed — fall back to local TTS
+                self._local_tts_fallback(text)
+
+    def _local_tts_fallback(self, text: str) -> None:
+        """Fall back to local TTS when API TTS fails (e.g. missing API key).
+
+        Tries termux-tts-speak first (if available), then espeak-ng.
+        This ensures the user always hears something even when API keys
+        are missing or the TTS service is down.
+        """
+        try:
+            if self._local_backend == "termux" and self._termux_exec:
+                self._speak_termux(text)
+            elif self._espeak and self._paplay:
+                # espeak file-based fallback
+                wpm = int(TTS_SPEED * self._speed)
+                cmd = [self._espeak, "--stdout", "-s", str(wpm), text]
+                proc = subprocess.run(
+                    cmd, capture_output=True, timeout=10,
+                )
+                if proc.returncode == 0 and len(proc.stdout) > 44:
+                    # Write to temp file and play
+                    import tempfile
+                    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+                        f.write(proc.stdout)
+                        tmp_path = f.name
+                    self.stop()
+                    self._start_playback(tmp_path)
+        except Exception:
+            pass
 
     def _start_playback(self, path: str) -> bool:
         """Start paplay for a WAV file. Returns True if playback started ok.
@@ -681,6 +710,7 @@ class TTSEngine:
                 self._streaming_tts_proc = tts_proc
 
             if block:
+                tts_failed = False
                 try:
                     retcode = play_proc.wait(timeout=60)
                     if retcode != 0:
@@ -692,11 +722,13 @@ class TTSEngine:
                         self._record_failure(
                             f"paplay (streaming) exited with code {retcode}: {stderr_out or 'no stderr'}"
                         )
+                        tts_failed = True
                     else:
                         self._total_plays += 1
                         self._consecutive_failures = 0
                 except subprocess.TimeoutExpired:
                     self._record_failure("paplay (streaming) timed out after 60s")
+                    tts_failed = True
                 except Exception:
                     pass
                 # Check if tts itself failed (e.g. API error)
@@ -712,11 +744,16 @@ class TTSEngine:
                             self._log_tts_error(
                                 f"tts CLI (streaming) failed (code {tts_retcode}): {tts_stderr}",
                                 text)
+                        tts_failed = True
                 except Exception:
                     pass
+                # Fall back to local TTS if streaming failed
+                if tts_failed:
+                    self._local_tts_fallback(text)
             else:
                 # Non-blocking: monitor in background thread for error reporting
                 def _monitor():
+                    tts_failed = False
                     try:
                         retcode = play_proc.wait(timeout=60)
                         if retcode != 0:
@@ -728,11 +765,13 @@ class TTSEngine:
                             self._record_failure(
                                 f"paplay (streaming async) exited with code {retcode}: {stderr_out or 'no stderr'}"
                             )
+                            tts_failed = True
                         else:
                             self._total_plays += 1
                             self._consecutive_failures = 0
                     except subprocess.TimeoutExpired:
                         self._record_failure("paplay (streaming async) timed out after 60s")
+                        tts_failed = True
                     except Exception:
                         pass
                     # Check if tts itself failed
@@ -748,8 +787,12 @@ class TTSEngine:
                                 self._log_tts_error(
                                     f"tts CLI (streaming async) failed (code {tts_retcode}): {tts_stderr}",
                                     text)
+                            tts_failed = True
                     except Exception:
                         pass
+                    # Fall back to local TTS if streaming failed
+                    if tts_failed:
+                        self._local_tts_fallback(text)
                 threading.Thread(target=_monitor, daemon=True).start()
         except Exception as e:
             self._record_failure(f"Streaming TTS setup failed: {e}")
