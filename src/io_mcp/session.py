@@ -77,7 +77,7 @@ class Session:
     # Timestamp-based dedup: (preamble, choice_labels_tuple) → timestamp
     # of the last enqueue.  Items within the dedup window are dropped.
     _inbox_dedup_log: dict = field(default_factory=dict)
-    _inbox_dedup_window_secs: float = 2.0  # seconds
+    _inbox_dedup_window_secs: float = 30.0  # seconds — prevent MCP retry spam
 
     # ── Choice state ──────────────────────────────────────────────
     preamble: str = ""
