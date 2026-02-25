@@ -95,12 +95,20 @@ class VoiceMixin:
 
         if not termux_exec_bin:
             session.voice_recording = False
-            self._tts.speak_async("termux-exec not found — cannot record audio")
+            if hasattr(self._tts, 'unmute'):
+                self._tts.unmute()
+            else:
+                self._tts._muted = False
+            self._tts.speak_async("Voice recording not available on this device")
             self._restore_choices()
             return
 
         if not stt_bin:
             session.voice_recording = False
+            if hasattr(self._tts, 'unmute'):
+                self._tts.unmute()
+            else:
+                self._tts._muted = False
             self._tts.speak_async("stt tool not found")
             self._restore_choices()
             return

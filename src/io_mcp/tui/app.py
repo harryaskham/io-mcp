@@ -2015,7 +2015,15 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         by timestamp (newest first for pending, oldest first for done).
 
         Uses a combined generation counter to skip no-op rebuilds.
+        Skips UI updates when user is composing freeform input or a message.
         """
+        # Don't rebuild inbox while user is typing — it can steal focus
+        if self._message_mode or self._filter_mode:
+            return
+        session = self._focused()
+        if session and getattr(session, 'input_mode', False):
+            return
+
         try:
             inbox_list = self.query_one("#inbox-list", ListView)
             sessions = self.manager.all_sessions()
@@ -2551,6 +2559,9 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
     def _show_session_waiting(self, session: Session) -> None:
         """Show waiting state for a specific session."""
+        # Don't overwrite UI when user is typing a message or freeform input
+        if self._message_mode or getattr(session, 'input_mode', False):
+            return
         self.query_one("#preamble").display = False
         self.query_one("#dwell-bar").display = False
         self._update_speech_log()
