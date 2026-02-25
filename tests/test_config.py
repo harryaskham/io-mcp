@@ -649,6 +649,42 @@ class TestCLIArgs:
         assert "--voice" in args
         assert "sage" in args
 
+    def test_tts_args_openai_with_emotion_preset(self, tmp_config, monkeypatch):
+        """OpenAI + named preset: sends both --style and --instructions."""
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        custom = {
+            "config": {"tts": {"model": "gpt-4o-mini-tts", "voice": "sage", "emotion": "happy"}},
+        }
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        args = c.tts_cli_args("hello")
+        # Should have both --style and --instructions for openai preset
+        assert "--style" in args
+        style_idx = args.index("--style")
+        # The azure-speech preset for "happy" is "joy", but openai preset is text
+        # The --style value should be the resolved preset for the current provider
+        assert "--instructions" in args
+        inst_idx = args.index("--instructions")
+        assert "cheerful" in args[inst_idx + 1].lower()  # openai preset text
+
+    def test_tts_args_openai_with_custom_emotion(self, tmp_config, monkeypatch):
+        """OpenAI + custom text emotion: sends --instructions only."""
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        custom = {
+            "config": {"tts": {"model": "gpt-4o-mini-tts", "voice": "sage",
+                               "emotion": "Speak like a pirate"}},
+        }
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        args = c.tts_cli_args("ahoy")
+        assert "--instructions" in args
+        inst_idx = args.index("--instructions")
+        assert args[inst_idx + 1] == "Speak like a pirate"
+        # Should NOT have --style for custom text on openai
+        assert "--style" not in args
+
     def test_tts_args_with_overrides(self, config_with_defaults, monkeypatch):
         monkeypatch.setenv("AZURE_SPEECH_API_KEY", "test-key")
         monkeypatch.setenv("AZURE_SPEECH_ENDPOINT", "https://test.endpoint")

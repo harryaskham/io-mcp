@@ -1009,6 +1009,15 @@ class IoMcpConfig:
 
         Returns the full argument list (excluding the 'tts' binary itself).
         Optional overrides for voice/emotion (used for per-session rotation).
+
+        Emotion handling:
+        - ``--style <name>`` is sent for both providers when an emotion preset
+          name is active.  For azure-speech this maps to SSML express-as style;
+          for openai the tts CLI auto-generates instructions from it.
+        - ``--instructions <text>`` is additionally sent for openai when we have
+          detailed preset text (more expressive than the auto-generated version).
+        - Custom freeform emotion text uses ``--instructions`` for openai and
+          ``--style`` for azure-speech.
         """
         provider = self.tts_provider_name
         voice = voice_override or self.tts_voice
@@ -1028,20 +1037,28 @@ class IoMcpConfig:
 
         args.extend(["--speed", str(self.tts_speed)])
 
-        # Add emotion/instructions (override or default)
+        # Resolve emotion to preset value or use raw text
         emotion = emotion_override or self.tts_emotion
         presets = self._emotion_presets_for_provider()
+        is_preset = emotion in presets if emotion else False
         resolved = presets.get(emotion, emotion) if emotion else None
 
-        if provider == "azure-speech" or (provider == "openai" and self.tts_model_name.startswith("azure")):
-            # Azure Speech: use --style for SSML style name
-            if resolved:
+        if is_preset:
+            # Named preset: always send --style (works for both providers)
+            args.extend(["--style", resolved])
+            # For OpenAI: also send --instructions with the full preset text
+            # from the openai presets (more expressive than auto-generated)
+            if provider not in ("azure-speech",):
+                openai_presets = self._emotion_presets_for_provider("openai")
+                openai_text = openai_presets.get(emotion)
+                if openai_text:
+                    args.extend(["--instructions", openai_text])
+        elif resolved:
+            # Custom freeform text: route to the right flag
+            if provider == "azure-speech":
                 args.extend(["--style", resolved])
-        else:
-            # OpenAI: use --instructions for text instructions
-            instructions = resolved or self.tts_instructions
-            if instructions:
-                args.extend(["--instructions", instructions])
+            else:
+                args.extend(["--instructions", resolved])
 
         args.extend(["--stdout", "--response-format", "wav"])
         return args
