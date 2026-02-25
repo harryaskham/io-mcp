@@ -113,20 +113,43 @@ class ChoiceItem(ListItem):
         self.choice_index = index      # logical index (can be negative)
         self.display_index = display_index  # position in list widget
 
-    def compose(self) -> ComposeResult:
+    def _format_label(self) -> str:
+        """Build the formatted label string based on choice_index."""
         if self.choice_index > 0:
-            # Real choice — right-aligned number
             num = str(self.choice_index)
             pad = " " * (3 - len(num))
-            yield Label(f"{pad}[bold]{num}[/bold]  {self.choice_label}", classes="choice-label")
+            return f"{pad}[bold]{num}[/bold]  {self.choice_label}"
         elif self.choice_index == -(len(EXTRA_OPTIONS) - 1):
-            # First extra option — add a dim separator above
-            yield Label(f"    [dim]›[/dim] {self.choice_label}", classes="choice-label")
+            return f"    [dim]›[/dim] {self.choice_label}"
         else:
-            # Extra option — dim arrow prefix
-            yield Label(f"    [dim]›[/dim] {self.choice_label}", classes="choice-label")
+            return f"    [dim]›[/dim] {self.choice_label}"
+
+    def _format_summary(self) -> str:
+        """Build the formatted summary string."""
+        return f"       {self.choice_summary}" if self.choice_summary else ""
+
+    def compose(self) -> ComposeResult:
+        yield Label(self._format_label(), classes="choice-label")
         if self.choice_summary:
-            yield Label(f"       {self.choice_summary}", classes="choice-summary")
+            yield Label(self._format_summary(), classes="choice-summary")
+
+    def update_content(self, label: str, summary: str) -> None:
+        """Update the label and summary text in-place without rebuilding the widget."""
+        self.choice_label = label
+        self.choice_summary = summary
+        try:
+            label_widget = self.query_one(".choice-label", Label)
+            label_widget.update(self._format_label())
+        except Exception:
+            pass
+        try:
+            summary_widget = self.query_one(".choice-summary", Label)
+            summary_widget.update(self._format_summary())
+        except Exception:
+            # No summary widget exists; if we now have summary text, we can't
+            # add it without a rebuild — but this is fine for multi-select
+            # where summaries don't change between toggles.
+            pass
 
 
 # ─── Inbox List Item Widget ───────────────────────────────────────────────────
