@@ -920,6 +920,242 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
 
         return _attach_messages(json.dumps(logs), session)
 
+    def _tool_get_sessions(args, session_id):
+        """List all active agent sessions with their status and metadata."""
+        session = _get_session(session_id)
+        session.last_tool_name = "get_sessions"
+        session.tool_call_count += 1
+
+        sessions = []
+        for sid in frontend.manager.session_order:
+            s = frontend.manager.sessions.get(sid)
+            if not s:
+                continue
+
+            # Time since last activity
+            elapsed = _time.time() - s.last_activity
+            if elapsed < 60:
+                ago = f"{int(elapsed)}s"
+            elif elapsed < 3600:
+                ago = f"{int(elapsed) // 60}m"
+            else:
+                ago = f"{int(elapsed) // 3600}h{int(elapsed) % 3600 // 60:02d}m"
+
+            info = {
+                "session_id": s.session_id,
+                "name": s.name,
+                "registered": s.registered,
+                "active": s.active,
+                "health": s.health_status,
+                "hostname": s.hostname,
+                "cwd": s.cwd,
+                "tmux_pane": s.tmux_pane,
+                "tmux_session": s.tmux_session,
+                "tool_calls": s.tool_call_count,
+                "last_tool": s.last_tool_name,
+                "last_activity_ago": ago,
+                "pending_messages": len(s.pending_messages),
+                "inbox_pending": sum(1 for item in s.inbox if not item.done),
+                "inbox_done": len(s.inbox_done),
+                "is_focused": sid == frontend.manager.active_session_id,
+                "is_self": sid == session_id,
+            }
+            if s.agent_metadata:
+                info["metadata"] = s.agent_metadata
+            sessions.append(info)
+
+        result = {
+            "sessions": sessions,
+            "count": len(sessions),
+            "focused_session": frontend.manager.active_session_id,
+        }
+        return _attach_messages(json.dumps(result), session)
+
+    def _tool_get_speech_history(args, session_id):
+        """Get speech history for the calling session or all sessions."""
+        session = _get_session(session_id)
+        session.last_tool_name = "get_speech_history"
+        session.tool_call_count += 1
+
+        lines = int(args.get("lines", 30))
+        target = args.get("session", "self")  # "self", "all", or a session_id
+
+        result = {}
+
+        if target == "all":
+            for sid in frontend.manager.session_order:
+                s = frontend.manager.sessions.get(sid)
+                if not s:
+                    continue
+                entries = []
+                for entry in s.speech_log[-lines:]:
+                    entries.append({
+                        "time": entry.timestamp,
+                        "text": entry.text[:300],
+                    })
+                result[s.name or sid] = entries
+        else:
+            # Get speech log for the specified or calling session
+            if target == "self":
+                s = session
+            else:
+                s = frontend.manager.sessions.get(target, session)
+
+            entries = []
+            for entry in s.speech_log[-lines:]:
+                entries.append({
+                    "time": entry.timestamp,
+                    "text": entry.text[:300],
+                })
+
+            # Also include selections from history
+            selections = []
+            for entry in s.history[-lines:]:
+                selections.append({
+                    "time": entry.timestamp,
+                    "preamble": entry.preamble[:200] if entry.preamble else "",
+                    "selected": entry.label[:200] if entry.label else "",
+                })
+
+            result = {
+                "speech": entries,
+                "selections": selections,
+                "session": s.name or s.session_id,
+            }
+
+        return _attach_messages(json.dumps(result), session)
+
+    def _tool_get_current_choices(args, session_id):
+        """Get the choices currently being displayed to the user."""
+        session = _get_session(session_id)
+        session.last_tool_name = "get_current_choices"
+        session.tool_call_count += 1
+
+        target = args.get("session", "focused")  # "focused" or a session_id
+
+        if target == "focused":
+            s = frontend.manager.focused()
+        else:
+            s = frontend.manager.sessions.get(target)
+
+        if not s:
+            return _attach_messages(json.dumps({
+                "error": "Session not found",
+                "session": target,
+            }), session)
+
+        result = {
+            "session": s.name or s.session_id,
+            "active": s.active,
+            "preamble": s.preamble,
+            "choices": s.choices,
+            "pending_inbox": [
+                {
+                    "preamble": item.preamble or item.text,
+                    "kind": item.kind,
+                    "n_choices": len(item.choices),
+                    "done": item.done,
+                }
+                for item in s.inbox
+            ],
+        }
+
+        return _attach_messages(json.dumps(result), session)
+
+    def _tool_get_tui_state(args, session_id):
+        """Capture the current TUI screen content and UI state."""
+        session = _get_session(session_id)
+        session.last_tool_name = "get_tui_state"
+        session.tool_call_count += 1
+
+        state = {}
+
+        # Focused session info
+        focused = frontend.manager.focused()
+        state["focused_session"] = focused.name if focused else None
+        state["session_count"] = frontend.manager.count()
+
+        # Current UI mode
+        app = frontend._app
+        state["ui_mode"] = "idle"
+        if hasattr(app, '_in_settings') and app._in_settings:
+            state["ui_mode"] = "settings"
+        elif hasattr(app, '_filter_mode') and app._filter_mode:
+            state["ui_mode"] = "filter"
+        elif hasattr(app, '_message_mode') and app._message_mode:
+            state["ui_mode"] = "message_input"
+        elif hasattr(app, '_conversation_mode') and app._conversation_mode:
+            state["ui_mode"] = "conversation"
+        elif focused and focused.voice_recording:
+            state["ui_mode"] = "voice_recording"
+        elif focused and focused.input_mode:
+            state["ui_mode"] = "freeform_input"
+        elif focused and focused.active:
+            state["ui_mode"] = "choices"
+        elif focused:
+            state["ui_mode"] = "waiting"
+
+        # Try to capture the TUI screen as text via tmux capture-pane
+        # (the TUI runs in a tmux pane)
+        screen_text = ""
+        try:
+            import subprocess
+            # Try to capture the TUI's own tmux pane
+            result = subprocess.run(
+                ["tmux", "capture-pane", "-p", "-S", "-80"],
+                capture_output=True, text=True, timeout=3,
+            )
+            if result.returncode == 0:
+                screen_text = result.stdout
+        except Exception:
+            pass
+
+        if screen_text:
+            state["screen"] = screen_text
+        else:
+            # Fallback: reconstruct from widget state
+            try:
+                preamble_w = app.query_one("#preamble")
+                if preamble_w.display:
+                    state["preamble_text"] = str(preamble_w.renderable) if hasattr(preamble_w, 'renderable') else ""
+            except Exception:
+                pass
+
+            try:
+                status_w = app.query_one("#status")
+                if status_w.display:
+                    state["status_text"] = str(status_w.renderable) if hasattr(status_w, 'renderable') else ""
+            except Exception:
+                pass
+
+            # List visible choices
+            try:
+                from .tui.widgets import ChoiceItem
+                list_view = app.query_one("#choices")
+                if list_view.display:
+                    visible_items = []
+                    for child in list_view.children:
+                        if isinstance(child, ChoiceItem):
+                            visible_items.append({
+                                "label": child.choice_label,
+                                "summary": child.choice_summary,
+                                "index": child.choice_index,
+                            })
+                    state["visible_choices"] = visible_items
+            except Exception:
+                pass
+
+        # Tab bar info
+        tab_names = []
+        for sid in frontend.manager.session_order:
+            s = frontend.manager.sessions.get(sid)
+            if s:
+                prefix = "→ " if sid == frontend.manager.active_session_id else "  "
+                tab_names.append(f"{prefix}{s.name}")
+        state["tabs"] = tab_names
+
+        return _attach_messages(json.dumps(state), session)
+
     # ─── Dispatch table ───────────────────────────────────────
 
     TOOLS = {
@@ -943,6 +1179,10 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
         "request_proxy_restart": _tool_request_proxy_restart,
         "check_inbox": _tool_check_inbox,
         "get_logs": _tool_get_logs,
+        "get_sessions": _tool_get_sessions,
+        "get_speech_history": _tool_get_speech_history,
+        "get_current_choices": _tool_get_current_choices,
+        "get_tui_state": _tool_get_tui_state,
     }
 
     # Tools that should NOT get speech reminders (they ARE speech)

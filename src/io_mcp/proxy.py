@@ -667,6 +667,87 @@ def create_proxy_server(
         """
         return await _fwd("get_logs", {"lines": lines}, ctx)
 
+    @server.tool()
+    async def get_sessions(ctx: Context) -> str:
+        """List all active agent sessions with status and metadata.
+
+        Returns session details including name, hostname, health status,
+        tmux pane, tool call count, pending messages, and inbox state.
+        Use this to inspect live agents and their current state.
+
+        Returns
+        -------
+        str
+            JSON with sessions array and count.
+        """
+        return await _fwd("get_sessions", {}, ctx)
+
+    @server.tool()
+    async def get_speech_history(
+        ctx: Context,
+        lines: int = 30,
+        session: str = "self",
+    ) -> str:
+        """Get speech history (what was said aloud) and selection history.
+
+        Returns recent TTS speech entries and user selections for the
+        calling session, a specific session, or all sessions.
+
+        Parameters
+        ----------
+        lines:
+            Number of recent entries to return (default 30).
+        session:
+            Which session to query: "self" (default), "all", or a session_id.
+
+        Returns
+        -------
+        str
+            JSON with speech and selection history.
+        """
+        return await _fwd("get_speech_history", {
+            "lines": lines, "session": session,
+        }, ctx)
+
+    @server.tool()
+    async def get_current_choices(
+        ctx: Context,
+        session: str = "focused",
+    ) -> str:
+        """Get the choices currently being displayed to the user.
+
+        Returns the preamble, choice list, and pending inbox items
+        for the focused session or a specific session. Use this to
+        see exactly what the user sees on their scroll wheel.
+
+        Parameters
+        ----------
+        session:
+            Which session to query: "focused" (default) or a session_id.
+
+        Returns
+        -------
+        str
+            JSON with preamble, choices, and inbox state.
+        """
+        return await _fwd("get_current_choices", {"session": session}, ctx)
+
+    @server.tool()
+    async def get_tui_state(ctx: Context) -> str:
+        """Capture the current TUI screen content and UI state.
+
+        Returns the full TUI screen text (via tmux capture-pane),
+        current UI mode (choices, waiting, settings, etc.), tab bar,
+        and visible widget contents. Use this for full visibility
+        into what the user sees.
+
+        Returns
+        -------
+        str
+            JSON with screen text, UI mode, tabs, and widget state.
+        """
+        return await _fwd("get_tui_state", {}, ctx)
+
     return server
 
 

@@ -89,6 +89,10 @@ android/
 | `set_emotion(emotion)` | Set emotion preset or custom instructions |
 | `get_settings()` | Read current settings as JSON |
 | `get_logs(lines)` | Get recent TUI error, proxy, and speech logs for debugging |
+| `get_sessions()` | List all active agent sessions with status, health, metadata |
+| `get_speech_history(lines, session)` | Get TTS speech log and selection history |
+| `get_current_choices(session)` | Get the choices currently displayed to the user |
+| `get_tui_state()` | Capture full TUI screen content and UI mode |
 | `reload_config()` | Re-read config from disk, clear TTS cache |
 | `pull_latest()` | Git pull --rebase + config refresh (restart TUI for code changes) |
 | `request_restart()` | Restart backend (TUI reloads, proxy stays) |
@@ -334,7 +338,7 @@ register_session(
 - **Waiting view**: When the agent is working without choices, the right pane shows a clean waiting state with agent status and essential keyboard shortcut hints (m, s, d, v). The inbox list (left pane) remains visible for browsing history
 - **Restart loop**: TUI runs inside a restart loop — "Restart TUI" cleanly exits and re-launches, "Quit" exits fully
 - MCP server auto-restarts up to 5 times on crash (watchdog with exponential backoff)
-- All 16 MCP tools wrapped with error safety — single tool errors don't crash the server
+- All 20 MCP tools wrapped with error safety — single tool errors don't crash the server
 - Config validated on load with specific warnings for invalid references
 - Ambient mode: escalating TTS updates during silence (30s initial, then every 45s with context). **Disabled by default.** Enable in `config.ambient.enabled: true`
 - Agent activity indicator shows last speech in TUI
