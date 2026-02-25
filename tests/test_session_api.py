@@ -784,30 +784,28 @@ class TestDedupAndEnqueue:
         assert len(s.inbox) == 1
         assert not item.done
 
-    def test_cancels_pending_duplicate(self):
-        """An identical pending item is cancelled when a new one arrives."""
+    def test_piggybacks_on_pending_duplicate(self):
+        """An identical pending item returns existing item for piggybacking."""
         s = Session(session_id="test-1", name="Agent 1")
         choices = [{"label": "A"}, {"label": "B"}]
         item1 = InboxItem(kind="choices", preamble="Pick", choices=list(choices))
         s.enqueue(item1)  # bypass dedup for setup
 
-        # Reset dedup log so the timestamp window doesn't interfere
-        s._inbox_dedup_log.clear()
-
         item2 = InboxItem(kind="choices", preamble="Pick", choices=list(choices))
-        assert s.dedup_and_enqueue(item2) is True
+        result = s.dedup_and_enqueue(item2)
 
-        # item1 should have been superseded
-        assert item1.done is True
-        assert item1.result["selected"] == "_restart"
-        assert item1.event.is_set()
+        # Should return the existing item for piggybacking (not True/False)
+        assert result is item1
 
-        # item2 is now in the queue
-        assert len(s.inbox) == 2  # both in deque, but item1 is done
-        assert not item2.done
+        # item1 should NOT be cancelled — it's still pending
+        assert item1.done is False
+        assert not item1.event.is_set()
 
-    def test_dedup_window_suppresses_rapid_duplicate(self):
-        """A duplicate within the dedup window is suppressed (not enqueued)."""
+        # item2 should NOT be in the queue
+        assert len(s.inbox) == 1
+
+    def test_enqueues_after_existing_resolved(self):
+        """After a pending item is resolved, identical items are enqueued fresh."""
         s = Session(session_id="test-1", name="Agent 1")
         choices = [{"label": "X"}]
         item1 = InboxItem(kind="choices", preamble="Go", choices=list(choices))
@@ -818,12 +816,10 @@ class TestDedupAndEnqueue:
         item1.done = True
         item1.event.set()
 
-        # Now enqueue an identical item immediately (within 2s window)
+        # Now enqueue an identical item — item1 is done, so this is fresh
         item2 = InboxItem(kind="choices", preamble="Go", choices=list(choices))
-        assert s.dedup_and_enqueue(item2) is False
-        assert item2.done is True
-        assert item2.result["selected"] == "_restart"
-        assert "dedup window" in item2.result["summary"].lower()
+        assert s.dedup_and_enqueue(item2) is True
+        assert len(s.inbox) == 2  # both in deque, item1 done, item2 pending
 
     def test_different_choices_not_deduped(self):
         """Items with different choices are enqueued normally."""
@@ -848,25 +844,25 @@ class TestDedupAndEnqueue:
         assert s.dedup_and_enqueue(item2) is True
         assert len(s.inbox) == 2
 
-    def test_dedup_window_expires(self):
-        """After the dedup window expires, identical items are allowed."""
+    def test_piggyback_after_item_done_enqueues_fresh(self):
+        """After the pending item is done, identical items are enqueued fresh."""
         s = Session(session_id="test-1", name="Agent 1")
-        s._inbox_dedup_window_secs = 0.05  # 50ms for fast test
         choices = [{"label": "A"}]
 
         item1 = InboxItem(kind="choices", preamble="Go", choices=list(choices))
         assert s.dedup_and_enqueue(item1) is True
 
-        # Wait for window to expire
-        time.sleep(0.1)
+        # Mark as done
+        item1.result = {"selected": "A"}
+        item1.done = True
+        item1.event.set()
 
         item2 = InboxItem(kind="choices", preamble="Go", choices=list(choices))
         assert s.dedup_and_enqueue(item2) is True
-        # item1 should be cancelled (pending duplicate logic)
-        assert item1.done is True
+        assert len(s.inbox) == 2
 
-    def test_concurrent_threads_no_duplicates(self):
-        """Multiple threads enqueuing identical choices don't create duplicates."""
+    def test_concurrent_threads_piggyback(self):
+        """Multiple threads enqueuing identical choices: one enqueued, rest piggyback."""
         s = Session(session_id="test-1", name="Agent 1")
         choices = [{"label": "A"}, {"label": "B"}]
         results = []
@@ -886,36 +882,16 @@ class TestDedupAndEnqueue:
         for t in threads:
             t.join(timeout=5)
 
-        # Exactly one should be enqueued, rest should be suppressed
-        enqueued_count = sum(1 for _, e, _ in results if e)
-        suppressed_count = sum(1 for _, e, _ in results if not e)
+        # Exactly one should be enqueued (True), rest should get existing item back
+        enqueued_count = sum(1 for _, e, _ in results if e is True)
+        piggyback_count = sum(1 for _, e, _ in results if isinstance(e, InboxItem))
         assert enqueued_count == 1, f"Expected 1 enqueued, got {enqueued_count}"
-        assert suppressed_count == 4, f"Expected 4 suppressed, got {suppressed_count}"
+        assert piggyback_count == 4, f"Expected 4 piggybacked, got {piggyback_count}"
 
-        # All suppressed items should have _restart result
-        for _, enqueued, item in results:
-            if not enqueued:
-                assert item.done is True
-                assert item.result["selected"] == "_restart"
+        # All piggybacked items got back the same existing InboxItem
+        piggyback_items = [e for _, e, _ in results if isinstance(e, InboxItem)]
+        assert all(p is piggyback_items[0] for p in piggyback_items)
 
-    def test_dedup_log_pruning(self):
-        """Old dedup log entries are cleaned up."""
-        s = Session(session_id="test-1", name="Agent 1")
-        # Pre-populate with old entries
-        old_time = time.time() - 120  # 2 minutes ago
-        s._inbox_dedup_log[("old", ("X",))] = old_time
-        s._inbox_dedup_log[("also_old", ("Y",))] = old_time
-
-        # Enqueue a new item — should trigger pruning
-        item = InboxItem(kind="choices", preamble="New",
-                         choices=[{"label": "Z"}])
-        s.dedup_and_enqueue(item)
-
-        # Old entries should be pruned
-        assert ("old", ("X",)) not in s._inbox_dedup_log
-        assert ("also_old", ("Y",)) not in s._inbox_dedup_log
-        # New entry should exist
-        assert ("New", ("Z",)) in s._inbox_dedup_log
 class TestUnifiedInboxDataCollection:
     """Tests for cross-session inbox data collection logic.
 

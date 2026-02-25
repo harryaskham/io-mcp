@@ -1412,21 +1412,27 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         and enqueues it. If we're at the front of the queue, we present
         choices immediately. If not, we wait until it's our turn.
 
-        Before enqueuing, duplicate items are detected and suppressed via
-        Session.dedup_and_enqueue() which holds a per-session mutex to
-        prevent race conditions between concurrent threads.
+        Duplicate detection: if an identical item is already pending,
+        we piggyback on it — wait for its event and return its result.
+        This prevents MCP client retries from spamming the inbox.
         """
         import time as _time
 
         self._touch_session(session)
 
         # Create and atomically dedup+enqueue our inbox item.
-        # dedup_and_enqueue() handles:
-        #   1. Cancelling pending items with identical preamble+choices
-        #   2. Timestamp-based dedup window to suppress rapid duplicates
-        #   3. Thread-safe locking so concurrent calls don't both pass the check
+        # dedup_and_enqueue() returns:
+        #   True — item was enqueued as new
+        #   InboxItem — existing pending item to piggyback on
         item = InboxItem(kind="choices", preamble=preamble, choices=list(choices))
         enqueued = session.dedup_and_enqueue(item)
+
+        if isinstance(enqueued, InboxItem):
+            # Piggyback on existing pending item — wait for its result.
+            # This is an MCP retry; the original is already queued/presented.
+            existing = enqueued
+            existing.event.wait()
+            return existing.result or {"selected": "_restart", "summary": "Piggyback resolved"}
 
         if not enqueued:
             # Item was suppressed as a duplicate — return the pre-set result
