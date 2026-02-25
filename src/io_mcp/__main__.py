@@ -534,13 +534,21 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
             if not any(c.get("label", "").lower() == opt["label"].lower() for c in all_choices):
                 all_choices.append(dict(opt))
 
+        restart_retries = 0
+        max_restart_retries = 3  # Don't retry forever — proxy/agent may be gone
+
         while True:
             session.last_preamble = preamble
             session.last_choices = list(all_choices)
             result = frontend.present_choices(session, preamble, all_choices)
             if result.get("selected") == "_undo":
+                restart_retries = 0
                 continue
             if result.get("selected") == "_restart":
+                restart_retries += 1
+                if restart_retries > max_restart_retries:
+                    # Too many restarts — the agent/proxy likely disconnected
+                    return json.dumps({"selected": "error", "summary": "Aborted after too many TUI restarts"})
                 # TUI is restarting — wait for the new app to be ready,
                 # then re-create session and re-present choices
                 _time.sleep(3.0)
@@ -548,6 +556,9 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
                 session.last_tool_name = "present_choices"
                 continue
             if result.get("selected") == "error" and "App is not running" in result.get("summary", ""):
+                restart_retries += 1
+                if restart_retries > max_restart_retries:
+                    return json.dumps({"selected": "error", "summary": "Aborted — TUI not running"})
                 # TUI crashed mid-presentation — treat as restart
                 _time.sleep(3.0)
                 session = _get_session(session_id)
@@ -564,10 +575,14 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
         choices = args.get("choices", [])
         if not choices:
             return json.dumps({"selected": []})
+        restart_retries = 0
         while True:
             result = frontend.present_multi_select(session, preamble, list(choices))
             # Check for restart signal
             if isinstance(result, dict) and result.get("selected") == "_restart":
+                restart_retries += 1
+                if restart_retries > 3:
+                    return json.dumps({"selected": [], "error": "Aborted after TUI restarts"})
                 _time.sleep(3.0)
                 session = _get_session(session_id)
                 session.last_tool_name = "present_multi_select"
@@ -582,7 +597,7 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
         # Enqueue as inbox item — agent blocks until TTS finishes
         item = session.enqueue_speech(text, blocking=True, priority=0)
         frontend.notify_inbox_update(session)
-        item.event.wait()  # Block until TTS playback completes
+        item.event.wait(timeout=120)  # Don't block forever
         preview = text[:100] + ("..." if len(text) > 100 else "")
         return _attach_messages(f"Spoke: {preview}", session)
 
@@ -603,7 +618,7 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
         # Enqueue at front of inbox with priority — agent blocks
         item = session.enqueue_speech(text, blocking=True, priority=1)
         frontend.notify_inbox_update(session)
-        item.event.wait()
+        item.event.wait(timeout=120)  # Don't block forever
         preview = text[:100] + ("..." if len(text) > 100 else "")
         return _attach_messages(f"Urgently spoke: {preview}", session)
 
