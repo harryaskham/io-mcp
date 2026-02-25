@@ -403,7 +403,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         yield RichLog(id="pane-view", markup=False, highlight=False, auto_scroll=True, max_lines=200)
         yield SubmitTextArea(id="freeform-input", soft_wrap=True, show_line_numbers=False, tab_behavior="focus")
         yield Input(placeholder="Filter choices...", id="filter-input")
-        yield Static("[dim]↕[/dim] Scroll  [dim]⏎[/dim] Select  [dim]x[/dim] Multi  [dim]u[/dim] Undo  [dim]i[/dim] Type  [dim]m[/dim] Msg  [dim]M[/dim] VoiceMsg  [dim]␣[/dim] Voice  [dim]/[/dim] Filter  [dim]a[/dim] Inbox  [dim]s[/dim] Settings  [dim]q[/dim] Back/Quit", id="footer-help")
+        yield Static("[dim]↕[/dim] Scroll  [dim]⏎[/dim] Select  [dim]x[/dim] Multi  [dim]u[/dim] Undo  [dim]i[/dim] Type  [dim]m[/dim] Msg  [dim]␣[/dim] Voice  [dim]/[/dim] Filter  [dim]v[/dim] Pane  [dim]s[/dim] Settings  [dim]q[/dim] Back/Quit", id="footer-help")
 
     def on_mount(self) -> None:
         self.title = "io-mcp"
