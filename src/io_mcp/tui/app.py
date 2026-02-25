@@ -1496,7 +1496,13 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             # Guard: prevent any pending Enter/selection from leaking into
             # the freshly-presented choices (same guard as _exit_settings).
             self._settings_just_closed = True
-            self.set_timer(0.3, self._clear_settings_guard)
+            # Use call_from_thread since we're on the tool dispatch thread,
+            # not the Textual event loop.
+            try:
+                self.call_from_thread(lambda: self.set_timer(0.3, self._clear_settings_guard))
+            except RuntimeError:
+                # If app is not running, just clear the guard directly
+                self._settings_just_closed = False
 
         # Emit event for remote frontends
         try:
