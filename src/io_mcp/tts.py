@@ -803,14 +803,11 @@ class TTSEngine:
             pass
 
     def reconnect_pulse(self) -> tuple[bool, str]:
-        """Attempt to reconnect PulseAudio with escalating recovery strategies.
+        """Attempt to reconnect PulseAudio with gentle recovery strategies.
 
-        Tries several strategies in order:
-        1. pactl info (just check if it's already back)
-        2. Kill orphaned paplay processes that may be holding resources
-        3. pulseaudio --start (restart daemon if needed)
-        4. Suspend-unsuspend sinks to force reconnect
-        5. Kill and restart PulseAudio daemon entirely
+        Tries only non-destructive strategies:
+        1. pactl info (check if it's already back)
+        2. pulseaudio --start (start daemon if not running)
 
         Returns (success, diagnostic_info) tuple:
             success: True if PulseAudio is reachable after reconnection attempts.
@@ -822,36 +819,25 @@ class TTSEngine:
         pulse_server = env.get("PULSE_SERVER", "127.0.0.1")
         diagnostics: list[str] = []
 
-        # Strategy 1: Check if PulseAudio is already back
-        if pactl:
-            try:
-                result = subprocess.run(
-                    [pactl, "info"],
-                    env=env, capture_output=True, timeout=3,
-                )
-                if result.returncode == 0:
-                    return True, "PulseAudio was already reachable"
-                diagnostics.append(f"pactl info failed (rc={result.returncode})")
-            except subprocess.TimeoutExpired:
-                diagnostics.append("pactl info timed out")
-            except Exception as e:
-                diagnostics.append(f"pactl info error: {e}")
+        # No pactl binary → can't check PulseAudio at all
+        if not pactl:
+            return False, "pactl binary not found"
 
-        # Strategy 2: Kill orphaned paplay processes that may be holding resources
+        # Strategy 1: Check if PulseAudio is already back
         try:
             result = subprocess.run(
-                ["pkill", "-f", "paplay"],
-                capture_output=True, timeout=2,
+                [pactl, "info"],
+                env=env, capture_output=True, timeout=3,
             )
             if result.returncode == 0:
-                diagnostics.append("killed orphaned paplay processes")
-                _time_mod.sleep(0.3)
-            else:
-                diagnostics.append("no orphaned paplay processes found")
-        except Exception:
-            pass
+                return True, "PulseAudio was already reachable"
+            diagnostics.append(f"pactl info failed (rc={result.returncode})")
+        except subprocess.TimeoutExpired:
+            diagnostics.append("pactl info timed out")
+        except Exception as e:
+            diagnostics.append(f"pactl info error: {e}")
 
-        # Strategy 3: Try to start PulseAudio daemon
+        # Strategy 2: Try to start PulseAudio daemon (non-destructive)
         if pulseaudio:
             try:
                 result = subprocess.run(
@@ -868,8 +854,7 @@ class TTSEngine:
             except Exception as e:
                 diagnostics.append(f"pulseaudio --start error: {e}")
 
-        # Check after daemon start
-        if pactl:
+            # Check after daemon start
             try:
                 result = subprocess.run(
                     [pactl, "info"],
@@ -880,58 +865,7 @@ class TTSEngine:
             except Exception:
                 pass
 
-        # Strategy 4: Try reconnecting by suspending and resuming sinks
-        if pactl:
-            try:
-                subprocess.run(
-                    [pactl, "suspend-sink", "", "1"],
-                    env=env, capture_output=True, timeout=2,
-                )
-                _time_mod.sleep(0.2)
-                subprocess.run(
-                    [pactl, "suspend-sink", "", "0"],
-                    env=env, capture_output=True, timeout=2,
-                )
-                diagnostics.append("sink suspend/resume attempted")
-            except Exception:
-                pass
-
-        # Strategy 5: Kill PulseAudio entirely and restart
-        if pulseaudio:
-            try:
-                subprocess.run(
-                    [pulseaudio, "--kill"],
-                    env=env, capture_output=True, timeout=3,
-                )
-                _time_mod.sleep(0.5)
-                result = subprocess.run(
-                    [pulseaudio, "--start"],
-                    env=env, capture_output=True, timeout=5,
-                )
-                if result.returncode == 0:
-                    diagnostics.append("pulseaudio kill+restart succeeded")
-                else:
-                    diagnostics.append("pulseaudio kill+restart failed")
-            except Exception as e:
-                diagnostics.append(f"pulseaudio kill+restart error: {e}")
-
-        # Final check: is PulseAudio back?
-        if pactl:
-            try:
-                result = subprocess.run(
-                    [pactl, "info"],
-                    env=env, capture_output=True, timeout=3,
-                )
-                if result.returncode == 0:
-                    return True, "; ".join(diagnostics + ["recovered after full restart"])
-                # Capture server info for diagnostics
-                stderr = result.stderr.decode("utf-8", errors="replace").strip()
-                if stderr:
-                    diagnostics.append(f"final check stderr: {stderr[:100]}")
-            except Exception:
-                pass
-
-        # All strategies failed — add PULSE_SERVER info for diagnostics
+        # All strategies failed
         diagnostics.append(f"PULSE_SERVER={pulse_server}")
         return False, "; ".join(diagnostics)
 

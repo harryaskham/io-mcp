@@ -227,6 +227,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         # Daemon health status (rendered in tab bar RHS)
         self._daemon_status_text: str = ""
+        self._daemon_check_running: bool = False  # guard against overlapping checks
 
         # PulseAudio auto-reconnect state
         self._pulse_was_ok: bool = True  # assume healthy at start
@@ -416,8 +417,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         self._cleanup_timer = self.set_interval(60, self._cleanup_stale_sessions)
         # Heartbeat: check every 15s if agent has been silent too long
         self._heartbeat_timer = self.set_interval(15, self._check_heartbeat)
-        # Daemon health check: every 10s update status indicators
-        self._daemon_health_timer = self.set_interval(10, self._update_daemon_status)
+        # Daemon health check: every 30s update status indicators
+        self._daemon_health_timer = self.set_interval(30, self._update_daemon_status)
         # Agent health monitor: check every 30s if agents are stuck/crashed
         health_interval = 30.0
         if self._config and hasattr(self._config, 'health_check_interval'):
@@ -466,130 +467,142 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         When PulseAudio goes down and config.pulseAudio.autoReconnect is True,
         attempts auto-reconnect via the TTS engine's reconnect_pulse() method.
         """
+        # Guard: skip if a previous check is still running
+        if self._daemon_check_running:
+            return
+
         def _check():
-            import urllib.request
-            import urllib.error
-            import shutil
-
-            # Check PulseAudio via pactl info
-            pls_ok = False
-            pactl = shutil.which("pactl")
-            if pactl:
-                try:
-                    env = os.environ.copy()
-                    env["PULSE_SERVER"] = os.environ.get("PULSE_SERVER", "127.0.0.1")
-                    result = subprocess.run(
-                        [pactl, "info"],
-                        env=env, capture_output=True, timeout=2,
-                    )
-                    pls_ok = result.returncode == 0
-                except Exception:
-                    pass
-
-            # ── PulseAudio auto-reconnect ───────────────────────────
-            if not pls_ok and self._pulse_was_ok:
-                # Transition from OK → down: attempt reconnect
-                self._try_pulse_reconnect()
-            elif not pls_ok and not self._pulse_was_ok:
-                # Still down: retry if cooldown has elapsed
-                self._try_pulse_reconnect()
-            elif pls_ok and not self._pulse_was_ok:
-                # Recovered! Reset counters
-                self._pulse_reconnect_attempts = 0
-                self._pulse_last_reconnect = 0.0
-                try:
-                    self._tts.play_chime("success")
-                except Exception:
-                    pass
-                try:
-                    with open("/tmp/io-mcp-tui-error.log", "a") as f:
-                        f.write(f"\n--- PulseAudio recovered ---\n")
-                except Exception:
-                    pass
-                # Notify recovery
-                try:
-                    self._notifier.notify(NotificationEvent(
-                        event_type="pulse_recovered",
-                        title="PulseAudio recovered",
-                        message="PulseAudio connection restored.",
-                        priority=2,
-                        tags=["loud_sound", "pulse_recovered"],
-                    ))
-                except Exception:
-                    pass
-
-            self._pulse_was_ok = pls_ok
-
-            # Check proxy via PID file
-            proxy_ok = False
+            self._daemon_check_running = True
             try:
-                with open("/tmp/io-mcp-server.pid", "r") as f:
-                    pid = int(f.read().strip())
-                os.kill(pid, 0)
-                proxy_ok = True
-            except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError):
-                pass
+                self._do_daemon_check()
+            finally:
+                self._daemon_check_running = False
 
-            # Check backend /health — try both 127.0.0.1 and localhost
-            backend_ok = False
-            for host in ("127.0.0.1", "localhost"):
-                if backend_ok:
-                    break
-                try:
-                    req = urllib.request.Request(f"http://{host}:8446/health", method="GET")
-                    with urllib.request.urlopen(req, timeout=2) as resp:
-                        backend_ok = resp.status == 200
-                except Exception:
-                    pass
+        threading.Thread(target=_check, daemon=True).start()
 
-            # Check Android API /health — try both 127.0.0.1 and localhost
-            api_ok = False
-            for host in ("127.0.0.1", "localhost"):
-                if api_ok:
-                    break
-                try:
-                    req = urllib.request.Request(f"http://{host}:8445/api/health", method="GET")
-                    with urllib.request.urlopen(req, timeout=2) as resp:
-                        api_ok = resp.status == 200
-                except Exception:
-                    pass
+    def _do_daemon_check(self) -> None:
+        """Actual daemon health check logic, runs in background thread."""
+        import urllib.request
+        import urllib.error
+        import shutil
 
-            # Check termux-exec daemon via 'termux-exec true'
-            tx_ok = False
-            termux_exec = shutil.which("termux-exec")
-            if termux_exec:
-                try:
-                    result = subprocess.run(
-                        [termux_exec, "true"],
-                        capture_output=True, timeout=2,
-                    )
-                    tx_ok = result.returncode == 0
-                except Exception:
-                    pass
-
-            # Build compact status text for tab bar RHS
-            s = self._cs
-
-            def _dot(ok: bool) -> str:
-                color = s['success'] if ok else s['error']
-                return f"[{color}]o[/{color}]"
-
-            parts = [
-                f"{_dot(pls_ok)}pls",
-                f"{_dot(proxy_ok)}mcp",
-                f"{_dot(backend_ok)}tui",
-                f"{_dot(api_ok)}api",
-                f"{_dot(tx_ok)}tx",
-            ]
-
-            self._daemon_status_text = " ".join(parts)
-
+        # Check PulseAudio via pactl info
+        pls_ok = False
+        pactl = shutil.which("pactl")
+        if pactl:
             try:
-                self.call_from_thread(self._update_tab_bar)
+                env = os.environ.copy()
+                env["PULSE_SERVER"] = os.environ.get("PULSE_SERVER", "127.0.0.1")
+                result = subprocess.run(
+                    [pactl, "info"],
+                    env=env, capture_output=True, timeout=2,
+                )
+                pls_ok = result.returncode == 0
             except Exception:
                 pass
 
-        threading.Thread(target=_check, daemon=True).start()
+        # ── PulseAudio auto-reconnect ───────────────────────────
+        if not pls_ok and self._pulse_was_ok:
+            # Transition from OK → down: attempt reconnect
+            self._try_pulse_reconnect()
+        elif not pls_ok and not self._pulse_was_ok:
+            # Still down: retry if cooldown has elapsed
+            self._try_pulse_reconnect()
+        elif pls_ok and not self._pulse_was_ok:
+            # Recovered! Reset counters
+            self._pulse_reconnect_attempts = 0
+            self._pulse_last_reconnect = 0.0
+            try:
+                self._tts.play_chime("success")
+            except Exception:
+                pass
+            try:
+                with open("/tmp/io-mcp-tui-error.log", "a") as f:
+                    f.write(f"\n--- PulseAudio recovered ---\n")
+            except Exception:
+                pass
+            # Notify recovery
+            try:
+                self._notifier.notify(NotificationEvent(
+                    event_type="pulse_recovered",
+                    title="PulseAudio recovered",
+                    message="PulseAudio connection restored.",
+                    priority=2,
+                    tags=["loud_sound", "pulse_recovered"],
+                ))
+            except Exception:
+                pass
+
+        self._pulse_was_ok = pls_ok
+
+        # Check proxy via PID file
+        proxy_ok = False
+        try:
+            with open("/tmp/io-mcp-server.pid", "r") as f:
+                pid = int(f.read().strip())
+            os.kill(pid, 0)
+            proxy_ok = True
+        except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError):
+            pass
+
+        # Check backend /health — try both 127.0.0.1 and localhost
+        backend_ok = False
+        for host in ("127.0.0.1", "localhost"):
+            if backend_ok:
+                break
+            try:
+                req = urllib.request.Request(f"http://{host}:8446/health", method="GET")
+                with urllib.request.urlopen(req, timeout=2) as resp:
+                    backend_ok = resp.status == 200
+            except Exception:
+                pass
+
+        # Check Android API /health — try both 127.0.0.1 and localhost
+        api_ok = False
+        for host in ("127.0.0.1", "localhost"):
+            if api_ok:
+                break
+            try:
+                req = urllib.request.Request(f"http://{host}:8445/api/health", method="GET")
+                with urllib.request.urlopen(req, timeout=2) as resp:
+                    api_ok = resp.status == 200
+            except Exception:
+                pass
+
+        # Check termux-exec daemon via 'termux-exec true'
+        tx_ok = False
+        termux_exec = shutil.which("termux-exec")
+        if termux_exec:
+            try:
+                result = subprocess.run(
+                    [termux_exec, "true"],
+                    capture_output=True, timeout=2,
+                )
+                tx_ok = result.returncode == 0
+            except Exception:
+                pass
+
+        # Build compact status text for tab bar RHS
+        s = self._cs
+
+        def _dot(ok: bool) -> str:
+            color = s['success'] if ok else s['error']
+            return f"[{color}]o[/{color}]"
+
+        parts = [
+            f"{_dot(pls_ok)}pls",
+            f"{_dot(proxy_ok)}mcp",
+            f"{_dot(backend_ok)}tui",
+            f"{_dot(api_ok)}api",
+            f"{_dot(tx_ok)}tx",
+        ]
+
+        self._daemon_status_text = " ".join(parts)
+
+        try:
+            self.call_from_thread(self._update_tab_bar)
+        except Exception:
+            pass
 
     def _try_pulse_reconnect(self) -> None:
         """Attempt PulseAudio auto-reconnect if enabled and within limits.
@@ -611,22 +624,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             max_attempts = self._config.pulse_max_reconnect_attempts
             cooldown = self._config.pulse_reconnect_cooldown
 
-        # Auto-reset: if enough time has passed since last attempt (5x cooldown),
-        # reset the counter so we keep trying periodically instead of giving up forever
         now = time.time()
-        backoff_reset = cooldown * 5
-        if (self._pulse_reconnect_attempts >= max_attempts
-                and self._pulse_last_reconnect > 0
-                and now - self._pulse_last_reconnect >= backoff_reset):
-            self._pulse_reconnect_attempts = 0
-            try:
-                with open("/tmp/io-mcp-tui-error.log", "a") as f:
-                    f.write(
-                        f"\n--- PulseAudio reconnect attempts reset "
-                        f"(backoff elapsed: {backoff_reset:.0f}s) ---\n"
-                    )
-            except Exception:
-                pass
 
         # Check if we've exceeded max attempts
         if self._pulse_reconnect_attempts >= max_attempts:

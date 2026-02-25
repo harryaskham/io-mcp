@@ -801,7 +801,7 @@ class IoMcpConfig:
         return bool(
             self.expanded.get("config", {})
             .get("pulseAudio", {})
-            .get("autoReconnect", True)
+            .get("autoReconnect", False)
         )
 
     @property
