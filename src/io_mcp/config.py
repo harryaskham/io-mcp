@@ -127,6 +127,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "uiVoice": "",
             "speed": 1.3,
             "emotion": "friendly",
+            "styleDegree": None,               # Azure Speech style intensity (0.01-2.0, None=default)
             "localBackend": "termux",  # "termux", "espeak", or "none"
             "voiceRotation": [],
             "emotionRotation": [],
@@ -562,6 +563,14 @@ class IoMcpConfig:
     @property
     def tts_emotion(self) -> str:
         return self.runtime.get("tts", {}).get("emotion", "neutral")
+
+    @property
+    def tts_style_degree(self) -> float | None:
+        """Azure Speech style intensity (0.01-2.0). None means use default."""
+        val = self.runtime.get("tts", {}).get("styleDegree")
+        if val is not None:
+            return float(val)
+        return None
 
     def _emotion_presets_for_provider(self, provider: str | None = None) -> dict[str, str]:
         """Get emotion presets for the given (or current) TTS provider.
@@ -1059,6 +1068,11 @@ class IoMcpConfig:
                 args.extend(["--style", resolved])
             else:
                 args.extend(["--instructions", resolved])
+
+        # Azure Speech: add --style-degree for emotion intensity control
+        style_degree = self.tts_style_degree
+        if style_degree is not None and "--style" in args:
+            args.extend(["--style-degree", str(style_degree)])
 
         args.extend(["--stdout", "--response-format", "wav"])
         return args
