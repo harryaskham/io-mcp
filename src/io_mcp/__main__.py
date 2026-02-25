@@ -1149,6 +1149,18 @@ def main() -> None:
         _restart_proxy_command()
         return
 
+    # ─── Ensure truecolor support ──────────────────────────────
+    # tmux and screen strip COLORTERM from the environment, causing
+    # Rich/Textual to fall back to 256-color mode.  Our CSS uses hex
+    # colors exclusively, so force truecolor so rendering is identical
+    # inside and outside tmux.  Also upgrade TERM from "screen*" to
+    # "xterm-256color" which modern tmux supports.
+    if not os.environ.get("COLORTERM"):
+        os.environ["COLORTERM"] = "truecolor"
+    term = os.environ.get("TERM", "")
+    if term.startswith("screen") or term == "dumb":
+        os.environ["TERM"] = "xterm-256color"
+
     # ─── Main backend ─────────────────────────────────────────
     parser = argparse.ArgumentParser(
         description="io-mcp — scroll-wheel input + TTS narration for Claude Code"

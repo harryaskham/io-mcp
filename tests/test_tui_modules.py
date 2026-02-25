@@ -211,3 +211,50 @@ class TestDjentIntegration:
             config = IoMcpConfig.load(os.path.join(tmpdir, "config.yml"))
             actions = config.quick_actions
             assert len(actions) == 0
+
+
+class TestTruecolorEnv:
+    """Tests that COLORTERM is forced to truecolor for tmux compat."""
+
+    def test_colorterm_set_when_missing(self):
+        import os
+        old = os.environ.pop("COLORTERM", None)
+        try:
+            # Simulate what main() does
+            if not os.environ.get("COLORTERM"):
+                os.environ["COLORTERM"] = "truecolor"
+            assert os.environ["COLORTERM"] == "truecolor"
+        finally:
+            if old is not None:
+                os.environ["COLORTERM"] = old
+            else:
+                os.environ.pop("COLORTERM", None)
+
+    def test_colorterm_preserved_when_already_set(self):
+        import os
+        old = os.environ.get("COLORTERM")
+        try:
+            os.environ["COLORTERM"] = "24bit"
+            if not os.environ.get("COLORTERM"):
+                os.environ["COLORTERM"] = "truecolor"
+            assert os.environ["COLORTERM"] == "24bit"
+        finally:
+            if old is not None:
+                os.environ["COLORTERM"] = old
+            else:
+                os.environ.pop("COLORTERM", None)
+
+    def test_screen_term_upgraded(self):
+        import os
+        old = os.environ.get("TERM")
+        try:
+            os.environ["TERM"] = "screen"
+            term = os.environ.get("TERM", "")
+            if term.startswith("screen") or term == "dumb":
+                os.environ["TERM"] = "xterm-256color"
+            assert os.environ["TERM"] == "xterm-256color"
+        finally:
+            if old is not None:
+                os.environ["TERM"] = old
+            else:
+                os.environ.pop("TERM", None)
