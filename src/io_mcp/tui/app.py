@@ -2200,7 +2200,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 list_view.focus()
                 self._inbox_scroll_index = idx
                 self._update_inbox_list()
-                self._speak_ui(text[:100])
+                self._speak_ui(text)
                 return
 
             # Choice items: show the resolved result
@@ -3525,7 +3525,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         # Inbox list highlight: read preamble preview of highlighted item
         if isinstance(event.item, InboxListItem):
-            preamble = event.item.inbox_preamble[:80] if event.item.inbox_preamble else "no preamble"
+            preamble = event.item.inbox_preamble if event.item.inbox_preamble else "no preamble"
             n = event.item.n_choices
             status = "done" if event.item.is_done else f"{n} option{'s' if n != 1 else ''}"
             # Include agent name in TTS when in multi-agent mode
@@ -4872,7 +4872,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 time_str = f"{int(age)//3600}h{int(age)%3600//60:02d}m ago"
 
             label = f"[{s['fg_dim']}]{time_str}[/{s['fg_dim']}]  {entry.label}"
-            summary = entry.summary if entry.summary else entry.preamble[:80] if entry.preamble else ""
+            summary = entry.summary if entry.summary else entry.preamble if entry.preamble else ""
             list_view.append(ChoiceItem(label, summary, index=i + 1, display_index=i))
 
         list_view.display = True

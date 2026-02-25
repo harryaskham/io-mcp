@@ -172,7 +172,7 @@ class Session:
             text=text,
             blocking=blocking,
             priority=priority,
-            preamble=text[:80] + ("…" if len(text) > 80 else ""),
+            preamble=text,
         )
         if priority >= 1:
             # Urgent: insert at front of inbox
