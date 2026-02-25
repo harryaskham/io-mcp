@@ -38,7 +38,7 @@ MCP server providing hands-free Claude Code interaction via scroll wheel (smart 
 - **Multi-session**: Each agent gets its own tab with independent state
 - **TTS pipeline**: `tts` CLI → WAV → `paplay` via PulseAudio. Streaming mode for lower latency
 - **Config system**: `~/.config/io-mcp/config.yml` merged with local `.io-mcp.yml`
-- **Haptic feedback**: `termux-vibrate` on scroll (30ms) and selection (100ms). Vibration patterns for semantic events.
+- **Haptic feedback**: `termux-vibrate` on scroll (30ms) and selection (100ms). Vibration patterns for semantic events. **Disabled by default** — enable via `config.haptic.enabled: true`
 - **Ambient mode**: Escalating status updates during agent silence — exponential backoff after 4th update
 
 ## Source Layout
@@ -340,7 +340,7 @@ register_session(
 - **TUI restart resilience**: backend uses a mutable app reference so tool dispatch survives TUI restarts. Pending `present_choices` calls automatically retry with the new TUI instance
 - **Speech reminders**: tool responses include a reminder if the agent hasn't called `speak_async()` in over 60 seconds, nudging agents to narrate during long operations
 - **Thinking phrases**: ambient updates use playful filler phrases ("Hmm, let me see", "One moment", "Huh, interesting") instead of generic status messages
-- **Local TTS fallback**: option scroll readout uses `termux-tts-speak` (Android native TTS via MUSIC audio stream, default) or espeak-ng for instant audio when API TTS isn't cached yet. Full-quality API voice plays on cache hit. Agent speech always uses full API TTS. Configure with `tts.localBackend`: `termux`, `espeak`, or `none`. The termux backend bypasses PulseAudio entirely.
+- **Scroll readout TTS**: on scroll, plays cached API audio if available; otherwise falls back to `speak_async` (API generates + plays asynchronously). Local engines (termux-tts-speak, espeak) are only used in `--local` mode. Exception: espeak is used for freeform text entry readback regardless of mode.
 - **Number keys everywhere**: `1`-`9` number selection works in all menus: choices, settings, dashboard, dialogs, spawn menu, tab picker, quick actions, and setting value pickers
 - **Hostname auto-detection**: server detects Tailscale DNS hostname (e.g. `harrys-macbook-pro`) from `tailscale status --json`. Overrides `localhost`, `.local`, or empty hostnames from agents. Only caches good values — retries Tailscale if it initially fails.
 - **Two-column inbox layout**: when an agent sends choices, the TUI shows a left pane (inbox list of pending/completed items with status icons ●/○/✓) and a right pane (choices for the active item). Left pane is ~30% width. Items show truncated preambles and counts
@@ -367,4 +367,59 @@ Use the same host as the io-mcp MCP server (the phone's Tailscale IP). This bypa
 - Communicate critical information if io-mcp crashes
 - Provide a summary and ask the user to restart io-mcp
 - Streaming TTS used automatically for blocking speak calls — lower latency
-- Haptic feedback auto-detected via `termux-vibrate`; no-op on non-Android
+- Haptic feedback disabled by default; enable in `config.haptic.enabled: true`
+
+## TUI Performance — Never Block the Event Loop
+
+The TUI runs on Nix-on-Droid under **proot**, which intercepts every syscall. This has severe performance implications:
+
+- **`subprocess.Popen` takes 200-300ms** (vs ~1ms on native Linux) due to fork/exec syscall interception
+- **`os.killpg` / `proc.kill` take 10-50ms** per call
+- **`os.path.isfile` / `stat` take 1-10ms** per call
+- **`threading.Lock` acquisition** blocks if any holder is mid-syscall
+
+The Textual event loop is single-threaded. **Any blocking call on the main thread freezes ALL input processing** — keys, scroll, timers, rendering. A 300ms Popen means 300ms of lost key events.
+
+### Rules for the TUI event loop
+
+1. **NEVER call `subprocess.Popen` on the main thread.** Always spawn in a background thread. This includes `termux-vibrate`, `termux-tts-speak`, `paplay`, `espeak`, `tts` CLI — any external process.
+
+2. **NEVER call `self._tts.stop()` on the main thread.** `stop()` acquires `self._lock` and calls `os.killpg`, both of which can block on proot. Use `threading.Thread(target=self._tts.stop, daemon=True).start()` instead.
+
+3. **NEVER hold `self._lock` during a Popen.** Move `Popen()` outside the lock. Only hold the lock briefly to update `self._process` / `self._termux_proc` references.
+
+4. **Use `preexec_fn=os.setsid` on all subprocesses** that need to be killable. Then use `os.killpg(os.getpgid(proc.pid), signal.SIGKILL)` to kill the entire process group. Without this, wrapper scripts (like `termux-exec → termux-tts-speak`) leave orphaned child processes.
+
+5. **Use generation counters for scroll TTS.** Increment a counter on each scroll event. Background threads check the counter before playing — if it's stale (user scrolled past), skip the audio. This prevents overlapping TTS from rapid scrolling.
+
+6. **Don't use local TTS engines (termux-tts-speak, espeak) for scroll readout** unless in `--local` mode. Each call spawns a subprocess (200-300ms on proot). Instead, use the API TTS path: cache hit → instant playback, cache miss → `speak_async` (generates in background). First scroll through uncached options may be silent, but subsequent visits play cached audio instantly.
+
+7. **Rate-limit thread creation.** Each `threading.Thread().start()` is cheap on native Linux but adds up on proot. Avoid spawning threads in tight loops (e.g., one per scroll event for vibration + TTS + API generation = 3 threads per scroll).
+
+8. **Keep `on_highlight_changed` fast.** This fires on every scroll/key event. It should only do: trivial dict lookups, increment a counter, and spawn at most one background thread. No filesystem access, no lock acquisition, no subprocess calls.
+
+### TTS model for scroll readout
+
+```
+Cache hit?  ──yes──►  Background thread: stop() → _start_playback(cached_wav)
+     │
+     no
+     │
+--local?  ──yes──►  Background thread: stop() → _speak_termux(block=False) or espeak
+     │
+     no
+     │
+     └──►  speak_async()  →  API generates WAV → caches → plays via paplay
+```
+
+Agent speech (`speak`, `speak_async`) always uses the full API TTS pipeline. UI speech (`_speak_ui`) uses `speak_async` with optional `uiVoice` override.
+
+### Common pitfalls
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| Keys ignored on single tap but work when held | Main thread blocked 200-300ms; first keydown lost, key repeat events arrive after block clears | Move blocking call to background thread |
+| TTS overlapping on rapid scroll | Multiple background threads all call `_start_playback` | Use `_scroll_gen` counter; check before playing |
+| Zombie `termux-tts-speak` processes | `proc.kill()` only kills wrapper script, not child | Use `preexec_fn=os.setsid` + `os.killpg` |
+| Lock contention on `self._lock` | `stop()` and `_start_playback` both acquire lock; Popen inside lock | Move Popen outside lock; keep lock hold time < 1ms |
+| Thread pile-up during rapid scroll | Each scroll spawns 2-3 threads; threads block on Popen/lock | Reduce threads per scroll; use fire-and-forget |
