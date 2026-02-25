@@ -595,63 +595,32 @@ class TestPregenerate:
 
 
 class TestStop:
-    """Tests for stop() killing all process types."""
+    """Tests for stop() killing all process types via the subprocess manager."""
 
-    def test_stop_clears_process_references(self):
+    def test_stop_cancels_all_via_manager(self):
         engine = _make_engine()
-        engine._process = mock.MagicMock()
-        engine._process.poll.return_value = 0  # already exited
-        engine._streaming_tts_proc = mock.MagicMock()
-        engine._streaming_tts_proc.poll.return_value = 0
-        engine._termux_proc = mock.MagicMock()
-        engine._termux_proc.poll.return_value = 0
+        with mock.patch.object(engine._mgr, "cancel_all") as mock_cancel:
+            engine.stop()
+            # stop() runs in a background thread, give it time
+            import time
+            time.sleep(0.3)
+            mock_cancel.assert_called_once()
 
-        engine.stop()
-
-        assert engine._process is None
-        assert engine._streaming_tts_proc is None
-        assert engine._termux_proc is None
-
-    def test_stop_kills_running_process(self):
+    def test_stop_sync_cancels_all_via_manager(self):
         engine = _make_engine()
-        mock_proc = mock.MagicMock()
-        mock_proc.poll.return_value = None  # still running
-        mock_proc.pid = 12345
-        engine._process = mock_proc
-
-        with mock.patch("os.getpgid", return_value=12345):
-            with mock.patch("os.killpg") as mock_killpg:
-                engine.stop()
-                mock_killpg.assert_called()
-
-    def test_stop_kills_termux_proc(self):
-        engine = _make_engine()
-        mock_proc = mock.MagicMock()
-        mock_proc.poll.return_value = None  # still running
-        engine._termux_proc = mock_proc
-
-        engine.stop()
-        mock_proc.kill.assert_called_once()
-
-    def test_stop_handles_process_lookup_error(self):
-        engine = _make_engine()
-        mock_proc = mock.MagicMock()
-        mock_proc.poll.return_value = None
-        mock_proc.pid = 99999
-        engine._process = mock_proc
-
-        with mock.patch("os.getpgid", return_value=99999):
-            with mock.patch("os.killpg", side_effect=ProcessLookupError):
-                # Should not raise
-                engine.stop()
-                assert engine._process is None
+        with mock.patch.object(engine._mgr, "cancel_all") as mock_cancel:
+            engine.stop_sync()
+            mock_cancel.assert_called_once()
 
     def test_stop_noop_when_nothing_playing(self):
         engine = _make_engine()
-        assert engine._process is None
-        assert engine._streaming_tts_proc is None
-        assert engine._termux_proc is None
+        assert engine._mgr.active_count == 0
         engine.stop()  # should not raise
+
+    def test_stop_sync_noop_when_nothing_playing(self):
+        engine = _make_engine()
+        assert engine._mgr.active_count == 0
+        engine.stop_sync()  # should not raise
 
 
 # ─── clear_cache ──────────────────────────────────────────────────────
@@ -934,30 +903,23 @@ class TestLocalBackendFallback:
 
 
 class TestThreadSafety:
-    """Tests for concurrent stop/play interactions."""
+    """Tests for concurrent stop/play interactions using the subprocess manager."""
 
     def test_concurrent_stops_dont_crash(self):
         engine = _make_engine()
-        mock_proc = mock.MagicMock()
-        mock_proc.poll.return_value = None
-        mock_proc.pid = 12345
-        engine._process = mock_proc
-
         errors = []
 
         def do_stop():
             try:
-                engine.stop()
+                engine.stop_sync()
             except Exception as e:
                 errors.append(e)
 
-        with mock.patch("os.getpgid", return_value=12345):
-            with mock.patch("os.killpg"):
-                threads = [threading.Thread(target=do_stop) for _ in range(10)]
-                for t in threads:
-                    t.start()
-                for t in threads:
-                    t.join(timeout=5)
+        threads = [threading.Thread(target=do_stop) for _ in range(10)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=5)
 
         assert len(errors) == 0, f"Concurrent stops raised: {errors}"
 
@@ -982,46 +944,55 @@ class TestThreadSafety:
 
 
 class TestStartPlayback:
-    """Tests for _start_playback and _wait_for_playback."""
+    """Tests for _start_playback and _wait_for_playback using subprocess manager."""
 
-    def test_start_playback_sets_process(self):
+    def test_start_playback_tracks_process(self):
         engine = _make_engine()
         engine._paplay = "/usr/bin/paplay"
 
         mock_proc = mock.MagicMock()
         # Simulate paplay still running after 0.15s (playback started ok)
         mock_proc.wait.side_effect = subprocess.TimeoutExpired(cmd="paplay", timeout=0.15)
-        with mock.patch("subprocess.Popen", return_value=mock_proc):
-            engine._start_playback("/tmp/test.wav")
-            assert engine._process is mock_proc
+        with mock.patch.object(engine._mgr, "start") as mock_start:
+            mock_tracked = mock.MagicMock()
+            mock_tracked.proc = mock_proc
+            mock_start.return_value = mock_tracked
+            result = engine._start_playback("/tmp/test.wav")
+            assert result is True
+            mock_start.assert_called_once()
 
-    def test_start_playback_exception_sets_none(self):
+    def test_start_playback_exception_returns_false(self):
         engine = _make_engine()
         engine._paplay = "/usr/bin/paplay"
 
-        with mock.patch("subprocess.Popen", side_effect=OSError("boom")):
-            engine._start_playback("/tmp/test.wav")
-            assert engine._process is None
+        with mock.patch.object(engine._mgr, "start", side_effect=OSError("boom")):
+            result = engine._start_playback("/tmp/test.wav")
+            assert result is False
 
     def test_wait_for_playback_noop_when_no_process(self):
         engine = _make_engine()
-        engine._process = None
         engine._wait_for_playback()  # should not raise
 
     def test_wait_for_playback_waits_for_process(self):
         engine = _make_engine()
         mock_proc = mock.MagicMock()
-        engine._process = mock_proc
-        engine._wait_for_playback()
-        mock_proc.wait.assert_called_once_with(timeout=30)
+        mock_tracked = mock.MagicMock()
+        mock_tracked.proc = mock_proc
+        mock_tracked.alive = True
+        with mock.patch.object(engine._mgr, "get_by_tag", return_value=mock_tracked):
+            engine._wait_for_playback()
+            mock_proc.wait.assert_called_once_with(timeout=30)
 
     def test_wait_for_playback_handles_timeout(self):
         engine = _make_engine()
         mock_proc = mock.MagicMock()
         mock_proc.wait.side_effect = Exception("timeout")
-        engine._process = mock_proc
-        # Should not raise
-        engine._wait_for_playback()
+        mock_tracked = mock.MagicMock()
+        mock_tracked.proc = mock_proc
+        mock_tracked.alive = True
+        with mock.patch.object(engine._mgr, "get_by_tag", return_value=mock_tracked):
+            # Should not raise
+            engine._wait_for_playback()
 
 
 # ─── speak_streaming_async ────────────────────────────────────────────
@@ -1046,38 +1017,37 @@ class TestSpeakStreamingAsync:
 
 
 class TestSpeakTermux:
-    """Tests for _speak_termux."""
+    """Tests for _speak_termux using the subprocess manager."""
 
     def test_noop_without_termux_exec(self):
         engine = _make_engine()
         engine._termux_exec = None
-        with mock.patch("subprocess.Popen") as mock_popen:
+        with mock.patch.object(engine._mgr, "start") as mock_start:
             engine._speak_termux("hello")
-            mock_popen.assert_not_called()
+            mock_start.assert_not_called()
 
-    def test_kills_previous_and_starts_new(self):
+    def test_cancels_previous_and_starts_new(self):
         engine = _make_engine()
         engine._termux_exec = "/usr/bin/termux-exec"
 
-        old_proc = mock.MagicMock()
-        old_proc.poll.return_value = None  # still running
-        engine._termux_proc = old_proc
+        mock_tracked = mock.MagicMock()
+        mock_tracked.proc.wait.return_value = None
 
-        new_proc = mock.MagicMock()
-        new_proc.wait.return_value = None
-        with mock.patch("subprocess.Popen", return_value=new_proc):
-            engine._speak_termux("hello")
-            old_proc.kill.assert_called_once()
+        with mock.patch.object(engine._mgr, "cancel_tagged") as mock_cancel:
+            with mock.patch.object(engine._mgr, "start", return_value=mock_tracked):
+                engine._speak_termux("hello")
+                mock_cancel.assert_called_once_with("termux")
 
     def test_uses_config_speed(self):
         config = FakeConfig(speed=1.5)
         engine = _make_engine(config=config)
         engine._termux_exec = "/usr/bin/termux-exec"
 
-        mock_proc = mock.MagicMock()
-        mock_proc.wait.return_value = None
+        mock_tracked = mock.MagicMock()
+        mock_tracked.proc.wait.return_value = None
 
-        with mock.patch("subprocess.Popen", return_value=mock_proc) as mock_popen:
-            engine._speak_termux("hello")
-            cmd = mock_popen.call_args[0][0]
-            assert "1.5" in cmd  # speed passed as string
+        with mock.patch.object(engine._mgr, "cancel_tagged"):
+            with mock.patch.object(engine._mgr, "start", return_value=mock_tracked) as mock_start:
+                engine._speak_termux("hello")
+                cmd = mock_start.call_args[0][0]
+                assert "1.5" in cmd  # speed passed as string

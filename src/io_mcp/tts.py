@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import hashlib
 import os
-import signal
 import shutil
 import subprocess
 import tempfile
@@ -19,6 +18,8 @@ import threading
 import time as _time_mod
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Optional
+
+from .subprocess_manager import AsyncSubprocessManager
 
 if TYPE_CHECKING:
     from .config import IoMcpConfig
@@ -65,10 +66,10 @@ class TTSEngine:
 
     def __init__(self, local: bool = False, speed: float = 1.0,
                  config: Optional["IoMcpConfig"] = None):
-        self._process: Optional[subprocess.Popen] = None
-        self._streaming_tts_proc: Optional[subprocess.Popen] = None
-        self._termux_proc: Optional[subprocess.Popen] = None
-        self._lock = threading.Lock()
+        # Centralised subprocess manager — replaces manual process tracking
+        # (self._process, self._streaming_tts_proc, self._termux_proc) and
+        # threading.Lock. Tags: "playback", "tts_stream", "termux"
+        self._mgr = AsyncSubprocessManager()
         self._local = local
         self._speed = speed
         self._muted = False  # when True, play_cached is a no-op
@@ -453,28 +454,25 @@ class TTSEngine:
         Use max_attempts=0 for scroll readout where speed matters more than
         reliability.
 
-        IMPORTANT: Popen is called OUTSIDE the lock to avoid blocking stop()
-        on the main thread. On proot/Android, Popen can take 200-300ms due
-        to syscall interception. The lock is only held briefly to update
-        self._process.
+        IMPORTANT: Popen is called via the subprocess manager which handles
+        process group setup (preexec_fn=os.setsid) and tracking automatically.
+        No lock is needed — the manager uses GIL-atomic list operations.
         """
         if max_attempts < 0:
             max_attempts = self._max_retries
         for attempt in range(1 + max_attempts):
             try:
-                proc = subprocess.Popen(
+                tracked = self._mgr.start(
                     [self._paplay, path],
+                    tag="playback",
                     env=self._env,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.PIPE,
-                    preexec_fn=os.setsid,
                 )
+                proc = tracked.proc
             except Exception as e:
                 self._record_failure(f"Failed to start paplay: {e}")
                 continue
-
-            with self._lock:
-                self._process = proc
 
             # Give paplay a moment to fail on connection errors
             try:
@@ -488,14 +486,10 @@ class TTSEngine:
                 if retcode != 0:
                     # Negative return code = killed by signal (intentional stop)
                     if retcode < 0:
-                        with self._lock:
-                            self._process = None
                         return False  # Don't retry — was killed intentionally
                     self._record_failure(
                         f"paplay exited immediately (code {retcode}): {stderr_out or 'no stderr'}"
                     )
-                    with self._lock:
-                        self._process = None
                     # Brief pause before retry to let PulseAudio settle
                     if attempt < max_attempts:
                         _time_mod.sleep(0.1 * (attempt + 1))
@@ -516,8 +510,9 @@ class TTSEngine:
 
     def _wait_for_playback(self) -> None:
         """Wait for current playback to finish. Logs errors on failure."""
-        proc = self._process
-        if proc is not None:
+        tracked = self._mgr.get_by_tag("playback")
+        if tracked is not None:
+            proc = tracked.proc
             try:
                 retcode = proc.wait(timeout=30)
                 if retcode != 0:
@@ -619,42 +614,30 @@ class TTSEngine:
         if not self._termux_exec:
             return
 
-        # Kill any previous termux-tts-speak via process group
-        self._kill_termux_proc()
+        # Kill any previous termux-tts-speak via the manager
+        self._mgr.cancel_tagged("termux")
 
         try:
             speed = self._config.tts_speed if self._config else self._speed
             cmd = [self._termux_exec, "termux-tts-speak",
                    "-s", "MUSIC", "-r", str(speed), text]
-            proc = subprocess.Popen(
+            tracked = self._mgr.start(
                 cmd,
+                tag="termux",
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                preexec_fn=os.setsid,
             )
-            with self._lock:
-                self._termux_proc = proc
             if block:
                 try:
-                    proc.wait(timeout=30)
+                    tracked.proc.wait(timeout=30)
                 except subprocess.TimeoutExpired:
-                    self._kill_termux_proc()
+                    tracked.kill()
         except Exception:
             pass
 
     def _kill_termux_proc(self) -> None:
         """Kill the current termux-tts-speak process and its entire process group."""
-        with self._lock:
-            proc = self._termux_proc
-            self._termux_proc = None
-        if proc and proc.poll() is None:
-            try:
-                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            except (OSError, ProcessLookupError):
-                try:
-                    proc.kill()
-                except (OSError, ProcessLookupError):
-                    pass
+        self._mgr.cancel_tagged("termux")
 
     def speak_with_local_fallback(self, text: str,
                                    voice_override: Optional[str] = None,
@@ -794,29 +777,29 @@ class TTSEngine:
         self.stop_sync()
 
         try:
-            with self._lock:
-                # Pipe tts stdout directly to paplay — audio starts immediately
-                # WAV header is in the stream, so paplay can decode it directly
-                tts_proc = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    env=self._env,
-                    preexec_fn=os.setsid,
-                )
-                play_proc = subprocess.Popen(
-                    [self._paplay],
-                    stdin=tts_proc.stdout,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.PIPE,
-                    env=self._env,
-                    preexec_fn=os.setsid,
-                )
-                # Allow tts_proc to receive SIGPIPE if paplay exits
-                if tts_proc.stdout:
-                    tts_proc.stdout.close()
-                self._process = play_proc
-                self._streaming_tts_proc = tts_proc
+            # Pipe tts stdout directly to paplay — audio starts immediately
+            # WAV header is in the stream, so paplay can decode it directly.
+            # No lock needed — the subprocess manager handles tracking.
+            tts_tracked = self._mgr.start(
+                cmd,
+                tag="tts_stream",
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=self._env,
+            )
+            tts_proc = tts_tracked.proc
+            play_tracked = self._mgr.start(
+                [self._paplay],
+                tag="playback",
+                stdin=tts_proc.stdout,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                env=self._env,
+            )
+            play_proc = play_tracked.proc
+            # Allow tts_proc to receive SIGPIPE if paplay exits
+            if tts_proc.stdout:
+                tts_proc.stdout.close()
 
             if block:
                 tts_failed = False
@@ -931,21 +914,12 @@ class TTSEngine:
     def stop(self) -> None:
         """Kill any in-progress playback and streaming TTS.
 
-        Runs kill operations in a background thread to avoid blocking
+        Runs cancel_all() in a background thread to avoid blocking
         the caller (important on proot where syscalls take 10-50ms each).
+        The subprocess manager handles process group killing internally.
         """
         def _do_stop():
-            with self._lock:
-                for proc in (self._process, self._streaming_tts_proc):
-                    if proc and proc.poll() is None:
-                        try:
-                            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                        except (OSError, ProcessLookupError):
-                            pass
-                self._process = None
-                self._streaming_tts_proc = None
-            # Kill termux-tts-speak via process group (outside lock)
-            self._kill_termux_proc()
+            self._mgr.cancel_all()
         threading.Thread(target=_do_stop, daemon=True).start()
 
     def stop_sync(self) -> None:
@@ -955,16 +929,7 @@ class TTSEngine:
         proceeding (e.g., before starting blocking speech in a background
         thread). Prefer stop() for UI/event-loop contexts.
         """
-        with self._lock:
-            for proc in (self._process, self._streaming_tts_proc):
-                if proc and proc.poll() is None:
-                    try:
-                        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                    except (OSError, ProcessLookupError):
-                        pass
-            self._process = None
-            self._streaming_tts_proc = None
-        self._kill_termux_proc()
+        self._mgr.cancel_all()
 
     def wait_for_speech(self, timeout: float = 5.0) -> None:
         """Wait for any in-progress speech to finish, up to timeout seconds.
@@ -975,14 +940,7 @@ class TTSEngine:
         """
         deadline = _time_mod.time() + timeout
         while _time_mod.time() < deadline:
-            with self._lock:
-                procs = [self._process, self._streaming_tts_proc]
-            # Also check termux proc (outside lock)
-            termux = self._termux_proc
-            active = any(p and p.poll() is None for p in procs)
-            if termux and termux.poll() is None:
-                active = True
-            if not active:
+            if not self._mgr.has_active():
                 return
             _time_mod.sleep(0.1)
 
