@@ -828,8 +828,17 @@ class TTSEngine:
                                 stderr_out = (play_proc.stderr.read() or b"").decode("utf-8", errors="replace").strip()
                             except Exception:
                                 pass
+                            # Also grab TTS process stderr for combined diagnostics
+                            tts_diag = ""
+                            try:
+                                tts_rc = tts_proc.wait(timeout=2)
+                                if tts_rc != 0:
+                                    tts_err = (tts_proc.stderr.read() or b"").decode("utf-8", errors="replace").strip()
+                                    tts_diag = f" | tts exit={tts_rc}: {tts_err[:120]}" if tts_err else f" | tts exit={tts_rc}"
+                            except Exception:
+                                pass
                             self._record_failure(
-                                f"paplay (streaming) exited with code {retcode}: {stderr_out or 'no stderr'}"
+                                f"paplay (streaming) exited with code {retcode}: {stderr_out or 'no stderr'}{tts_diag}"
                             )
                             tts_failed = True
                     else:
@@ -877,8 +886,17 @@ class TTSEngine:
                                     stderr_out = (play_proc.stderr.read() or b"").decode("utf-8", errors="replace").strip()
                                 except Exception:
                                     pass
+                                # Also grab TTS process stderr for combined diagnostics
+                                tts_diag = ""
+                                try:
+                                    tts_rc = tts_proc.wait(timeout=2)
+                                    if tts_rc != 0:
+                                        tts_err = (tts_proc.stderr.read() or b"").decode("utf-8", errors="replace").strip()
+                                        tts_diag = f" | tts exit={tts_rc}: {tts_err[:120]}" if tts_err else f" | tts exit={tts_rc}"
+                                except Exception:
+                                    pass
                                 self._record_failure(
-                                    f"paplay (streaming async) exited with code {retcode}: {stderr_out or 'no stderr'}"
+                                    f"paplay (streaming async) exited with code {retcode}: {stderr_out or 'no stderr'}{tts_diag}"
                                 )
                                 tts_failed = True
                         else:
