@@ -295,6 +295,9 @@ async def test_inbox_list_visible_with_multiple_items():
 
     app = make_app()
     async with app.run_test() as pilot:
+        # Ensure inbox is not collapsed for this test
+        app._inbox_collapsed = False
+
         session, _ = app.manager.get_or_create("test-1")
         session.registered = True
         session.name = "Test"
