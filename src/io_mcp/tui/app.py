@@ -2449,17 +2449,24 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         if self._is_focused(session.session_id):
             self._safe_call(lambda: self._show_speech_item(text))
 
-        # Play TTS
+        # Play TTS — only for the focused session to prevent agents
+        # talking over each other (all agents share one TTSEngine/paplay)
         voice_ov = getattr(session, 'voice_override', None)
         model_ov = getattr(session, 'model_override', None)
         emotion_ov = getattr(session, 'emotion_override', None)
 
-        if priority >= 1:
-            self._tts.stop()
+        is_focused = self._is_focused(session.session_id)
 
-        self._tts.speak(text, voice_override=voice_ov,
-                        emotion_override=emotion_ov,
-                        model_override=model_ov)
+        if is_focused:
+            if priority >= 1:
+                self._tts.stop()
+
+            self._tts.speak(text, voice_override=voice_ov,
+                            emotion_override=emotion_ov,
+                            model_override=model_ov)
+        else:
+            # Non-focused session: queue for later playback, don't play now
+            session.unplayed_speech.append(SpeechEntry(text=text, priority=priority))
 
         # Auto-resolve: mark done and kick drain
         item.result = {"selected": "_speech_done", "summary": text[:100]}
