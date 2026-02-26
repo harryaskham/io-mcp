@@ -109,12 +109,12 @@
               mkdir -p $out/share/io-mcp/agents
               mkdir -p $out/share/io-mcp/skills/io-mcp
               mkdir -p $out/share/io-mcp/hooks
-              cp ${./.claude/agents/io-mcp.md} $out/share/io-mcp/agents/io-mcp.md
+              cp ${./agents/io-mcp.md} $out/share/io-mcp/agents/io-mcp.md
               cp ${./agents/io-mcp-admin.md} $out/share/io-mcp/agents/io-mcp-admin.md
-              cp ${./.claude/skills/io-mcp/SKILL.md} $out/share/io-mcp/skills/io-mcp/SKILL.md
-              cp ${./.claude/hooks/enforce-choices.sh} $out/share/io-mcp/hooks/enforce-choices.sh
-              cp ${./.claude/hooks/nudge-speak.sh} $out/share/io-mcp/hooks/nudge-speak.sh
-              cp ${./.claude/hooks/start-register.sh} $out/share/io-mcp/hooks/start-register.sh
+              cp ${./skills/io-mcp/SKILL.md} $out/share/io-mcp/skills/io-mcp/SKILL.md
+              cp ${./hooks/enforce-choices.sh} $out/share/io-mcp/hooks/enforce-choices.sh
+              cp ${./hooks/nudge-speak.sh} $out/share/io-mcp/hooks/nudge-speak.sh
+              cp ${./hooks/start-register.sh} $out/share/io-mcp/hooks/start-register.sh
             '';
           };
         })
