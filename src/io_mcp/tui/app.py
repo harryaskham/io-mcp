@@ -1449,10 +1449,13 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         # Update tab bar to show inbox count
         self._safe_call(self._update_tab_bar)
 
+        # Always update the unified inbox so new items appear immediately
+        self._inbox_scroll_index = 0
+        self._safe_call(self._update_inbox_list)
+
         # Play inbox chime if user is already viewing choices for this session
         if session.active and self._is_focused(session.session_id):
             self._tts.play_chime("inbox")
-            self._safe_call(self._update_inbox_list)
 
         # Kick a drain thread in case there are speech items ahead of us
         threading.Thread(
@@ -1846,11 +1849,13 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         self._update_speech_log()
 
     def _show_waiting(self, label: str) -> None:
-        """Show waiting state after selection, staying in inbox view.
+        """Show waiting state after selection, returning to unified inbox.
 
-        After resolving a choice, the inbox view persists showing the
-        done item. If there are more pending items, the next one will
-        auto-present via the inbox drain loop.
+        After resolving a choice, focus returns to the unified inbox list
+        (left pane) with the cursor at the top so the user sees the newest
+        items immediately. The right pane shows a simple waiting state.
+        If there are more pending items, the next one will auto-present
+        via the inbox drain loop.
         """
         self.query_one("#preamble").display = False
         self.query_one("#dwell-bar").display = False
@@ -1861,10 +1866,6 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         status.update(after_text)
         status.display = True
 
-        # Stay in inbox view — update inbox list to reflect the done item
-        self._ensure_main_content_visible(show_inbox=True)
-        self._inbox_pane_focused = False
-
         # Show a simple waiting state in the right pane (not full activity feed)
         list_view = self.query_one("#choices", ListView)
         list_view.clear()
@@ -1874,6 +1875,19 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             index=-999, display_index=0,
         ))
         list_view.display = True
+
+        # Return to unified inbox — scroll to top so newest items are visible
+        self._inbox_scroll_index = 0
+        self._ensure_main_content_visible(show_inbox=True)
+
+        # Focus the inbox list (left pane) so user can browse other items
+        self._inbox_pane_focused = True
+        if self._inbox_pane_visible():
+            try:
+                inbox_list = self.query_one("#inbox-list", ListView)
+                inbox_list.focus()
+            except Exception:
+                pass
 
     def _show_idle(self) -> None:
         """Show idle state with inbox view."""
