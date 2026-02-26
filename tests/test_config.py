@@ -147,8 +147,8 @@ class TestConfigLoading:
         assert not os.path.isfile(tmp_config)
         config = IoMcpConfig.load(tmp_config)
         assert os.path.isfile(tmp_config)
-        # Default voice preset is "noa" → mai-voice-1
-        assert config.tts_model_name == "mai-voice-1"
+        # Default voice preset is "noa" → azure/speech/azure-tts
+        assert config.tts_model_name == "azure/speech/azure-tts"
         assert config.tts_voice_preset == "noa"
 
     def test_loads_existing_file(self, tmp_config):
@@ -244,9 +244,9 @@ class TestConfigLoading:
 class TestConfigAccessors:
     def test_tts_defaults(self, config_with_defaults):
         c = config_with_defaults
-        # Default voice preset is "noa" → mai-voice-1 on openai provider
+        # Default voice preset is "noa" → azure/speech/azure-tts on openai provider
         assert c.tts_voice_preset == "noa"
-        assert c.tts_model_name == "mai-voice-1"
+        assert c.tts_model_name == "azure/speech/azure-tts"
         assert c.tts_voice == "en-US-Noa:MAI-Voice-1"
         assert c.tts_speed == 1.2
         assert c.tts_provider_name == "openai"
@@ -260,7 +260,7 @@ class TestConfigAccessors:
     def test_tts_model_names(self, config_with_defaults):
         names = config_with_defaults.tts_model_names
         assert "gpt-4o-mini-tts" in names
-        assert "mai-voice-1" in names
+        assert "azure/speech/azure-tts" in names
 
     def test_stt_model_names(self, config_with_defaults):
         names = config_with_defaults.stt_model_names
@@ -337,7 +337,7 @@ class TestConfigAccessors:
         c = config_with_defaults
         resolved = c.resolve_voice("noa")
         assert resolved["provider"] == "openai"
-        assert resolved["model"] == "mai-voice-1"
+        assert resolved["model"] == "azure/speech/azure-tts"
         assert resolved["voice"] == "en-US-Noa:MAI-Voice-1"
 
     def test_resolve_voice_fallback(self, config_with_defaults):
@@ -600,7 +600,7 @@ class TestConfigMutation:
         c.set_tts_voice("teo")
         assert c.tts_voice_preset == "teo"
         assert c.tts_voice == "en-US-Teo:MAI-Voice-1"
-        assert c.tts_model_name == "mai-voice-1"
+        assert c.tts_model_name == "azure/speech/azure-tts"
 
     def test_set_tts_voice_by_raw_string(self, config_with_defaults):
         """Setting voice by raw string finds matching preset."""
@@ -680,7 +680,7 @@ class TestCLIArgs:
         args = c.tts_cli_args("hello world")
         assert args[0] == "hello world"
         assert "--model" in args
-        assert "mai-voice-1" in args
+        assert "azure/speech/azure-tts" in args
         assert "--voice" in args
         assert "en-US-Noa:MAI-Voice-1" in args
         assert "--stdout" in args

@@ -109,8 +109,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "sage": {"provider": "openai", "model": "gpt-4o-mini-tts", "voice": "sage"},
         "shimmer": {"provider": "openai", "model": "gpt-4o-mini-tts", "voice": "shimmer"},
         "verse": {"provider": "openai", "model": "gpt-4o-mini-tts", "voice": "verse"},
-        "noa": {"provider": "openai", "model": "mai-voice-1", "voice": "en-US-Noa:MAI-Voice-1"},
-        "teo": {"provider": "openai", "model": "mai-voice-1", "voice": "en-US-Teo:MAI-Voice-1"},
+        "noa": {"provider": "openai", "model": "azure/speech/azure-tts", "voice": "en-US-Noa:MAI-Voice-1"},
+        "teo": {"provider": "openai", "model": "azure/speech/azure-tts", "voice": "en-US-Teo:MAI-Voice-1"},
     },
     "config": {
         "colorScheme": "nord",

@@ -129,11 +129,11 @@ voices:
     voice: sage
   noa:
     provider: openai
-    model: mai-voice-1
+    model: azure/speech/azure-tts
     voice: en-US-Noa:MAI-Voice-1
   teo:
     provider: openai
-    model: mai-voice-1
+    model: azure/speech/azure-tts
     voice: en-US-Teo:MAI-Voice-1
   # ... alloy, ash, ballad, coral, echo, fable, onyx, nova, shimmer, verse
 
