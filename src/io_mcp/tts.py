@@ -83,6 +83,11 @@ class TTSEngine:
         # acquire this — it interrupts via stop_sync() instead.
         self._speech_lock = threading.Lock()
 
+        # API concurrency lock — ensures only one tts CLI process runs
+        # at a time. Acquired by both speech (speak/speak_streaming) and
+        # pregeneration (_generate_to_file) to prevent API rate limiting.
+        self._api_lock = threading.Lock()
+
         # TTS error callback — set by the TUI to show errors visually
         self._on_tts_error = None
 
@@ -261,102 +266,108 @@ class TTSEngine:
                           model_override: Optional[str] = None) -> Optional[str]:
         """Generate audio for text and save to a WAV file. Returns file path.
 
-        Tracks consecutive API failures so callers can skip background
-        generation when the API is known-broken (e.g. missing key).
+        Acquires the API lock to prevent concurrent tts CLI processes
+        which cause rate limiting / 500 errors from the API endpoint.
         """
         key = self._cache_key(text, voice_override, emotion_override,
                               model_override=model_override)
 
-        # Check cache
+        # Check cache (no lock needed)
         cached = self._cache.get(key)
         if cached and os.path.isfile(cached):
             return cached
 
         out_path = os.path.join(CACHE_DIR, f"{key}.wav")
 
-        try:
-            if self._local:
-                if not self._espeak:
-                    self._log_tts_error("espeak-ng not available", text)
-                    return None
-                # espeak-ng outputs WAV directly; scale WPM by speed
-                wpm = int(TTS_SPEED * self._speed)
-                cmd = [self._espeak, "--stdout", "-s", str(wpm), text]
-                with open(out_path, "wb") as f:
-                    proc = subprocess.run(
-                        cmd, stdout=f, stderr=subprocess.PIPE,
-                        env=self._env, timeout=10,
-                    )
-                if proc.returncode != 0:
-                    stderr_out = (proc.stderr or b"").decode("utf-8", errors="replace").strip()
-                    self._log_tts_error(
-                        f"espeak-ng failed (code {proc.returncode}): {stderr_out}", text)
-                    return None
-            else:
-                if not self._tts_bin:
-                    self._log_tts_error("tts binary not available", text)
-                    self._record_api_gen_failure()
-                    return None
+        with self._api_lock:
+            # Re-check cache after acquiring lock (another thread may have generated)
+            cached = self._cache.get(key)
+            if cached and os.path.isfile(cached):
+                return cached
 
-                # Skip if API is known-broken (saves 10s timeout per call)
-                if not self._api_gen_available():
-                    return None
-
-                # Build tts command from config (explicit flags)
-                if self._config:
-                    cmd = [self._tts_bin] + self._config.tts_cli_args(
-                        text, voice_override=voice_override,
-                        emotion_override=emotion_override,
-                        model_override=model_override)
-                else:
-                    # Legacy fallback: no config, use env vars
-                    cmd = [self._tts_bin, text, "--stdout", "--response-format", "wav"]
-
-                with open(out_path, "wb") as f:
-                    proc = subprocess.run(
-                        cmd, stdout=f, stderr=subprocess.PIPE,
-                        env=self._env, timeout=15,
-                    )
-                if proc.returncode != 0:
-                    stderr_out = (proc.stderr or b"").decode("utf-8", errors="replace").strip()
-                    self._log_tts_error(
-                        f"tts CLI failed (code {proc.returncode}): {stderr_out}", text)
-                    self._record_api_gen_failure()
-                    try:
-                        os.unlink(out_path)
-                    except OSError:
-                        pass
-                    return None
-
-                # Verify output file is a valid WAV (not empty or truncated)
-                try:
-                    fsize = os.path.getsize(out_path)
-                    if fsize < 44:  # WAV header is 44 bytes minimum
+            try:
+                if self._local:
+                    if not self._espeak:
+                        self._log_tts_error("espeak-ng not available", text)
+                        return None
+                    # espeak-ng outputs WAV directly; scale WPM by speed
+                    wpm = int(TTS_SPEED * self._speed)
+                    cmd = [self._espeak, "--stdout", "-s", str(wpm), text]
+                    with open(out_path, "wb") as f:
+                        proc = subprocess.run(
+                            cmd, stdout=f, stderr=subprocess.PIPE,
+                            env=self._env, timeout=10,
+                        )
+                    if proc.returncode != 0:
+                        stderr_out = (proc.stderr or b"").decode("utf-8", errors="replace").strip()
                         self._log_tts_error(
-                            f"tts CLI produced invalid WAV ({fsize} bytes)", text)
+                            f"espeak-ng failed (code {proc.returncode}): {stderr_out}", text)
+                        return None
+                else:
+                    if not self._tts_bin:
+                        self._log_tts_error("tts binary not available", text)
+                        self._record_api_gen_failure()
+                        return None
+
+                    # Skip if API is known-broken (saves 10s timeout per call)
+                    if not self._api_gen_available():
+                        return None
+
+                    # Build tts command from config (explicit flags)
+                    if self._config:
+                        cmd = [self._tts_bin] + self._config.tts_cli_args(
+                            text, voice_override=voice_override,
+                            emotion_override=emotion_override,
+                            model_override=model_override)
+                    else:
+                        # Legacy fallback: no config, use env vars
+                        cmd = [self._tts_bin, text, "--stdout", "--response-format", "wav"]
+
+                    with open(out_path, "wb") as f:
+                        proc = subprocess.run(
+                            cmd, stdout=f, stderr=subprocess.PIPE,
+                            env=self._env, timeout=15,
+                        )
+                    if proc.returncode != 0:
+                        stderr_out = (proc.stderr or b"").decode("utf-8", errors="replace").strip()
+                        self._log_tts_error(
+                            f"tts CLI failed (code {proc.returncode}): {stderr_out}", text)
                         self._record_api_gen_failure()
                         try:
                             os.unlink(out_path)
                         except OSError:
                             pass
                         return None
-                except OSError:
-                    pass
 
-            self._cache[key] = out_path
-            self._record_api_gen_success()
-            return out_path
+                    # Verify output file is a valid WAV (not empty or truncated)
+                    try:
+                        fsize = os.path.getsize(out_path)
+                        if fsize < 44:  # WAV header is 44 bytes minimum
+                            self._log_tts_error(
+                                f"tts CLI produced invalid WAV ({fsize} bytes)", text)
+                            self._record_api_gen_failure()
+                            try:
+                                os.unlink(out_path)
+                            except OSError:
+                                pass
+                            return None
+                    except OSError:
+                        pass
 
-        except subprocess.TimeoutExpired:
-            self._log_tts_error("TTS generation timed out", text)
-            if not self._local:
-                self._record_api_gen_failure()
-            return None
-        except Exception as e:
-            self._log_tts_error(f"TTS generation exception: {e}", text)
-            if not self._local:
-                self._record_api_gen_failure()
-            return None
+                self._cache[key] = out_path
+                self._record_api_gen_success()
+                return out_path
+
+            except subprocess.TimeoutExpired:
+                self._log_tts_error("TTS generation timed out", text)
+                if not self._local:
+                    self._record_api_gen_failure()
+                return None
+            except Exception as e:
+                self._log_tts_error(f"TTS generation exception: {e}", text)
+                if not self._local:
+                    self._record_api_gen_failure()
+                return None
 
     def pregenerate(self, texts: list[str]) -> None:
         """Generate audio clips for all texts in parallel.
