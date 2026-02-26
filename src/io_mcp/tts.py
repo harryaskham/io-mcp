@@ -530,15 +530,36 @@ class TTSEngine:
               model_override: Optional[str] = None) -> None:
         """Speak text and BLOCK until playback finishes.
 
+        Uses streaming TTS for uncached audio (same as speak_async but blocking)
+        to avoid the 5-second file generation timeout. Cached audio uses the
+        fast play_cached path.
+
         When in local mode, uses the configured local backend (termux-tts-speak
         or espeak-ng) rather than always falling back to espeak file generation.
         """
         if self._local and self._local_backend == "termux" and self._termux_exec:
             self._speak_termux(text)
             return
-        self.play_cached(text, block=True, voice_override=voice_override,
-                        emotion_override=emotion_override,
-                        model_override=model_override)
+        # Check cache first — if cached, use play_cached (instant)
+        key = self._cache_key(text, voice_override, emotion_override,
+                              model_override=model_override)
+        cached = self._cache.get(key)
+        if cached and os.path.isfile(cached):
+            self.play_cached(text, block=True, voice_override=voice_override,
+                            emotion_override=emotion_override,
+                            model_override=model_override)
+        elif not self._local and self._tts_bin and self._config:
+            # Uncached API audio — use streaming (blocking) to avoid the
+            # file generation timeout that causes speak() to return instantly
+            self.speak_streaming(text, voice_override=voice_override,
+                               emotion_override=emotion_override,
+                               model_override=model_override,
+                               block=True)
+        else:
+            # Local mode or no config — fall back to play_cached
+            self.play_cached(text, block=True, voice_override=voice_override,
+                            emotion_override=emotion_override,
+                            model_override=model_override)
 
     def speak_async(self, text: str, voice_override: Optional[str] = None,
                     emotion_override: Optional[str] = None,
