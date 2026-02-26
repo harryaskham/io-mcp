@@ -8,10 +8,10 @@ from __future__ import annotations
 
 import os
 import subprocess
-import threading
 import time
 from typing import TYPE_CHECKING
 
+from textual import work
 from textual.widgets import Label, ListView, RichLog
 
 from .themes import DEFAULT_SCHEME, get_scheme
@@ -100,31 +100,39 @@ class ViewsMixin:
         pane_view.clear()
         pane_view.display = True
 
-        def _refresh_pane():
-            try:
-                is_remote = hostname and hostname not in ("", "localhost", os.uname().nodename)
-                if is_remote:
-                    cmd = ["ssh", "-o", "ConnectTimeout=2", hostname,
-                           f"tmux capture-pane -p -t {pane} -S -50"]
-                else:
-                    cmd = ["tmux", "capture-pane", "-p", "-t", pane, "-S", "-50"]
-
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
-                if result.returncode == 0:
-                    content = result.stdout
-                    try:
-                        self.call_from_thread(lambda: self._update_pane_view(content))
-                    except Exception:
-                        pass
-            except Exception:
-                pass
+        # Store pane info for the worker
+        self._pane_view_hostname = hostname
+        self._pane_view_pane = pane
 
         # Initial refresh
-        threading.Thread(target=_refresh_pane, daemon=True).start()
+        self._refresh_pane_worker()
 
         # Auto-refresh every 2 seconds
-        self._pane_refresh_timer = self.set_interval(2.0, lambda: threading.Thread(
-            target=_refresh_pane, daemon=True).start())
+        self._pane_refresh_timer = self.set_interval(
+            2.0, lambda: self._refresh_pane_worker())
+
+    @work(thread=True, exit_on_error=False, name="refresh_pane", exclusive=True)
+    def _refresh_pane_worker(self: "IoMcpApp") -> None:
+        """Worker: capture tmux pane content in background thread."""
+        hostname = getattr(self, '_pane_view_hostname', '')
+        pane = getattr(self, '_pane_view_pane', '')
+        try:
+            is_remote = hostname and hostname not in ("", "localhost", os.uname().nodename)
+            if is_remote:
+                cmd = ["ssh", "-o", "ConnectTimeout=2", hostname,
+                       f"tmux capture-pane -p -t {pane} -S -50"]
+            else:
+                cmd = ["tmux", "capture-pane", "-p", "-t", pane, "-S", "-50"]
+
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                content = result.stdout
+                try:
+                    self.call_from_thread(lambda: self._update_pane_view(content))
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def _update_pane_view(self: "IoMcpApp", content: str) -> None:
         """Update the pane view widget with captured tmux output."""
@@ -173,65 +181,71 @@ class ViewsMixin:
             except Exception:
                 pass
 
-        def _do_send():
+        session_name = session.name
+        self._speak_ui(f"Sending to {session_name}")
+        self._send_to_agent_pane_worker(pane, hostname, is_remote, message, session_name)
+
+    @work(thread=True, exit_on_error=False, name="send_to_pane")
+    def _send_to_agent_pane_worker(
+        self: "IoMcpApp", pane: str, hostname: str, is_remote: bool,
+        message: str, session_name: str,
+    ) -> None:
+        """Worker: send message to agent's tmux pane in background thread."""
+        try:
+            # Try tmux-cli first (more reliable with Enter key handling)
+            tmux_cli = None
             try:
-                # Try tmux-cli first (more reliable with Enter key handling)
-                tmux_cli = None
-                try:
-                    result = subprocess.run(
-                        ["which", "tmux-cli"], capture_output=True, text=True, timeout=3,
-                    )
-                    if result.returncode == 0:
-                        tmux_cli = result.stdout.strip()
-                except Exception:
-                    pass
-
-                if tmux_cli:
-                    if is_remote:
-                        cmd = [
-                            "ssh", "-o", "ConnectTimeout=5", hostname,
-                            f"tmux-cli send {repr(message)} --pane={pane}",
-                        ]
-                    else:
-                        cmd = [tmux_cli, "send", message, f"--pane={pane}"]
-                else:
-                    # Fallback to tmux send-keys
-                    if is_remote:
-                        cmd = [
-                            "ssh", "-o", "ConnectTimeout=5", hostname,
-                            f"tmux send-keys -t {pane} {repr(message)} Enter",
-                        ]
-                    else:
-                        cmd = ["tmux", "send-keys", "-t", pane, message, "Enter"]
-
                 result = subprocess.run(
-                    cmd, capture_output=True, text=True, timeout=10,
+                    ["which", "tmux-cli"], capture_output=True, text=True, timeout=3,
                 )
                 if result.returncode == 0:
-                    try:
-                        self.call_from_thread(
-                            lambda: self._speak_ui(f"Message sent to {session.name}")
-                        )
-                    except Exception:
-                        pass
+                    tmux_cli = result.stdout.strip()
+            except Exception:
+                pass
+
+            if tmux_cli:
+                if is_remote:
+                    cmd = [
+                        "ssh", "-o", "ConnectTimeout=5", hostname,
+                        f"tmux-cli send {repr(message)} --pane={pane}",
+                    ]
                 else:
-                    err = result.stderr.strip()[:100] if result.stderr else "unknown error"
-                    try:
-                        self.call_from_thread(
-                            lambda: self._speak_ui(f"Failed to send: {err}")
-                        )
-                    except Exception:
-                        pass
-            except Exception as e:
+                    cmd = [tmux_cli, "send", message, f"--pane={pane}"]
+            else:
+                # Fallback to tmux send-keys
+                if is_remote:
+                    cmd = [
+                        "ssh", "-o", "ConnectTimeout=5", hostname,
+                        f"tmux send-keys -t {pane} {repr(message)} Enter",
+                    ]
+                else:
+                    cmd = ["tmux", "send-keys", "-t", pane, message, "Enter"]
+
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode == 0:
                 try:
                     self.call_from_thread(
-                        lambda: self._speak_ui(f"Send error: {str(e)[:80]}")
+                        lambda: self._speak_ui(f"Message sent to {session_name}")
                     )
                 except Exception:
                     pass
-
-        self._speak_ui(f"Sending to {session.name}")
-        threading.Thread(target=_do_send, daemon=True).start()
+            else:
+                err = result.stderr.strip()[:100] if result.stderr else "unknown error"
+                try:
+                    self.call_from_thread(
+                        lambda: self._speak_ui(f"Failed to send: {err}")
+                    )
+                except Exception:
+                    pass
+        except Exception as e:
+            try:
+                self.call_from_thread(
+                    lambda: self._speak_ui(f"Send error: {str(e)[:80]}")
+                )
+            except Exception:
+                pass
 
     def _action_interrupt_agent(self: "IoMcpApp") -> None:
         """Open text input modal to send a message directly to the agent's tmux pane.
