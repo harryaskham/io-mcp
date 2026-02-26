@@ -2100,8 +2100,15 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                     done_deduped.append((item, sess))
 
             total = len(all_pending) + len(done_deduped)
+            multi_agent = self.manager.count() > 1
 
             if total == 0 and not any_registered:
+                inbox_list.display = False
+                return
+
+            # Auto-hide inbox when there's only one pending choice and no
+            # done items — the left pane adds no value in single-item mode
+            if total <= 1 and not multi_agent:
                 inbox_list.display = False
                 return
 
@@ -2109,7 +2116,6 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
             s = getattr(self, '_cs', {})
             accent_color = s.get('accent', '#88c0d0')
-            multi_agent = self.manager.count() > 1
 
             # Determine active items across all sessions
             active_items = set()

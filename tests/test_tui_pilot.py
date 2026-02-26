@@ -251,7 +251,7 @@ async def test_message_mode_opens():
 
 @pytest.mark.asyncio
 async def test_inbox_list_hidden_with_single_item():
-    """Inbox list (left pane) is always visible when agent is registered."""
+    """Inbox list (left pane) auto-hides when only one choice item in single-agent mode."""
     app = make_app()
     async with app.run_test() as pilot:
         session, _ = app.manager.get_or_create("test-1")
@@ -273,8 +273,8 @@ async def test_inbox_list_hidden_with_single_item():
         await pilot.pause(0.1)
 
         inbox_list = app.query_one("#inbox-list", ListView)
-        # Inbox pane is always visible once agent is connected
-        assert inbox_list.display is True
+        # Inbox pane auto-hides with single item in single-agent mode
+        assert inbox_list.display is False
 
         # Main content should be visible
         main_content = app.query_one("#main-content")
@@ -364,7 +364,11 @@ async def test_inbox_items_show_agent_name_in_multi_agent_mode():
 
 @pytest.mark.asyncio
 async def test_inbox_items_no_agent_name_in_single_agent_mode():
-    """Inbox items do NOT show agent name when only one agent is connected."""
+    """Inbox items do NOT show agent name when only one agent is connected.
+
+    Uses multiple pending items so the inbox pane is visible
+    (single-item mode auto-hides the inbox).
+    """
     from io_mcp.session import InboxItem
 
     app = make_app()
@@ -375,8 +379,11 @@ async def test_inbox_items_no_agent_name_in_single_agent_mode():
         session.name = "Solo Agent"
         app.on_session_created(session)
 
+        # Need 2+ pending choice items so inbox stays visible in single-agent mode
         item1 = InboxItem(kind="choices", preamble="Pick a file", choices=[{"label": "A", "summary": ""}])
+        item2 = InboxItem(kind="choices", preamble="Pick a color", choices=[{"label": "Red", "summary": ""}])
         session.enqueue(item1)
+        session.enqueue(item2)
         session.preamble = item1.preamble
         session.choices = list(item1.choices)
         session.active = True
