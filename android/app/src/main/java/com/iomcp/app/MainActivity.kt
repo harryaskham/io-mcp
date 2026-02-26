@@ -15,6 +15,8 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -171,6 +173,7 @@ fun IoMcpScreen(
     var messageText by remember { mutableStateOf("") }
     var speechLog by remember { mutableStateOf<List<String>>(emptyList()) }
     var isRecording by remember { mutableStateOf(false) }
+    var showSettings by remember { mutableStateOf(false) }
 
     // SSE connection
     LaunchedEffect(Unit) {
@@ -252,9 +255,27 @@ fun IoMcpScreen(
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.primaryContainer,
                 ),
+                actions = {
+                    IconButton(onClick = { showSettings = true }) {
+                        Icon(
+                            Icons.Default.Settings,
+                            contentDescription = "Settings",
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                        )
+                    }
+                },
             )
         },
     ) { padding ->
+
+        // Settings dialog
+        if (showSettings) {
+            SettingsDialog(
+                currentApiBase = apiBase,
+                context = context,
+                onDismiss = { showSettings = false },
+            )
+        }
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -489,6 +510,61 @@ fun ChoiceCard(
             }
         }
     }
+}
+
+// ─── Settings Dialog ──────────────────────────────────────────────────
+
+@Composable
+fun SettingsDialog(
+    currentApiBase: String,
+    context: android.content.Context,
+    onDismiss: () -> Unit,
+) {
+    var urlText by remember { mutableStateOf(currentApiBase) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Settings") },
+        text = {
+            Column {
+                Text(
+                    text = "Server URL",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 8.dp),
+                )
+                OutlinedTextField(
+                    value = urlText,
+                    onValueChange = { urlText = it },
+                    placeholder = { Text(DEFAULT_API_BASE) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    text = "Requires app restart to take effect",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    val prefs = context.getSharedPreferences("io_mcp", android.content.Context.MODE_PRIVATE)
+                    prefs.edit().putString("api_base", urlText.trim()).apply()
+                    onDismiss()
+                },
+            ) {
+                Text("Save")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        },
+    )
 }
 
 // ─── Data classes ─────────────────────────────────────────────────────
