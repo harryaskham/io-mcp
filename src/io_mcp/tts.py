@@ -16,7 +16,6 @@ import subprocess
 import tempfile
 import threading
 import time as _time_mod
-from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Optional
 
 from .subprocess_manager import AsyncSubprocessManager
@@ -375,10 +374,11 @@ class TTSEngine:
         if not to_generate:
             return
 
-        # Generate in parallel (up to 4 concurrent)
-        max_workers = min(4, len(to_generate))
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            pool.map(self._generate_to_file, to_generate)
+        # Generate sequentially to avoid overwhelming the API.
+        # Pregeneration runs in a background thread anyway, so parallel
+        # generation just increases API concurrency without benefit.
+        for text in to_generate:
+            self._generate_to_file(text)
 
     def play_cached(self, text: str, block: bool = False,
                     voice_override: Optional[str] = None,
