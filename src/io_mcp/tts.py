@@ -789,9 +789,9 @@ class TTSEngine:
         self.stop_sync()
 
         try:
-            # Pipe tts stdout directly to paplay — audio starts immediately
-            # WAV header is in the stream, so paplay can decode it directly.
-            # No lock needed — the subprocess manager handles tracking.
+            # Start TTS process first and verify we get a valid WAV header
+            # before connecting paplay. This prevents "Failed to open audio
+            # file" errors when the TTS API is slow or errors out.
             tts_tracked = self._mgr.start(
                 cmd,
                 tag="tts_stream",
@@ -800,18 +800,74 @@ class TTSEngine:
                 env=self._env,
             )
             tts_proc = tts_tracked.proc
+
+            # Read the WAV header (44 bytes) with a timeout.
+            # If TTS fails or is too slow, we bail early instead of
+            # giving paplay an empty/corrupt stream.
+            import select
+            header = b""
+            deadline = _time_mod.time() + 10  # 10s to get WAV header
+            while len(header) < 44 and _time_mod.time() < deadline:
+                ready, _, _ = select.select([tts_proc.stdout], [], [], 0.5)
+                if ready:
+                    chunk = tts_proc.stdout.read(44 - len(header))
+                    if not chunk:
+                        break  # EOF — TTS process closed stdout
+                    header += chunk
+                # Check if TTS process died
+                if tts_proc.poll() is not None and not ready:
+                    break
+
+            if len(header) < 44 or header[:4] != b"RIFF":
+                # TTS failed to produce valid WAV — get diagnostics
+                tts_stderr = ""
+                try:
+                    tts_proc.wait(timeout=2)
+                    tts_stderr = (tts_proc.stderr.read() or b"").decode("utf-8", errors="replace").strip()
+                except Exception:
+                    pass
+                self._log_tts_error(
+                    f"tts CLI produced no/invalid WAV header ({len(header)} bytes): {tts_stderr[:120]}",
+                    text)
+                self._record_api_gen_failure()
+                self._local_tts_fallback(text)
+                return
+
+            # Header looks valid — start paplay with a relay thread that
+            # feeds the header we already read + the rest of tts stdout.
             play_tracked = self._mgr.start(
                 [self._paplay],
                 tag="playback",
-                stdin=tts_proc.stdout,
+                stdin=subprocess.PIPE,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
                 env=self._env,
             )
             play_proc = play_tracked.proc
-            # Allow tts_proc to receive SIGPIPE if paplay exits
-            if tts_proc.stdout:
-                tts_proc.stdout.close()
+
+            def _relay():
+                """Relay header + remaining tts stdout to paplay stdin."""
+                try:
+                    play_proc.stdin.write(header)
+                    while True:
+                        chunk = tts_proc.stdout.read(4096)
+                        if not chunk:
+                            break
+                        play_proc.stdin.write(chunk)
+                except (BrokenPipeError, OSError):
+                    pass
+                finally:
+                    try:
+                        play_proc.stdin.close()
+                    except Exception:
+                        pass
+                    try:
+                        tts_proc.stdout.close()
+                    except Exception:
+                        pass
+
+            relay_thread = threading.Thread(target=_relay, daemon=True)
+            relay_thread.start()
 
             if block:
                 tts_failed = False
