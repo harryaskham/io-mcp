@@ -2,30 +2,12 @@
 # These options appear at the end of every choice list (silent = not read during intro)
 
 extraOptions:
-  - title: Check for issues in recent swarm work
-    description: Look at recently merged PRs on main and the beads backlog and ensure quality is high
+  - title: Audit io-mcp logs
+    description: View the logs via MCP and look for any issues
     silent: true
   - title: Propose next work
     description: Suggest the next 3 most impactful things to work on
     silent: true
   - title: Commit and push
     description: Stage all changes, commit with a descriptive message, and push to the remote
-    silent: true
-  - title: Add tests
-    description: Write tests for recent changes and ensure all old and new tests pass
-    silent: true
-  - title: Build and release
-    description: Build the project and deploy/release it (push APK for mobile, nix build for CLI)
-    silent: true
-  - title: Branch and PR
-    description: Commit changes to a new branch and create a pull request
-    silent: true
-  - title: Merge last PR
-    description: Merge the most recently created pull request
-    silent: true
-  - title: Summarize session
-    description: Summarize all changes made in this coding session
-    silent: true
-  - title: Audit io-mcp logs
-    description: View the logs via MCP and look for any issues
     silent: true

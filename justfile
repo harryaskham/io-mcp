@@ -35,3 +35,6 @@ dev-desktop-rmconfig-tmux *FLAGS:
 # Desktop with default config
 dev-desktop-default *FLAGS:
     just dev-desktop --default-config {{ FLAGS }}
+
+demo:
+    just run --demo --port 8499
