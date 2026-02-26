@@ -2422,8 +2422,13 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 break
             if front.done:
                 continue
+            if front.processing:
+                # Another drain worker is already handling this item —
+                # don't double-process (which would kill its TTS playback)
+                break
 
             # ── Process speech item ──
+            front.processing = True
             self._activate_speech_item(session, front)
 
     def _activate_speech_item(self, session: Session, item: InboxItem) -> None:

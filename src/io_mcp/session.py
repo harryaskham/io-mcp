@@ -59,6 +59,8 @@ class InboxItem:
     event: threading.Event = field(default_factory=threading.Event)
     timestamp: float = field(default_factory=time.time)
     done: bool = False
+    # Processing guard — prevents multiple drain workers from activating the same item
+    processing: bool = False
     # Thread tracking — used to detect orphaned items when the HTTP thread dies
     owner_thread: Optional[threading.Thread] = field(default_factory=lambda: threading.current_thread())
 
