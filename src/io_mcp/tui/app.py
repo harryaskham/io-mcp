@@ -3743,13 +3743,46 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                         text = f"{btn['label']}. {btn.get('summary', '')}" if btn.get('summary') else btn['label']
                         self._tts.speak_async(text)
                 return
-            # System logs: read the log entry text
+            # System logs: read the log entry text and show full entry in preamble
             if getattr(self, '_system_logs_mode', False):
                 if isinstance(event.item, ChoiceItem):
                     entries = getattr(self, '_system_log_entries', [])
+                    full_entries = getattr(self, '_system_log_full_entries', [])
                     idx = event.item.display_index
                     if idx < len(entries):
                         self._tts.speak_async(entries[idx])
+                    # Show full entry in preamble for expanded view
+                    if idx < len(full_entries):
+                        full = full_entries[idx]
+                        s = self._cs
+                        # Try to pretty-format JSON log entries
+                        formatted = full
+                        try:
+                            import json as _json
+                            parsed = _json.loads(full)
+                            parts = []
+                            if "timestamp" in parsed:
+                                parts.append(f"[{s['fg_dim']}]{parsed['timestamp']}[/{s['fg_dim']}]")
+                            if "level" in parsed:
+                                lvl = parsed["level"]
+                                color = s['error'] if lvl in ("ERROR", "WARNING") else s['fg_dim']
+                                parts.append(f"[{color}]{lvl}[/{color}]")
+                            if "message" in parsed:
+                                parts.append(f"[{s['fg']}]{parsed['message']}[/{s['fg']}]")
+                            ctx = parsed.get("context", {})
+                            if ctx:
+                                ctx_parts = [f"{k}={v}" for k, v in ctx.items()]
+                                parts.append(f"[{s['fg_dim']}]{', '.join(ctx_parts)}[/{s['fg_dim']}]")
+                            if parts:
+                                formatted = "\n".join(parts)
+                        except (ValueError, TypeError, KeyError):
+                            # Not JSON — wrap the raw text
+                            formatted = f"[{s['fg']}]{full}[/{s['fg']}]"
+                        try:
+                            preamble = self.query_one("#preamble", Label)
+                            preamble.update(formatted)
+                        except Exception:
+                            pass
                 return
             # Help screen: read the shortcut description
             if getattr(self, '_help_mode', False):

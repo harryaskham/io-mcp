@@ -463,6 +463,7 @@ class ViewsMixin:
 
         # Store flat entries for TTS on scroll
         self._system_log_entries = []
+        self._system_log_full_entries = []  # full text for expanded view on scroll
 
         # Enter system logs mode (uses settings infrastructure for modal display)
         self._in_settings = True
@@ -495,6 +496,7 @@ class ViewsMixin:
                 summary = f"[dim]{detail}[/dim]" if detail else ""
                 list_view.append(ChoiceItem(label, summary, index=display_idx + 1, display_index=display_idx))
                 self._system_log_entries.append(f"{text}: {detail}")
+                self._system_log_full_entries.append(f"{text}: {detail}")
             elif entry_type == "tui_error":
                 # Error lines — use error color for "---" delimiters
                 if text.startswith("---"):
@@ -503,15 +505,18 @@ class ViewsMixin:
                     label = f"[{s['fg_dim']}]{text[:120]}[/{s['fg_dim']}]"
                 list_view.append(ChoiceItem(label, "", index=display_idx + 1, display_index=display_idx))
                 self._system_log_entries.append(text[:120])
+                self._system_log_full_entries.append(text)
             elif entry_type == "proxy":
                 label = f"[{s['fg_dim']}]{text[:120]}[/{s['fg_dim']}]"
                 list_view.append(ChoiceItem(label, "", index=display_idx + 1, display_index=display_idx))
                 self._system_log_entries.append(text[:120])
+                self._system_log_full_entries.append(text)
             elif entry_type == "speech":
                 label = f"[{s['blue']}]>[/{s['blue']}] {text[:100]}"
                 summary = f"[{s['fg_dim']}]{detail}[/{s['fg_dim']}]" if detail else ""
                 list_view.append(ChoiceItem(label, summary, index=display_idx + 1, display_index=display_idx))
                 self._system_log_entries.append(text[:100])
+                self._system_log_full_entries.append(text)
             display_idx += 1
 
         list_view.display = True
