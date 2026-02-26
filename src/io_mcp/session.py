@@ -546,6 +546,24 @@ class SessionManager:
         with self._lock:
             return [self.sessions[sid] for sid in self.session_order if sid in self.sessions]
 
+    def in_use_voices(self) -> set[str]:
+        """Return the set of voice_override values currently assigned to active sessions."""
+        with self._lock:
+            return {
+                s.voice_override
+                for s in self.sessions.values()
+                if s.voice_override is not None
+            }
+
+    def in_use_emotions(self) -> set[str]:
+        """Return the set of emotion_override values currently assigned to active sessions."""
+        with self._lock:
+            return {
+                s.emotion_override
+                for s in self.sessions.values()
+                if s.emotion_override is not None
+            }
+
     def get(self, session_id: str) -> Optional[Session]:
         """Get a session by ID."""
         with self._lock:

@@ -1054,3 +1054,55 @@ class TestUnifiedInboxDataCollection:
         n_agents = len(set(item["session_name"] for item in unified))
         assert n_agents == 2
         assert len(unified) == 3
+
+
+class TestSessionManagerVoiceTracking:
+    """Tests for in_use_voices/in_use_emotions tracking methods."""
+
+    def test_in_use_voices_empty(self):
+        m = SessionManager()
+        assert m.in_use_voices() == set()
+
+    def test_in_use_voices_with_overrides(self):
+        m = SessionManager()
+        s1, _ = m.get_or_create("a")
+        s2, _ = m.get_or_create("b")
+        s1.voice_override = "sage"
+        s2.voice_override = "coral"
+        assert m.in_use_voices() == {"sage", "coral"}
+
+    def test_in_use_voices_ignores_none(self):
+        m = SessionManager()
+        s1, _ = m.get_or_create("a")
+        s2, _ = m.get_or_create("b")
+        s1.voice_override = "sage"
+        # s2.voice_override is None by default
+        assert m.in_use_voices() == {"sage"}
+
+    def test_in_use_voices_after_removal(self):
+        m = SessionManager()
+        s1, _ = m.get_or_create("a")
+        s2, _ = m.get_or_create("b")
+        s1.voice_override = "sage"
+        s2.voice_override = "coral"
+        m.remove("a")
+        assert m.in_use_voices() == {"coral"}
+
+    def test_in_use_emotions_empty(self):
+        m = SessionManager()
+        assert m.in_use_emotions() == set()
+
+    def test_in_use_emotions_with_overrides(self):
+        m = SessionManager()
+        s1, _ = m.get_or_create("a")
+        s2, _ = m.get_or_create("b")
+        s1.emotion_override = "happy"
+        s2.emotion_override = "calm"
+        assert m.in_use_emotions() == {"happy", "calm"}
+
+    def test_in_use_emotions_ignores_none(self):
+        m = SessionManager()
+        s1, _ = m.get_or_create("a")
+        s2, _ = m.get_or_create("b")
+        s1.emotion_override = "happy"
+        assert m.in_use_emotions() == {"happy"}

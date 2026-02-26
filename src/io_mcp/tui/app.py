@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import random
 import shutil
 import subprocess
 import sys
@@ -3431,10 +3432,37 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
     # ─── Session lifecycle ─────────────────────────────────────────
 
+    def _pick_random_voice(self, voice_rot: list[dict]) -> dict:
+        """Pick a random voice from rotation that isn't currently in use.
+
+        Prefers voices not assigned to any active session. If all voices
+        are in use, picks the one assigned to the fewest sessions (LRU-ish).
+        """
+        in_use = self.manager.in_use_voices()
+        # Find candidates not currently in use
+        available = [v for v in voice_rot if v.get("voice") not in in_use]
+        if available:
+            return random.choice(available)
+        # All voices in use — just pick randomly from the full list
+        return random.choice(voice_rot)
+
+    def _pick_random_emotion(self, emotion_rot: list[str]) -> str:
+        """Pick a random emotion from rotation that isn't currently in use.
+
+        Prefers emotions not assigned to any active session. If all emotions
+        are in use, picks randomly from the full list.
+        """
+        in_use = self.manager.in_use_emotions()
+        available = [e for e in emotion_rot if e not in in_use]
+        if available:
+            return random.choice(available)
+        return random.choice(emotion_rot)
+
     def on_session_created(self, session: Session) -> None:
         """Called when a new session is created (from MCP thread).
 
         Assigns voice/emotion from rotation lists if configured.
+        Supports random assignment (default) or legacy sequential mode.
         """
         # Audio cue for new agent connection
         self._tts.play_chime("connect")
@@ -3443,15 +3471,23 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         if self._config:
             voice_rot = self._config.tts_voice_rotation
             emotion_rot = self._config.tts_emotion_rotation
-            session_idx = self.manager.count() - 1  # 0-based
+            use_random = self._config.tts_random_rotation
 
             if voice_rot:
-                entry = voice_rot[session_idx % len(voice_rot)]
+                if use_random:
+                    entry = self._pick_random_voice(voice_rot)
+                else:
+                    session_idx = self.manager.count() - 1  # 0-based
+                    entry = voice_rot[session_idx % len(voice_rot)]
                 session.voice_override = entry.get("voice")
                 if entry.get("model"):
                     session.model_override = entry["model"]
             if emotion_rot:
-                session.emotion_override = emotion_rot[session_idx % len(emotion_rot)]
+                if use_random:
+                    session.emotion_override = self._pick_random_emotion(emotion_rot)
+                else:
+                    session_idx = self.manager.count() - 1
+                    session.emotion_override = emotion_rot[session_idx % len(emotion_rot)]
 
         try:
             self.call_from_thread(self._update_tab_bar)
