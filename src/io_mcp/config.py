@@ -144,6 +144,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
                 {"voice": "en-US-Noa:MAI-Voice-1", "model": "mai-voice-1"},
                 {"voice": "en-US-Teo:MAI-Voice-1", "model": "mai-voice-1"},
             ],
+            "randomRotation": True,  # random (True) vs sequential (False) voice/emotion assignment
             "styleRotation": [
                 "happy", "calm", "excited", "serious", "friendly",
                 "neutral", "storyteller", "gentle", "shy",
@@ -623,6 +624,16 @@ class IoMcpConfig:
     def tts_style_rotation(self) -> list[str]:
         """Alias for tts_emotion_rotation."""
         return self.tts_emotion_rotation
+
+    @property
+    def tts_random_rotation(self) -> bool:
+        """Whether to randomly assign voices/emotions from rotation lists.
+
+        When True (default), new sessions get a random voice/emotion that
+        isn't currently in use by another active session. When False, uses
+        the legacy sequential assignment (session_idx % len(rotation)).
+        """
+        return self.runtime.get("tts", {}).get("randomRotation", True)
 
     @property
     def tts_local_backend(self) -> str:

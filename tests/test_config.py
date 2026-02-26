@@ -310,6 +310,9 @@ class TestConfigAccessors:
         # Legacy alias
         assert config_with_defaults.tts_emotion_rotation == style_rot
 
+    def test_random_rotation_default_true(self, config_with_defaults):
+        assert config_with_defaults.tts_random_rotation is True
+
     def test_extra_options_default_empty(self, config_with_defaults):
         # Default config has no extra options (unless local .io-mcp.yml is present)
         # This test works because tmp_config is in a temp dir with no .io-mcp.yml
