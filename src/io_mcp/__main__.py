@@ -635,6 +635,13 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
     def _tool_set_voice(args, session_id):
         voice = args.get("voice", "")
         if frontend.config:
+            valid = frontend.config.tts_voice_options
+            if valid and voice not in valid:
+                return json.dumps({
+                    "error": f"Unsupported voice: {voice}",
+                    "valid_voices": valid,
+                    "current_model": frontend.config.tts_model_name,
+                })
             frontend.config.set_tts_voice(voice)
             frontend.config.save()
             frontend.tts.clear_cache()
@@ -643,6 +650,12 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
     def _tool_set_tts_model(args, session_id):
         model = args.get("model", "")
         if frontend.config:
+            valid = frontend.config.tts_model_names
+            if valid and model not in valid:
+                return json.dumps({
+                    "error": f"Unsupported TTS model: {model}",
+                    "valid_models": valid,
+                })
             frontend.config.set_tts_model(model)
             frontend.config.save()
             frontend.tts.clear_cache()
@@ -652,6 +665,12 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
     def _tool_set_stt_model(args, session_id):
         model = args.get("model", "")
         if frontend.config:
+            valid = list(frontend.config.models.get("stt", {}).keys())
+            if valid and model not in valid:
+                return json.dumps({
+                    "error": f"Unsupported STT model: {model}",
+                    "valid_models": valid,
+                })
             frontend.config.set_stt_model(model)
             frontend.config.save()
         return f"STT model set to {model}"
@@ -659,6 +678,12 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
     def _tool_set_emotion(args, session_id):
         style = args.get("emotion", "")
         if frontend.config:
+            valid = frontend.config.tts_style_options
+            if valid and style not in valid:
+                return json.dumps({
+                    "error": f"Unsupported emotion/style: {style}",
+                    "valid_styles": valid,
+                })
             frontend.config.set_tts_style(style)
             frontend.config.save()
             frontend.tts.clear_cache()
