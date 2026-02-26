@@ -29,6 +29,7 @@ from ..session import Session, SessionManager, SpeechEntry, HistoryEntry, InboxI
 from ..settings import Settings
 from ..tts import PORTAUDIO_LIB, TTSEngine, _find_binary
 from .. import api as frontend_api
+from .. import state as ui_state
 from ..logging import get_logger, log_context, TUI_ERROR_LOG
 from ..notifications import (
     NotificationDispatcher, NotificationEvent, create_dispatcher,
@@ -259,7 +260,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         self._inbox_scroll_index = 0  # cursor position in inbox list
         self._inbox_was_visible = False  # saved inbox state for message mode
         self._inbox_last_generation = -1  # tracks session._inbox_generation to skip no-op rebuilds
-        self._inbox_collapsed = False  # user-toggled collapse state
+        self._inbox_collapsed = ui_state.get("inbox_collapsed", False)  # persistent toggle
 
         # Notification webhooks
         self._notifier = create_dispatcher(config)
@@ -2082,6 +2083,12 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
             # Combined generation counter across all sessions
             gen = sum(s._inbox_generation for s in sessions)
+
+            # Always check collapsed state first (user toggle takes priority)
+            if self._inbox_collapsed:
+                inbox_list.display = False
+                return
+
             if gen == self._inbox_last_generation:
                 if self._inbox_scroll_index < len(inbox_list.children):
                     inbox_list.index = self._inbox_scroll_index
@@ -2118,12 +2125,6 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             multi_agent = self.manager.count() > 1
 
             if total == 0 and not any_registered:
-                inbox_list.display = False
-                return
-
-            # Auto-hide inbox when there's only one pending choice and no
-            # done items — the left pane adds no value in single-item mode
-            if total <= 1 and not multi_agent:
                 inbox_list.display = False
                 return
 
@@ -3453,16 +3454,18 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             self._speak_ui("No other tabs with choices")
 
     def action_toggle_sidebar(self) -> None:
-        """Toggle the inbox sidebar collapsed/expanded."""
+        """Toggle the inbox sidebar collapsed/expanded. Persists across restarts."""
         session = self._focused()
         if session and (session.input_mode or session.voice_recording):
             return
         if self._inbox_collapsed:
             self._inbox_collapsed = False
+            ui_state.set("inbox_collapsed", False)
             self._update_inbox_list()
             self._speak_ui("Inbox expanded")
         else:
             self._inbox_collapsed = True
+            ui_state.set("inbox_collapsed", True)
             try:
                 self.query_one("#inbox-list").display = False
             except Exception:

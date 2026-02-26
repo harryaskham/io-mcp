@@ -251,7 +251,7 @@ async def test_message_mode_opens():
 
 @pytest.mark.asyncio
 async def test_inbox_list_hidden_with_single_item():
-    """Inbox list (left pane) auto-hides when only one choice item in single-agent mode."""
+    """Inbox list (left pane) is hidden when user explicitly collapses it with 'b' key."""
     app = make_app()
     async with app.run_test() as pilot:
         session, _ = app.manager.get_or_create("test-1")
@@ -273,7 +273,14 @@ async def test_inbox_list_hidden_with_single_item():
         await pilot.pause(0.1)
 
         inbox_list = app.query_one("#inbox-list", ListView)
-        # Inbox pane auto-hides with single item in single-agent mode
+        # Inbox pane is visible by default (user can collapse with 'b')
+        # With single item it used to auto-hide, but now it stays visible
+        # until user explicitly collapses it
+
+        # Explicitly collapse
+        app._inbox_collapsed = True
+        app._update_inbox_list()
+        await pilot.pause(0.1)
         assert inbox_list.display is False
 
         # Main content should be visible
