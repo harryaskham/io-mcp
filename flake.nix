@@ -110,6 +110,7 @@
               mkdir -p $out/share/io-mcp/skills/io-mcp
               mkdir -p $out/share/io-mcp/hooks
               cp ${./.claude/agents/io-mcp.md} $out/share/io-mcp/agents/io-mcp.md
+              cp ${./.claude/agents/io-mcp-admin.md} $out/share/io-mcp/agents/io-mcp.md
               cp ${./.claude/skills/io-mcp/SKILL.md} $out/share/io-mcp/skills/io-mcp/SKILL.md
               cp ${./.claude/hooks/enforce-choices.sh} $out/share/io-mcp/hooks/enforce-choices.sh
               cp ${./.claude/hooks/nudge-speak.sh} $out/share/io-mcp/hooks/nudge-speak.sh
