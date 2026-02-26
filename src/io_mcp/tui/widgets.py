@@ -16,6 +16,10 @@ from textual.reactive import reactive
 from textual.screen import ModalScreen
 from textual.widgets import Label, ListItem, ListView, Static, TextArea
 
+from ..logging import get_logger, log_context, TUI_ERROR_LOG
+
+_log = get_logger("io-mcp.tui.widgets", TUI_ERROR_LOG)
+
 
 # ─── Safe action decorator ────────────────────────────────────────────────
 
@@ -30,13 +34,12 @@ def _safe_action(fn):
         try:
             return fn(self, *args, **kwargs)
         except Exception as exc:
-            import traceback
             err = f"{type(exc).__name__}: {str(exc)[:100]}"
-            try:
-                with open("/tmp/io-mcp-tui-error.log", "a") as f:
-                    f.write(f"\n--- {fn.__name__} ---\n{traceback.format_exc()}\n")
-            except Exception:
-                pass
+            _log.error(
+                "Error in %s: %s", fn.__name__, err,
+                exc_info=True,
+                extra={"context": log_context(tool_name=fn.__name__)},
+            )
             try:
                 self._tts.speak_async(f"Error in {fn.__name__}: {err}")
             except Exception:

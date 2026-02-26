@@ -29,9 +29,12 @@ from ..session import Session, SessionManager, SpeechEntry, HistoryEntry, InboxI
 from ..settings import Settings
 from ..tts import PORTAUDIO_LIB, TTSEngine, _find_binary
 from .. import api as frontend_api
+from ..logging import get_logger, log_context, TUI_ERROR_LOG
 from ..notifications import (
     NotificationDispatcher, NotificationEvent, create_dispatcher,
 )
+
+_log = get_logger("io-mcp.tui", TUI_ERROR_LOG)
 
 from .themes import COLOR_SCHEMES, DEFAULT_SCHEME, get_scheme, build_css
 from .widgets import ChoiceItem, InboxListItem, DwellBar, ManagedListView, TextInputModal, VOICE_REQUESTED, EXTRA_OPTIONS, PRIMARY_EXTRAS, SECONDARY_EXTRAS, MORE_OPTIONS_ITEM, _safe_action
@@ -554,8 +557,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             except Exception:
                 pass
             try:
-                with open("/tmp/io-mcp-tui-error.log", "a") as f:
-                    f.write(f"\n--- PulseAudio recovered ---\n")
+                _log.info("PulseAudio recovered")
             except Exception:
                 pass
             # Notify recovery
@@ -676,10 +678,9 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         attempt = self._pulse_reconnect_attempts
 
         try:
-            with open("/tmp/io-mcp-tui-error.log", "a") as f:
-                f.write(
-                    f"\n--- PulseAudio reconnect attempt {attempt}/{max_attempts} ---\n"
-                )
+            _log.warning(
+                "PulseAudio reconnect attempt %d/%d", attempt, max_attempts,
+            )
         except Exception:
             pass
 
@@ -706,10 +707,10 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             except Exception:
                 pass
             try:
-                with open("/tmp/io-mcp-tui-error.log", "a") as f:
-                    f.write(f"  → PulseAudio reconnected successfully!\n")
-                    if diagnostic_info:
-                        f.write(f"    Diagnostics: {diagnostic_info}\n")
+                _log.info(
+                    "PulseAudio reconnected successfully",
+                    extra={"context": log_context(diagnostics=diagnostic_info)} if diagnostic_info else {},
+                )
             except Exception:
                 pass
             # Notify recovery
@@ -727,13 +728,11 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         else:
             remaining = max_attempts - attempt
             try:
-                with open("/tmp/io-mcp-tui-error.log", "a") as f:
-                    f.write(
-                        f"  → PulseAudio reconnect failed "
-                        f"({remaining} attempts remaining)\n"
-                    )
-                    if diagnostic_info:
-                        f.write(f"    Diagnostics: {diagnostic_info}\n")
+                _log.warning(
+                    "PulseAudio reconnect failed (%d attempts remaining)",
+                    remaining,
+                    extra={"context": log_context(diagnostics=diagnostic_info)} if diagnostic_info else {},
+                )
             except Exception:
                 pass
 
@@ -772,18 +771,13 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             steps = ["Restart io-mcp TUI to reset audio subsystem"]
 
         steps_text = "\n".join(f"  {i+1}. {s}" for i, s in enumerate(steps))
-        log_msg = (
-            f"\n--- PulseAudio auto-reconnect exhausted ---\n"
-            f"Recovery steps:\n{steps_text}\n"
+        _log.error(
+            "PulseAudio auto-reconnect exhausted",
+            extra={"context": log_context(
+                recovery_steps=steps,
+                diagnostics=diagnostic_info or "",
+            )},
         )
-        if diagnostic_info:
-            log_msg += f"Last diagnostics: {diagnostic_info}\n"
-
-        try:
-            with open("/tmp/io-mcp-tui-error.log", "a") as f:
-                f.write(log_msg)
-        except Exception:
-            pass
 
         # Speak recovery guidance (using termux fallback if PulseAudio is down)
         try:
@@ -1402,11 +1396,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         except Exception as exc:
             import traceback
             err = f"{type(exc).__name__}: {str(exc)[:200]}"
-            try:
-                with open("/tmp/io-mcp-tui-error.log", "a") as f:
-                    f.write(f"\n--- present_choices ---\n{traceback.format_exc()}\n")
-            except Exception:
-                pass
+            _log.error("present_choices error: %s", err, exc_info=True)
             # Speak the error so the user hears it
             try:
                 self._tts.speak_async(f"Choice presentation error: {str(exc)[:80]}")

@@ -20,9 +20,12 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Optional
 
 from .subprocess_manager import AsyncSubprocessManager
+from .logging import get_logger, log_context, TUI_ERROR_LOG
 
 if TYPE_CHECKING:
     from .config import IoMcpConfig
+
+_log = get_logger("io-mcp.tts", TUI_ERROR_LOG)
 
 
 # espeak-ng words per minute
@@ -165,43 +168,33 @@ class TTSEngine:
         self._total_failures += 1
         self._last_failure_time = _time_mod.time()
         self._last_failure_msg = message
-        try:
-            with open("/tmp/io-mcp-tui-error.log", "a") as f:
-                f.write(
-                    f"\n--- TTS playback failure "
-                    f"(consecutive: {self._consecutive_failures}, "
-                    f"total: {self._total_failures}) ---\n"
-                    f"{message}\n"
-                    f"PULSE_SERVER={self._env.get('PULSE_SERVER', 'unset')}\n"
-                )
-        except Exception:
-            pass
+        _log.warning(
+            "TTS playback failure: %s", message,
+            extra={"context": log_context(
+                consecutive=self._consecutive_failures,
+                total=self._total_failures,
+                pulse_server=self._env.get("PULSE_SERVER", "unset"),
+            )},
+        )
 
     def _log_recovery(self, attempt: int) -> None:
         """Log recovery from playback failures."""
-        try:
-            with open("/tmp/io-mcp-tui-error.log", "a") as f:
-                f.write(
-                    f"\n--- TTS recovered after {self._consecutive_failures} "
-                    f"failure(s), retry attempt {attempt} ---\n"
-                )
-        except Exception:
-            pass
+        _log.info(
+            "TTS recovered after %d failure(s), retry attempt %d",
+            self._consecutive_failures, attempt,
+        )
 
     def _log_tts_error(self, message: str, text: str = "") -> None:
         """Log a TTS generation error for diagnostics."""
         preview = text[:80] + ("..." if len(text) > 80 else "")
-        try:
-            with open("/tmp/io-mcp-tui-error.log", "a") as f:
-                f.write(
-                    f"\n--- TTS generation failure ---\n"
-                    f"{message}\n"
-                    f"text: {preview}\n"
-                    f"PULSE_SERVER={self._env.get('PULSE_SERVER', 'unset')}\n"
-                    f"tts_bin={self._tts_bin}\n"
-                )
-        except Exception:
-            pass
+        _log.error(
+            "TTS generation failure: %s", message,
+            extra={"context": log_context(
+                text_preview=preview,
+                pulse_server=self._env.get("PULSE_SERVER", "unset"),
+                tts_bin=self._tts_bin,
+            )},
+        )
 
     def _api_gen_available(self) -> bool:
         """Check whether API TTS generation should be attempted.
@@ -587,12 +580,7 @@ class TTSEngine:
                                    emotion_override=emotion_override,
                                    model_override=model_override)
             except Exception as e:
-                try:
-                    with open("/tmp/io-mcp-tui-error.log", "a") as f:
-                        import traceback
-                        f.write(f"\n--- speak_async error ---\n{traceback.format_exc()}\n")
-                except Exception:
-                    pass
+                _log.error("speak_async error", exc_info=True)
         threading.Thread(target=_do, daemon=True).start()
 
     def is_cached(self, text: str, voice_override: Optional[str] = None,
