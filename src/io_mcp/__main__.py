@@ -865,6 +865,47 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
         threading.Thread(target=_do_proxy_restart, daemon=True).start()
         return json.dumps({"status": "accepted", "message": "Proxy restarting. Agents must reconnect."})
 
+    def _tool_request_close(args, session_id):
+        """Request closing this agent's session with user confirmation."""
+        session = _get_session(session_id)
+        session.last_tool_name = "request_close"
+        reason = args.get("reason", "Work complete")
+
+        # Present confirmation to user
+        result = frontend.present_choices(session,
+            f"Agent wants to close session: {reason}",
+            [{"label": "Accept", "summary": f"Close this session ({session.name})"},
+             {"label": "Decline", "summary": "Keep the session open"}])
+
+        if result.get("selected", "").lower() == "accept":
+            # Close the session
+            name = session.name
+            try:
+                app = frontend._app
+                app.call_from_thread(lambda: app.on_session_removed(session_id))
+            except Exception:
+                # Fallback: remove directly from manager
+                frontend.manager.remove(session_id)
+                try:
+                    frontend.update_tab_bar()
+                except Exception:
+                    pass
+            return json.dumps({"status": "closed", "message": f"Session '{name}' closed."})
+
+        # User declined — ask for a reason
+        decline_result = frontend.present_choices(session,
+            "Why should the agent continue?",
+            [{"label": "Keep working", "summary": "Continue with more tasks"},
+             {"label": "Review changes", "summary": "Review what was done before closing"},
+             {"label": "Something else", "summary": "I have other instructions"}])
+
+        decline_reason = decline_result.get("selected", "Keep working")
+        return _attach_messages(json.dumps({
+            "status": "declined",
+            "reason": decline_reason,
+            "message": f"User wants the agent to continue: {decline_reason}",
+        }), session)
+
     def _tool_check_inbox(args, session_id):
         """Check for queued user messages without waiting for another tool call."""
         session = _get_session(session_id)
@@ -1175,6 +1216,7 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
         "reload_config": _tool_reload_config,
         "pull_latest": _tool_pull_latest,
         "run_command": _tool_run_command,
+        "request_close": _tool_request_close,
         "request_restart": _tool_request_restart,
         "request_proxy_restart": _tool_request_proxy_restart,
         "check_inbox": _tool_check_inbox,
