@@ -8,6 +8,7 @@ import android.util.Log
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.lifecycle.lifecycleScope
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -18,6 +19,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -36,6 +38,54 @@ import java.net.URL
 private const val TAG = "IoMcpApp"
 // Default API endpoint — override via intent extra "api_base" or SharedPreferences
 private const val DEFAULT_API_BASE = "http://localhost:8445"
+
+// ─── Nord Color Scheme ────────────────────────────────────────────────
+// Maps Nord palette (https://www.nordtheme.com) to Material3 color roles
+// Matches the TUI theme from src/io_mcp/tui/themes.py
+
+private val NordDarkColorScheme = darkColorScheme(
+    // Primary = Nord accent (Frost)
+    primary = Color(0xFF88C0D0),           // nord8 — accent
+    onPrimary = Color(0xFF2E3440),         // nord0 — bg
+    primaryContainer = Color(0xFF434C5E),  // nord2 — highlight_bg
+    onPrimaryContainer = Color(0xFFECEFF4), // nord6 — fg
+
+    // Secondary = Nord blue
+    secondary = Color(0xFF81A1C1),         // nord9 — blue
+    onSecondary = Color(0xFF2E3440),
+    secondaryContainer = Color(0xFF3B4252), // nord1 — bg_alt
+    onSecondaryContainer = Color(0xFFECEFF4),
+
+    // Tertiary = Nord purple
+    tertiary = Color(0xFFB48EAD),          // nord15 — purple
+    onTertiary = Color(0xFF2E3440),
+    tertiaryContainer = Color(0xFF434C5E),
+    onTertiaryContainer = Color(0xFFECEFF4),
+
+    // Error = Nord red
+    error = Color(0xFFBF616A),             // nord11 — error
+    onError = Color(0xFF2E3440),
+    errorContainer = Color(0xFF3B4252),
+    onErrorContainer = Color(0xFFBF616A),
+
+    // Background/Surface = Nord polar night
+    background = Color(0xFF2E3440),        // nord0 — bg
+    onBackground = Color(0xFFECEFF4),      // nord6 — fg
+    surface = Color(0xFF2E3440),           // nord0 — bg
+    onSurface = Color(0xFFECEFF4),         // nord6 — fg
+    surfaceVariant = Color(0xFF3B4252),    // nord1 — bg_alt
+    onSurfaceVariant = Color(0xFF616E88),  // fg_dim
+    surfaceTint = Color(0xFF88C0D0),
+
+    // Outline = Nord border
+    outline = Color(0xFF4C566A),           // nord3 — border
+    outlineVariant = Color(0xFF434C5E),    // nord2
+
+    // Inverse
+    inverseSurface = Color(0xFFECEFF4),
+    inverseOnSurface = Color(0xFF2E3440),
+    inversePrimary = Color(0xFF5E81AC),    // nord10
+)
 
 fun getApiBase(context: android.content.Context): String {
     val prefs = context.getSharedPreferences("io_mcp", android.content.Context.MODE_PRIVATE)
@@ -63,7 +113,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             val apiBase = currentApiBase
-            MaterialTheme(colorScheme = darkColorScheme()) {
+            MaterialTheme(colorScheme = NordDarkColorScheme) {
                 IoMcpScreen(
                     onSessionIdChanged = { currentSessionId = it },
                     apiBase = apiBase,
@@ -85,7 +135,7 @@ class MainActivity : ComponentActivity() {
         }
 
         // Fire and forget — send key to TUI
-        kotlinx.coroutines.GlobalScope.launch(Dispatchers.IO) {
+        lifecycleScope.launch(Dispatchers.IO) {
             sendKey(currentApiBase, sid, key)
         }
         return true
