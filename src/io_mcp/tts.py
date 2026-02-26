@@ -509,6 +509,9 @@ class TTSEngine:
             try:
                 retcode = proc.wait(timeout=30)
                 if retcode != 0:
+                    # Negative return code = killed by signal (intentional stop)
+                    if retcode < 0:
+                        return
                     stderr_out = ""
                     try:
                         stderr_out = (proc.stderr.read() or b"").decode("utf-8", errors="replace").strip()
@@ -806,6 +809,9 @@ class TTSEngine:
                         # This is intentional interruption, not a real failure
                         if retcode > 0:
                             tts_failed = True
+                        else:
+                            # Signal kill is intentional — undo the failure count
+                            self._consecutive_failures = max(0, self._consecutive_failures - 1)
                     else:
                         self._total_plays += 1
                         self._consecutive_failures = 0
@@ -853,6 +859,9 @@ class TTSEngine:
                             # This is intentional interruption, not a real failure
                             if retcode > 0:
                                 tts_failed = True
+                            else:
+                                # Signal kill is intentional — undo the failure count
+                                self._consecutive_failures = max(0, self._consecutive_failures - 1)
                         else:
                             self._total_plays += 1
                             self._consecutive_failures = 0
