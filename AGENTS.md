@@ -55,6 +55,7 @@ src/io_mcp/
 ├── server.py         # MCP tool definitions (used by tests; proxy.py is production path)
 ├── session.py        # Session/SpeechEntry/HistoryEntry dataclasses, SessionManager
 ├── settings.py       # Settings: wraps IoMcpConfig with property accessors
+├── state.py          # Persistent UI state: toggle states, preferences (state.json)
 ├── tui/
 │   ├── __init__.py
 │   ├── app.py        # Textual app: choices, TTS, voice input, settings, extras
@@ -374,6 +375,10 @@ register_session(
 - **Speech reminders**: tool responses include a reminder if the agent hasn't called `speak_async()` in over 60 seconds, nudging agents to narrate during long operations
 - **Thinking phrases**: ambient updates use playful filler phrases ("Hmm, let me see", "One moment", "Huh, interesting") instead of generic status messages
 - **Scroll readout TTS**: on scroll, plays cached API audio if available; otherwise falls back to `speak_async` (API generates + plays asynchronously). Local engines (termux-tts-speak, espeak) are only used in `--local` mode. espeak is NEVER used in non-local (API) mode.
+- **Sequential TTS model**: speech never self-interrupts. A `_speech_lock` in the TTS engine ensures only one speech plays at a time. `speak()` and `speak_async()` queue behind current speech. Only user scroll/select (via `speak_with_local_fallback`) can interrupt — it stops current speech and plays immediately. No local TTS fallback in API mode — errors show visually in the TUI status line instead.
+- **MCP abort handling**: when Claude Code cancels a tool call, the proxy sends a cancel request to `/cancel-mcp` on the backend. The backend resolves the pending inbox item with `_cancelled`, cleaning up the TUI. This prevents orphaned "waiting for selection" states.
+- **Persistent UI state**: toggle states (e.g. inbox sidebar collapsed) are stored in `~/.config/io-mcp/state.json` and survive restarts. Use `state.get()`, `state.set()`, `state.toggle()` from `io_mcp.state`.
+- **Auto-advance**: after selecting a choice, the TUI auto-switches to the next session with pending choices. No need to press `n` manually.
 - **Number keys everywhere**: `1`-`9` number selection works in all menus: choices, settings, dashboard, dialogs, spawn menu, tab picker, quick actions, and setting value pickers
 - **Hostname auto-detection**: server detects Tailscale DNS hostname (e.g. `harrys-macbook-pro`) from `tailscale status --json`. Overrides `localhost`, `.local`, or empty hostnames from agents. Only caches good values — retries Tailscale if it initially fails.
 - **Two-column inbox layout**: when an agent sends choices, the TUI shows a left pane (inbox list of pending/completed items with status icons ●/○/✓) and a right pane (choices for the active item). Left pane is ~30% width. Items show truncated preambles and counts
@@ -431,18 +436,20 @@ The Textual event loop is single-threaded. **Any blocking call on the main threa
 
 8. **Keep `on_highlight_changed` fast.** This fires on every scroll/key event. It should only do: trivial dict lookups, increment a counter, and spawn at most one background thread. No filesystem access, no lock acquisition, no subprocess calls.
 
-### TTS model for scroll readout
+### TTS speech model
 
 ```
-Cache hit?  ──yes──►  Background thread: stop() → _start_playback(cached_wav)
-     │
-     no
-     │
---local?  ──yes──►  Background thread: stop() → _speak_termux(block=False) or espeak
-     │
-     no
-     │
-     └──►  speak_async()  →  API generates WAV → caches → plays via paplay
+speak() / speak_async():
+  Acquire _speech_lock → wait for current speech → play → release
+  Sequential — no self-interruption, no overlap
+
+speak_with_local_fallback() (scroll/select overlay):
+  stop_sync() → kill current speech → play immediately
+  User-triggered — CAN interrupt current speech
+
+Pregeneration:
+  Sequential _generate_to_file() in background thread
+  No speech lock needed — just generates WAV files to cache
 ```
 
 Agent speech (`speak`, `speak_async`) always uses the full API TTS pipeline. UI speech (`_speak_ui`) uses `speak_async` with optional `uiVoice` override.
