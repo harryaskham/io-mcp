@@ -8,10 +8,10 @@ from __future__ import annotations
 
 import os
 import subprocess
-import threading
 import time
 from typing import Optional, TYPE_CHECKING
 
+from textual import work
 from textual.widgets import Input, Label, ListView
 
 from ..tts import _find_binary
@@ -198,151 +198,153 @@ class VoiceMixin:
         status = self.query_one("#status", Label)
         status.update(f"[{self._cs['blue']}]⧗[/{self._cs['blue']}] Transcribing...")
 
-        def _process():
-            if desktop_mode and stt_proc:
-                # Desktop: send SIGINT to stt process to stop mic recording
-                # stt will finish transcribing and output the result on stdout
+        self._process_transcription_worker(session, desktop_mode, stt_proc, proc)
+
+    @work(thread=True, exit_on_error=False, name="voice_transcription")
+    def _process_transcription_worker(self, session, desktop_mode, stt_proc, proc) -> None:
+        """Worker: process voice transcription in background thread."""
+        if desktop_mode and stt_proc:
+            # Desktop: send SIGINT to stt process to stop mic recording
+            # stt will finish transcribing and output the result on stdout
+            try:
+                import signal
+                os.killpg(os.getpgid(stt_proc.pid), signal.SIGINT)
+            except (OSError, ProcessLookupError):
+                pass
+
+            try:
+                stdout, stderr = stt_proc.communicate(timeout=30)
+                transcript = stdout.decode("utf-8", errors="replace").strip()
+                stderr_text = stderr.decode("utf-8", errors="replace").strip() if stderr else ""
+            except Exception as e:
+                transcript = ""
+                stderr_text = str(e)
                 try:
-                    import signal
-                    os.killpg(os.getpgid(stt_proc.pid), signal.SIGINT)
-                except (OSError, ProcessLookupError):
-                    pass
-
-                try:
-                    stdout, stderr = stt_proc.communicate(timeout=30)
-                    transcript = stdout.decode("utf-8", errors="replace").strip()
-                    stderr_text = stderr.decode("utf-8", errors="replace").strip() if stderr else ""
-                except Exception as e:
-                    transcript = ""
-                    stderr_text = str(e)
-                    try:
-                        os.killpg(os.getpgid(stt_proc.pid), 9)
-                    except Exception:
-                        pass
-
-                # Unmute TTS
-                if hasattr(self._tts, 'unmute'):
-                    self._tts.unmute()
-                else:
-                    self._tts._muted = False
-
-                self._handle_transcript(session, transcript, stderr_text)
-                return
-
-            # Android path: stop termux-microphone-record and transcribe
-            termux_exec_bin = _find_binary("termux-exec")
-            stt_bin = _find_binary("stt")
-            rec_file = getattr(self, '_voice_rec_file', None)
-
-            # Stop the recording
-            if termux_exec_bin:
-                try:
-                    subprocess.run(
-                        [termux_exec_bin, "termux-microphone-record", "-q"],
-                        timeout=5, capture_output=True,
-                    )
+                    os.killpg(os.getpgid(stt_proc.pid), 9)
                 except Exception:
                     pass
 
-            # Wait for the record process to finish
-            if proc:
-                try:
-                    proc.wait(timeout=5)
-                except Exception:
-                    try:
-                        proc.kill()
-                    except Exception:
-                        pass
-
-            # Unmute TTS now that recording is stopped
+            # Unmute TTS
             if hasattr(self._tts, 'unmute'):
                 self._tts.unmute()
             else:
                 self._tts._muted = False
 
-            # Check file exists
-            if not rec_file or not os.path.isfile(rec_file):
-                self._tts.speak_async("No recording file found. Back to choices.")
+            self._handle_transcript(session, transcript, stderr_text)
+            return
+
+        # Android path: stop termux-microphone-record and transcribe
+        termux_exec_bin = _find_binary("termux-exec")
+        stt_bin = _find_binary("stt")
+        rec_file = getattr(self, '_voice_rec_file', None)
+
+        # Stop the recording
+        if termux_exec_bin:
+            try:
+                subprocess.run(
+                    [termux_exec_bin, "termux-microphone-record", "-q"],
+                    timeout=5, capture_output=True,
+                )
+            except Exception:
+                pass
+
+        # Wait for the record process to finish
+        if proc:
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+
+        # Unmute TTS now that recording is stopped
+        if hasattr(self._tts, 'unmute'):
+            self._tts.unmute()
+        else:
+            self._tts._muted = False
+
+        # Check file exists
+        if not rec_file or not os.path.isfile(rec_file):
+            self._tts.speak_async("No recording file found. Back to choices.")
+            self._safe_call_from_thread(self._restore_choices)
+            return
+
+        # Convert and transcribe: ffmpeg → stt --stdin
+        env = os.environ.copy()
+        env["PULSE_SERVER"] = os.environ.get("PULSE_SERVER", "127.0.0.1")
+        env["LD_LIBRARY_PATH"] = PORTAUDIO_LIB
+
+        try:
+            # Convert recorded audio to WAV for direct API upload
+            ffmpeg_bin = _find_binary("ffmpeg")
+            if not ffmpeg_bin:
+                self._tts.speak_async("ffmpeg not found")
                 self._safe_call_from_thread(self._restore_choices)
                 return
 
-            # Convert and transcribe: ffmpeg → stt --stdin
-            env = os.environ.copy()
-            env["PULSE_SERVER"] = os.environ.get("PULSE_SERVER", "127.0.0.1")
-            env["LD_LIBRARY_PATH"] = PORTAUDIO_LIB
+            # Convert to WAV (for direct API upload, not piped through VAD)
+            import tempfile
+            wav_file = os.path.join(tempfile.gettempdir(), "io-mcp-stt.wav")
+            ffmpeg_result = subprocess.run(
+                [ffmpeg_bin, "-y", "-i", rec_file,
+                 "-ar", "24000", "-ac", "1", wav_file],
+                capture_output=True, timeout=30,
+            )
+            if ffmpeg_result.returncode != 0:
+                self._tts.speak_async("Audio conversion failed")
+                self._safe_call_from_thread(self._restore_choices)
+                return
 
-            try:
-                # Convert recorded audio to WAV for direct API upload
-                ffmpeg_bin = _find_binary("ffmpeg")
-                if not ffmpeg_bin:
-                    self._tts.speak_async("ffmpeg not found")
-                    self._safe_call_from_thread(self._restore_choices)
-                    return
+            # Try direct API transcription first (faster, no VAD chunking)
+            transcript = ""
+            stderr_text = ""
+            if self._config and self._config.stt_api_key:
+                transcript = self._transcribe_via_api(wav_file)
 
-                # Convert to WAV (for direct API upload, not piped through VAD)
-                import tempfile
-                wav_file = os.path.join(tempfile.gettempdir(), "io-mcp-stt.wav")
-                ffmpeg_result = subprocess.run(
+            # Fallback to stt CLI if API call failed
+            if not transcript:
+                ffmpeg_proc = subprocess.Popen(
                     [ffmpeg_bin, "-y", "-i", rec_file,
-                     "-ar", "24000", "-ac", "1", wav_file],
-                    capture_output=True, timeout=30,
+                     "-f", "s16le", "-ar", "24000", "-ac", "1", "-"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
                 )
-                if ffmpeg_result.returncode != 0:
-                    self._tts.speak_async("Audio conversion failed")
-                    self._safe_call_from_thread(self._restore_choices)
-                    return
 
-                # Try direct API transcription first (faster, no VAD chunking)
-                transcript = ""
-                stderr_text = ""
-                if self._config and self._config.stt_api_key:
-                    transcript = self._transcribe_via_api(wav_file)
+                # Build stt command from config (explicit flags)
+                if self._config:
+                    stt_args = [stt_bin] + self._config.stt_cli_args()
+                else:
+                    stt_args = [stt_bin, "--stdin"]
 
-                # Fallback to stt CLI if API call failed
-                if not transcript:
-                    ffmpeg_proc = subprocess.Popen(
-                        [ffmpeg_bin, "-y", "-i", rec_file,
-                         "-f", "s16le", "-ar", "24000", "-ac", "1", "-"],
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.DEVNULL,
-                    )
+                stt_proc = subprocess.Popen(
+                    stt_args,
+                    stdin=ffmpeg_proc.stdout,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    env=env,
+                )
+                ffmpeg_proc.stdout.close()
+                stdout, stderr = stt_proc.communicate(timeout=120)
+                transcript = stdout.decode("utf-8", errors="replace").strip()
+                stderr_text = stderr.decode("utf-8", errors="replace").strip() if stderr else ""
 
-                    # Build stt command from config (explicit flags)
-                    if self._config:
-                        stt_args = [stt_bin] + self._config.stt_cli_args()
-                    else:
-                        stt_args = [stt_bin, "--stdin"]
+            # Clean up WAV
+            try:
+                os.unlink(wav_file)
+            except Exception:
+                pass
+        except Exception as e:
+            transcript = ""
+            stderr_text = str(e)
+        finally:
+            # Clean up recording file
+            try:
+                os.unlink(rec_file)
+            except Exception:
+                pass
 
-                    stt_proc = subprocess.Popen(
-                        stt_args,
-                        stdin=ffmpeg_proc.stdout,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        env=env,
-                    )
-                    ffmpeg_proc.stdout.close()
-                    stdout, stderr = stt_proc.communicate(timeout=120)
-                    transcript = stdout.decode("utf-8", errors="replace").strip()
-                    stderr_text = stderr.decode("utf-8", errors="replace").strip() if stderr else ""
-
-                # Clean up WAV
-                try:
-                    os.unlink(wav_file)
-                except Exception:
-                    pass
-            except Exception as e:
-                transcript = ""
-                stderr_text = str(e)
-            finally:
-                # Clean up recording file
-                try:
-                    os.unlink(rec_file)
-                except Exception:
-                    pass
-
-            self._handle_transcript(session, transcript, stderr_text)
-
-        threading.Thread(target=_process, daemon=True).start()
+        self._handle_transcript(session, transcript, stderr_text)
 
     def _handle_transcript(self, session, transcript: str, stderr_text: str = "") -> None:
         """Handle the result of voice transcription (shared by desktop and Android paths)."""
@@ -383,8 +385,6 @@ class VoiceMixin:
                 self._tts.speak_async("No speech detected. Back to choices.")
             self._safe_call_from_thread(self._restore_choices)
 
-        threading.Thread(target=_process, daemon=True).start()
-
     def _restore_choices(self) -> None:
         """Restore the choices UI after voice/settings/input mode.
 
@@ -410,8 +410,6 @@ class VoiceMixin:
 
         Shows notifications in the UI and reads a summary via TTS.
         """
-        import json as json_mod
-
         termux_exec_bin = _find_binary("termux-exec")
         if not termux_exec_bin:
             self._tts.speak_async("termux-exec not found. Can't check notifications.")
@@ -425,66 +423,69 @@ class VoiceMixin:
         status.display = True
         self.query_one("#choices").display = False
 
-        def _fetch():
-            try:
-                result = subprocess.run(
-                    [termux_exec_bin, "termux-notification-list"],
-                    capture_output=True, text=True, timeout=10,
-                )
-                if result.returncode != 0:
-                    self._tts.speak_async("Failed to get notifications")
-                    self._safe_call_from_thread(self._restore_choices)
-                    return
+        self._fetch_notifications_worker(termux_exec_bin)
 
-                notifications = json_mod.loads(result.stdout)
-                if not notifications:
-                    self._tts.speak_async("No notifications")
-                    self._safe_call_from_thread(self._restore_choices)
-                    return
-
-                # Filter to interesting notifications (skip system/ongoing)
-                interesting = []
-                for n in notifications:
-                    title = n.get("title", "")
-                    content = n.get("content", "")
-                    pkg = n.get("packageName", "")
-                    # Skip io-mcp's own and common system notifications
-                    if any(skip in pkg for skip in ["termux", "android.system", "inputmethod"]):
-                        continue
-                    if title or content:
-                        # Shorten package name for readability
-                        app_name = pkg.split(".")[-1] if pkg else "unknown"
-                        interesting.append({
-                            "app": app_name,
-                            "title": title,
-                            "content": content,
-                        })
-
-                if not interesting:
-                    self._tts.speak_async("No new notifications")
-                    self._safe_call_from_thread(self._restore_choices)
-                    return
-
-                # Read out notifications — batch into one TTS call for speed
-                count = len(interesting)
-                parts = [f"{count} notification{'s' if count != 1 else ''}."]
-
-                for n in interesting[:5]:  # limit to 5
-                    title = n['title'][:60] if n['title'] else ""
-                    content = n['content'][:40] if n['content'] and n['content'] != n['title'] else ""
-                    text = f"{n['app']}: {title}"
-                    if content:
-                        text += f". {content}"
-                    parts.append(text)
-
-                self._tts.speak(" ".join(parts))
+    @work(thread=True, exit_on_error=False, name="fetch_notifications")
+    def _fetch_notifications_worker(self, termux_exec_bin: str) -> None:
+        """Worker: fetch and read notifications in background thread."""
+        import json as json_mod
+        try:
+            result = subprocess.run(
+                [termux_exec_bin, "termux-notification-list"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode != 0:
+                self._tts.speak_async("Failed to get notifications")
                 self._safe_call_from_thread(self._restore_choices)
+                return
 
-            except Exception as e:
-                self._tts.speak_async(f"Notification check failed: {str(e)[:60]}")
+            notifications = json_mod.loads(result.stdout)
+            if not notifications:
+                self._tts.speak_async("No notifications")
                 self._safe_call_from_thread(self._restore_choices)
+                return
 
-        threading.Thread(target=_fetch, daemon=True).start()
+            # Filter to interesting notifications (skip system/ongoing)
+            interesting = []
+            for n in notifications:
+                title = n.get("title", "")
+                content = n.get("content", "")
+                pkg = n.get("packageName", "")
+                # Skip io-mcp's own and common system notifications
+                if any(skip in pkg for skip in ["termux", "android.system", "inputmethod"]):
+                    continue
+                if title or content:
+                    # Shorten package name for readability
+                    app_name = pkg.split(".")[-1] if pkg else "unknown"
+                    interesting.append({
+                        "app": app_name,
+                        "title": title,
+                        "content": content,
+                    })
+
+            if not interesting:
+                self._tts.speak_async("No new notifications")
+                self._safe_call_from_thread(self._restore_choices)
+                return
+
+            # Read out notifications — batch into one TTS call for speed
+            count = len(interesting)
+            parts = [f"{count} notification{'s' if count != 1 else ''}."]
+
+            for n in interesting[:5]:  # limit to 5
+                title = n['title'][:60] if n['title'] else ""
+                content = n['content'][:40] if n['content'] and n['content'] != n['title'] else ""
+                text = f"{n['app']}: {title}"
+                if content:
+                    text += f". {content}"
+                parts.append(text)
+
+            self._tts.speak(" ".join(parts))
+            self._safe_call_from_thread(self._restore_choices)
+
+        except Exception as e:
+            self._tts.speak_async(f"Notification check failed: {str(e)[:60]}")
+            self._safe_call_from_thread(self._restore_choices)
 
     def _transcribe_via_api(self, wav_path: str) -> str:
         """Send a WAV file directly to the transcription API.

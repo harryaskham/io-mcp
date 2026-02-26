@@ -6,7 +6,6 @@ Mixed into IoMcpApp via multiple inheritance.
 
 from __future__ import annotations
 
-import threading
 from typing import TYPE_CHECKING
 
 from textual.widgets import Label, ListView, RichLog
@@ -254,9 +253,7 @@ class SettingsMixin:
 
         # Pregenerate in background
         if key in ("speed", "voice"):
-            threading.Thread(
-                target=self._tts.pregenerate, args=(self._setting_edit_values,), daemon=True
-            ).start()
+            self._pregenerate_worker(list(self._setting_edit_values))
 
     def _apply_setting_edit(self) -> None:
         """Apply the current edit selection."""

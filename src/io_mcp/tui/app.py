@@ -15,7 +15,7 @@ import threading
 import time
 from typing import Optional
 
-from textual import on
+from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -304,6 +304,11 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 voice_ov = ui_voice
         self._tts.speak_async(text, voice_override=voice_ov)
 
+    @work(thread=True, exit_on_error=False, group="pregenerate")
+    def _pregenerate_worker(self, texts: list[str]) -> None:
+        """Worker: pregenerate TTS clips in background thread."""
+        self._tts.pregenerate(texts)
+
     def _ensure_main_content_visible(self, show_inbox: bool = False) -> None:
         """Ensure the #main-content container is visible.
 
@@ -331,7 +336,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         Uses termux-exec if available (needed on Nix-on-Droid/proot),
         otherwise falls back to direct termux-vibrate.
-        Runs in a background thread to avoid blocking the event loop
+        Runs as a Textual worker to avoid blocking the event loop
         (subprocess.Popen on proot can take 100ms+).
 
         Args:
@@ -360,16 +365,19 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             return
         # Replace placeholder duration and fire in background
         actual_cmd = [c if c != "DUR" else str(duration_ms) for c in cmd]
-        def _run():
-            try:
-                subprocess.Popen(
-                    actual_cmd,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-            except Exception:
-                pass
-        threading.Thread(target=_run, daemon=True).start()
+        self._vibrate_worker(actual_cmd)
+
+    @work(thread=True, exit_on_error=False, group="vibrate")
+    def _vibrate_worker(self, cmd: list[str]) -> None:
+        """Worker: run vibration subprocess in background thread."""
+        try:
+            subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            pass
 
     def _vibrate_pattern(self, pattern: str = "pulse") -> None:
         """Play a vibration pattern for semantic haptic feedback.
@@ -391,18 +399,19 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         }
 
         durations = patterns.get(pattern, patterns["pulse"])
+        self._vibrate_pattern_worker(durations)
 
-        def _play_pattern():
-            import time as _t
-            for i, ms in enumerate(durations):
-                if i % 2 == 0:
-                    # Vibrate
-                    self._vibrate(ms)
-                else:
-                    # Pause
-                    _t.sleep(ms / 1000.0)
-
-        threading.Thread(target=_play_pattern, daemon=True).start()
+    @work(thread=True, exit_on_error=False, group="vibrate_pattern")
+    def _vibrate_pattern_worker(self, durations: list[int]) -> None:
+        """Worker: play vibration pattern in background thread."""
+        import time as _t
+        for i, ms in enumerate(durations):
+            if i % 2 == 0:
+                # Vibrate
+                self._vibrate(ms)
+            else:
+                # Pause
+                _t.sleep(ms / 1000.0)
 
     # ─── Widget composition ────────────────────────────────────────
 
@@ -488,7 +497,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         """Check proxy/backend/API/PulseAudio health and store as a status string.
 
         Status is displayed in the right side of the tab bar via _update_tab_bar.
-        Runs health checks in a background thread to avoid blocking the TUI.
+        Runs health checks via a Textual worker to avoid blocking the TUI.
 
         When PulseAudio goes down and config.pulseAudio.autoReconnect is True,
         attempts auto-reconnect via the TTS engine's reconnect_pulse() method.
@@ -497,14 +506,16 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         if self._daemon_check_running:
             return
 
-        def _check():
-            self._daemon_check_running = True
-            try:
-                self._do_daemon_check()
-            finally:
-                self._daemon_check_running = False
+        self._daemon_check_worker()
 
-        threading.Thread(target=_check, daemon=True).start()
+    @work(thread=True, exit_on_error=False, name="daemon_status", exclusive=True)
+    def _daemon_check_worker(self) -> None:
+        """Worker: run daemon health check in background thread."""
+        self._daemon_check_running = True
+        try:
+            self._do_daemon_check()
+        finally:
+            self._daemon_check_running = False
 
     def _do_daemon_check(self) -> None:
         """Actual daemon health check logic, runs in background thread."""
@@ -830,13 +841,14 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         if removed:
             self._update_tab_bar()
 
+    @work(thread=True, exit_on_error=False, name="agent_health_check", exclusive=True)
     def _check_agent_health(self) -> None:
-        """Monitor agent health in a background thread.
+        """Monitor agent health in a Textual worker.
 
         Runs subprocess calls (tmux pane checks, SSH) in a thread to avoid
         blocking the event loop. UI updates are dispatched via call_from_thread.
         """
-        threading.Thread(target=self._check_agent_health_inner, daemon=True).start()
+        self._check_agent_health_inner()
 
     def _check_agent_health_inner(self) -> None:
         """Inner health check — runs in a background thread.
@@ -1458,12 +1470,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         if session.active and self._is_focused(session.session_id):
             self._tts.play_chime("inbox")
 
-        # Kick a drain thread in case there are speech items ahead of us
-        threading.Thread(
-            target=self._drain_session_inbox,
-            args=(session,),
-            daemon=True,
-        ).start()
+        # Kick a drain worker in case there are speech items ahead of us
+        self._drain_session_inbox_worker(session)
 
         # ── Drain loop: wait for our turn, then present ──
         while True:
@@ -1614,10 +1622,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             + [f"Selected: {c.get('label', '')}" for c in choices]
             + [f"{e['label']}. {e['summary']}" for e in EXTRA_OPTIONS if e.get('summary')]
         )
-        pregen_thread = threading.Thread(
-            target=self._tts.pregenerate, args=(bg_texts,), daemon=True
-        )
-        pregen_thread.start()
+        self._pregenerate_worker(bg_texts)
 
         if is_fg:
             # Wait for any in-progress speak_async to finish before
@@ -2372,12 +2377,13 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         self._safe_call(self._update_tab_bar)
         self._safe_call(self._update_inbox_list)
 
-        # Start a drain thread for this session if speech items need processing
-        threading.Thread(
-            target=self._drain_session_inbox,
-            args=(session,),
-            daemon=True,
-        ).start()
+        # Start a drain worker for this session if speech items need processing
+        self._drain_session_inbox_worker(session)
+
+    @work(thread=True, exit_on_error=False, group="drain_inbox")
+    def _drain_session_inbox_worker(self, session: Session) -> None:
+        """Worker: drain speech items from session inbox in background thread."""
+        self._drain_session_inbox(session)
 
     def _drain_session_inbox(self, session: Session) -> None:
         """Background drain loop: process speech items at the front of the inbox.
@@ -2523,56 +2529,60 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             # Session has active choices — show them
             self._show_choices()
 
-            # Play back unplayed speech then read prompt+options in bg thread
-            def _play_inbox():
-                while session.unplayed_speech:
-                    entry = session.unplayed_speech.pop(0)
-                    entry.played = True
-                    self._fg_speaking = True
-                    self._tts.speak(entry.text)
-                    self._fg_speaking = False
-
-                # Then read prompt + options
-                if session.active:
-                    numbered_labels = [
-                        f"{i+1}. {c.get('label', '')}" for i, c in enumerate(session.choices)
-                    ]
-                    titles_readout = " ".join(numbered_labels)
-                    full_intro = f"{session.preamble} Your options are: {titles_readout}"
-                    self._fg_speaking = True
-                    self._tts.speak(full_intro)
-                    self._fg_speaking = False
-
-                    # Read all options
-                    session.reading_options = True
-                    for i, c in enumerate(session.choices):
-                        if not session.reading_options or not session.active:
-                            break
-                        s = c.get('summary', '')
-                        text = f"{i+1}. {c.get('label', '')}. {s}" if s else f"{i+1}. {c.get('label', '')}"
-                        self._fg_speaking = True
-                        self._tts.speak(text)
-                        self._fg_speaking = False
-                    session.reading_options = False
-
-            threading.Thread(target=_play_inbox, daemon=True).start()
+            # Play back unplayed speech then read prompt+options via worker
+            self._play_inbox_and_read_worker(session)
         else:
             # No active choices — show idle state with activity feed
             self._show_idle()
 
-            # Play unplayed speech in bg thread
-            def _play_inbox_only():
-                while session.unplayed_speech:
-                    entry = session.unplayed_speech.pop(0)
-                    entry.played = True
-                    self._fg_speaking = True
-                    self._tts.speak(entry.text)
-                    self._fg_speaking = False
-
+            # Play unplayed speech via worker
             if session.unplayed_speech:
-                threading.Thread(target=_play_inbox_only, daemon=True).start()
+                self._play_inbox_only_worker(session)
 
             self._show_session_waiting(session)
+
+    @work(thread=True, exit_on_error=False, group="play_inbox")
+    def _play_inbox_and_read_worker(self, session: Session) -> None:
+        """Worker: play unplayed speech then read prompt+options in background."""
+        while session.unplayed_speech:
+            entry = session.unplayed_speech.pop(0)
+            entry.played = True
+            self._fg_speaking = True
+            self._tts.speak(entry.text)
+            self._fg_speaking = False
+
+        # Then read prompt + options
+        if session.active:
+            numbered_labels = [
+                f"{i+1}. {c.get('label', '')}" for i, c in enumerate(session.choices)
+            ]
+            titles_readout = " ".join(numbered_labels)
+            full_intro = f"{session.preamble} Your options are: {titles_readout}"
+            self._fg_speaking = True
+            self._tts.speak(full_intro)
+            self._fg_speaking = False
+
+            # Read all options
+            session.reading_options = True
+            for i, c in enumerate(session.choices):
+                if not session.reading_options or not session.active:
+                    break
+                s = c.get('summary', '')
+                text = f"{i+1}. {c.get('label', '')}. {s}" if s else f"{i+1}. {c.get('label', '')}"
+                self._fg_speaking = True
+                self._tts.speak(text)
+                self._fg_speaking = False
+            session.reading_options = False
+
+    @work(thread=True, exit_on_error=False, group="play_inbox")
+    def _play_inbox_only_worker(self, session: Session) -> None:
+        """Worker: play unplayed speech entries in background."""
+        while session.unplayed_speech:
+            entry = session.unplayed_speech.pop(0)
+            entry.played = True
+            self._fg_speaking = True
+            self._tts.speak(entry.text)
+            self._fg_speaking = False
 
     def _show_session_waiting(self, session: Session) -> None:
         """Show waiting state for a specific session."""
@@ -2742,18 +2752,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         def _on_confirm(label: str):
             if label.lower().startswith("restart"):
                 self._speak_ui("Restarting TUI in 2 seconds")
-
-                def _do_restart():
-                    time.sleep(2.0)
-                    # Unblock all pending selection waits so backend threads
-                    # don't hang forever after the app is replaced
-                    for sess in self.manager.all_sessions():
-                        if sess.active:
-                            self._resolve_selection(sess, {"selected": "_restart", "summary": "TUI restarting"})
-                    self._restart_requested = True
-                    self.exit(return_code=42)
-
-                threading.Thread(target=_do_restart, daemon=True).start()
+                self._do_tui_restart_worker()
             else:
                 self._exit_settings()
 
@@ -2767,6 +2766,18 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             callback=_on_confirm,
         )
 
+    @work(thread=True, exit_on_error=False, name="tui_restart")
+    def _do_tui_restart_worker(self) -> None:
+        """Worker: delayed TUI restart in background thread."""
+        time.sleep(2.0)
+        # Unblock all pending selection waits so backend threads
+        # don't hang forever after the app is replaced
+        for sess in self.manager.all_sessions():
+            if sess.active:
+                self._resolve_selection(sess, {"selected": "_restart", "summary": "TUI restarting"})
+        self._restart_requested = True
+        self.exit(return_code=42)
+
     def _restart_proxy_from_tui(self) -> None:
         """Restart the MCP proxy from the TUI.
 
@@ -2776,18 +2787,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         def _on_confirm(label: str):
             if label.lower().startswith("restart"):
                 self._speak_ui("Restarting MCP proxy")
-
-                def _do():
-                    from . import __main__ as main_mod
-                    dev_mode = "--dev" in sys.argv
-                    success = main_mod._restart_proxy(dev=dev_mode)
-                    if success:
-                        self._tts.speak_async("Proxy restarted. Agents need to reconnect.")
-                    else:
-                        self._tts.speak_async("Proxy restart failed.")
-                    self.call_from_thread(self._update_tab_bar)
-
-                threading.Thread(target=_do, daemon=True).start()
+                self._do_proxy_restart_worker()
             else:
                 self._exit_settings()
 
@@ -2800,6 +2800,18 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             ],
             callback=_on_confirm,
         )
+
+    @work(thread=True, exit_on_error=False, name="proxy_restart")
+    def _do_proxy_restart_worker(self) -> None:
+        """Worker: restart MCP proxy in background thread."""
+        from . import __main__ as main_mod
+        dev_mode = "--dev" in sys.argv
+        success = main_mod._restart_proxy(dev=dev_mode)
+        if success:
+            self._tts.speak_async("Proxy restarted. Agents need to reconnect.")
+        else:
+            self._tts.speak_async("Proxy restart failed.")
+        self.call_from_thread(self._update_tab_bar)
 
     def _enter_worktree_mode(self) -> None:
         """Start worktree creation flow.
@@ -2957,63 +2969,64 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         """Create a git worktree and either switch to it or spawn an agent there."""
         # Determine repo root from agent's cwd (or current dir)
         cwd = getattr(session, 'cwd', '') or os.getcwd()
+        self._create_worktree_worker(session, branch_name, action, cwd)
 
-        def _do_create():
-            try:
-                # Get repo name
-                result = subprocess.run(
-                    ["git", "rev-parse", "--show-toplevel"],
-                    cwd=cwd, capture_output=True, text=True, timeout=5,
-                )
-                if result.returncode != 0:
-                    self._tts.speak_async("Not in a git repository")
-                    self.call_from_thread(self._restore_choices)
-                    return
-
-                repo_root = result.stdout.strip()
-                repo_name = os.path.basename(repo_root)
-
-                # Create worktree directory
-                worktree_base = os.path.expanduser(f"~/.config/io-mcp/worktrees/{repo_name}")
-                worktree_path = os.path.join(worktree_base, branch_name)
-
-                # Create the worktree
-                result = subprocess.run(
-                    ["git", "worktree", "add", "-b", branch_name, worktree_path],
-                    cwd=repo_root, capture_output=True, text=True, timeout=30,
-                )
-                if result.returncode != 0:
-                    err = result.stderr.strip()[:80]
-                    self._tts.speak_async(f"Worktree creation failed: {err}")
-                    self.call_from_thread(self._restore_choices)
-                    return
-
-                if action == "branch_here":
-                    # Queue message telling agent to switch to worktree
-                    msgs = getattr(session, 'pending_messages', [])
-                    msgs.append(
-                        f"I've created a git worktree for branch '{branch_name}' at {worktree_path}. "
-                        f"Please cd to {worktree_path} and work there from now on. "
-                        f"When you're done, I'll help you push, create a PR, and merge back."
-                    )
-                    session.cwd = worktree_path
-                    self._tts.speak_async(f"Worktree created at {branch_name}. Agent will switch there.")
-                    if session.active:
-                        self.call_from_thread(self._show_choices)
-                    else:
-                        self.call_from_thread(self._show_session_waiting, session)
-
-                elif action == "fork_agent":
-                    # Spawn a new agent in the worktree
-                    self._tts.speak_async(f"Worktree created. Spawning agent in {branch_name}.")
-                    spawn_opt = {"type": "local", "workdir": worktree_path}
-                    self.call_from_thread(self._do_spawn, spawn_opt)
-
-            except Exception as e:
-                self._tts.speak_async(f"Error: {str(e)[:80]}")
+    @work(thread=True, exit_on_error=False, name="create_worktree")
+    def _create_worktree_worker(self, session: Session, branch_name: str, action: str, cwd: str) -> None:
+        """Worker: create git worktree in background thread."""
+        try:
+            # Get repo name
+            result = subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"],
+                cwd=cwd, capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode != 0:
+                self._tts.speak_async("Not in a git repository")
                 self.call_from_thread(self._restore_choices)
+                return
 
-        threading.Thread(target=_do_create, daemon=True).start()
+            repo_root = result.stdout.strip()
+            repo_name = os.path.basename(repo_root)
+
+            # Create worktree directory
+            worktree_base = os.path.expanduser(f"~/.config/io-mcp/worktrees/{repo_name}")
+            worktree_path = os.path.join(worktree_base, branch_name)
+
+            # Create the worktree
+            result = subprocess.run(
+                ["git", "worktree", "add", "-b", branch_name, worktree_path],
+                cwd=repo_root, capture_output=True, text=True, timeout=30,
+            )
+            if result.returncode != 0:
+                err = result.stderr.strip()[:80]
+                self._tts.speak_async(f"Worktree creation failed: {err}")
+                self.call_from_thread(self._restore_choices)
+                return
+
+            if action == "branch_here":
+                # Queue message telling agent to switch to worktree
+                msgs = getattr(session, 'pending_messages', [])
+                msgs.append(
+                    f"I've created a git worktree for branch '{branch_name}' at {worktree_path}. "
+                    f"Please cd to {worktree_path} and work there from now on. "
+                    f"When you're done, I'll help you push, create a PR, and merge back."
+                )
+                session.cwd = worktree_path
+                self._tts.speak_async(f"Worktree created at {branch_name}. Agent will switch there.")
+                if session.active:
+                    self.call_from_thread(self._show_choices)
+                else:
+                    self.call_from_thread(self._show_session_waiting, session)
+
+            elif action == "fork_agent":
+                # Spawn a new agent in the worktree
+                self._tts.speak_async(f"Worktree created. Spawning agent in {branch_name}.")
+                spawn_opt = {"type": "local", "workdir": worktree_path}
+                self.call_from_thread(self._do_spawn, spawn_opt)
+
+        except Exception as e:
+            self._tts.speak_async(f"Error: {str(e)[:80]}")
+            self.call_from_thread(self._restore_choices)
 
     @_safe_action
     def action_multi_select_toggle(self) -> None:
@@ -3583,25 +3596,26 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             return
         session.reading_options = False
         self._tts.stop()
+        self._replay_prompt_worker(session)
 
-        def _replay():
-            self._fg_speaking = True
-            self._tts.speak(session.preamble)
-            numbered_labels = [
-                f"{i+1}. {c.get('label', '')}" for i, c in enumerate(session.choices)
-            ]
-            self._tts.speak("Your options are: " + " ".join(numbered_labels))
-            session.reading_options = True
-            for i, c in enumerate(session.choices):
-                if not session.reading_options or not session.active:
-                    break
-                s = c.get('summary', '')
-                text = f"{i+1}. {c.get('label', '')}. {s}" if s else f"{i+1}. {c.get('label', '')}"
-                self._tts.speak(text)
-            session.reading_options = False
-            self._fg_speaking = False
-
-        threading.Thread(target=_replay, daemon=True).start()
+    @work(thread=True, exit_on_error=False, name="replay_prompt", exclusive=True)
+    def _replay_prompt_worker(self, session: Session) -> None:
+        """Worker: replay preamble and all options in background thread."""
+        self._fg_speaking = True
+        self._tts.speak(session.preamble)
+        numbered_labels = [
+            f"{i+1}. {c.get('label', '')}" for i, c in enumerate(session.choices)
+        ]
+        self._tts.speak("Your options are: " + " ".join(numbered_labels))
+        session.reading_options = True
+        for i, c in enumerate(session.choices):
+            if not session.reading_options or not session.active:
+                break
+            s = c.get('summary', '')
+            text = f"{i+1}. {c.get('label', '')}. {s}" if s else f"{i+1}. {c.get('label', '')}"
+            self._tts.speak(text)
+        session.reading_options = False
+        self._fg_speaking = False
 
     # ─── Voice input ──────────────────────────────────────────────
     # Defined in VoiceMixin (tui/voice.py)
@@ -4801,31 +4815,32 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             self._exit_settings()
 
     def _run_djent_command(self, label: str, command: str) -> None:
-        """Run a djent CLI command in a background thread, speak the output, return to quick settings."""
+        """Run a djent CLI command via worker, speak the output, return to quick settings."""
         self._speak_ui(f"Running {label}")
+        self._run_djent_command_worker(label, command)
 
-        def _run():
-            try:
-                result = subprocess.run(
-                    command, shell=True, capture_output=True, text=True, timeout=30
-                )
-                # Strip ANSI escape codes for clean TTS output
-                import re as _re
-                output = _re.sub(r'\x1b\[[0-9;]*m', '', result.stdout.strip() or result.stderr.strip())
-                if result.returncode == 0:
-                    summary = output[:300] if output else "Done"
-                    self._tts.speak_async(f"{label}: {summary}")
-                else:
-                    err = output[:150] if output else f"exit code {result.returncode}"
-                    self._tts.speak_async(f"{label} failed: {err}")
-            except subprocess.TimeoutExpired:
-                self._tts.speak_async(f"{label} timed out after 30 seconds")
-            except Exception as e:
-                self._tts.speak_async(f"Error running {label}: {str(e)[:80]}")
+    @work(thread=True, exit_on_error=False, name="djent_command")
+    def _run_djent_command_worker(self, label: str, command: str) -> None:
+        """Worker: run djent command in background thread."""
+        try:
+            result = subprocess.run(
+                command, shell=True, capture_output=True, text=True, timeout=30
+            )
+            # Strip ANSI escape codes for clean TTS output
+            import re as _re
+            output = _re.sub(r'\x1b\[[0-9;]*m', '', result.stdout.strip() or result.stderr.strip())
+            if result.returncode == 0:
+                summary = output[:300] if output else "Done"
+                self._tts.speak_async(f"{label}: {summary}")
+            else:
+                err = output[:150] if output else f"exit code {result.returncode}"
+                self._tts.speak_async(f"{label} failed: {err}")
+        except subprocess.TimeoutExpired:
+            self._tts.speak_async(f"{label} timed out after 30 seconds")
+        except Exception as e:
+            self._tts.speak_async(f"Error running {label}: {str(e)[:80]}")
 
-            self.call_from_thread(self._enter_quick_settings)
-
-        threading.Thread(target=_run, daemon=True).start()
+        self.call_from_thread(self._enter_quick_settings)
 
     def _start_djent_swarm(self) -> None:
         """Start the djent dev loop in a new tmux window with confirmation."""
@@ -4833,24 +4848,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         def _on_confirm(label: str):
             if label.lower().startswith("start"):
                 self._speak_ui("Starting djent swarm")
-
-                def _run():
-                    try:
-                        result = subprocess.run(
-                            "tmux new-window -n djent 'djent -e \"(loop/dev)\"'",
-                            shell=True, capture_output=True, text=True, timeout=15
-                        )
-                        if result.returncode == 0:
-                            self._tts.speak_async("Djent swarm started in new tmux window")
-                        else:
-                            err = result.stderr.strip()[:100] or f"exit code {result.returncode}"
-                            self._tts.speak_async(f"Failed to start swarm: {err}")
-                    except Exception as e:
-                        self._tts.speak_async(f"Error starting swarm: {str(e)[:80]}")
-
-                    self.call_from_thread(self._enter_quick_settings)
-
-                threading.Thread(target=_run, daemon=True).start()
+                self._start_djent_swarm_worker()
             else:
                 self._enter_quick_settings()
 
@@ -4864,35 +4862,31 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             callback=_on_confirm,
         )
 
+    @work(thread=True, exit_on_error=False, name="djent_swarm_start")
+    def _start_djent_swarm_worker(self) -> None:
+        """Worker: start djent swarm in background thread."""
+        try:
+            result = subprocess.run(
+                "tmux new-window -n djent 'djent -e \"(loop/dev)\"'",
+                shell=True, capture_output=True, text=True, timeout=15
+            )
+            if result.returncode == 0:
+                self._tts.speak_async("Djent swarm started in new tmux window")
+            else:
+                err = result.stderr.strip()[:100] or f"exit code {result.returncode}"
+                self._tts.speak_async(f"Failed to start swarm: {err}")
+        except Exception as e:
+            self._tts.speak_async(f"Error starting swarm: {str(e)[:80]}")
+
+        self.call_from_thread(self._enter_quick_settings)
+
     def _stop_djent_swarm(self) -> None:
         """Stop all djent agents with confirmation."""
 
         def _on_confirm(label: str):
             if label.lower().startswith("stop"):
                 self._speak_ui("Stopping djent swarm")
-
-                def _run():
-                    try:
-                        import re as _re
-                        result = subprocess.run(
-                            "djent down 2>&1",
-                            shell=True, capture_output=True, text=True, timeout=30
-                        )
-                        output = _re.sub(r'\x1b\[[0-9;]*m', '', result.stdout.strip() or result.stderr.strip())
-                        if result.returncode == 0:
-                            summary = output[:200] if output else "Done"
-                            self._tts.speak_async(f"Swarm stopped. {summary}")
-                        else:
-                            err = output[:100] if output else f"exit code {result.returncode}"
-                            self._tts.speak_async(f"Stop failed: {err}")
-                    except subprocess.TimeoutExpired:
-                        self._tts.speak_async("Stop command timed out after 30 seconds")
-                    except Exception as e:
-                        self._tts.speak_async(f"Error stopping swarm: {str(e)[:80]}")
-
-                    self.call_from_thread(self._enter_quick_settings)
-
-                threading.Thread(target=_run, daemon=True).start()
+                self._stop_djent_swarm_worker()
             else:
                 self._enter_quick_settings()
 
@@ -4905,6 +4899,29 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             ],
             callback=_on_confirm,
         )
+
+    @work(thread=True, exit_on_error=False, name="djent_swarm_stop")
+    def _stop_djent_swarm_worker(self) -> None:
+        """Worker: stop djent swarm in background thread."""
+        try:
+            import re as _re
+            result = subprocess.run(
+                "djent down 2>&1",
+                shell=True, capture_output=True, text=True, timeout=30
+            )
+            output = _re.sub(r'\x1b\[[0-9;]*m', '', result.stdout.strip() or result.stderr.strip())
+            if result.returncode == 0:
+                summary = output[:200] if output else "Done"
+                self._tts.speak_async(f"Swarm stopped. {summary}")
+            else:
+                err = output[:100] if output else f"exit code {result.returncode}"
+                self._tts.speak_async(f"Stop failed: {err}")
+        except subprocess.TimeoutExpired:
+            self._tts.speak_async("Stop command timed out after 30 seconds")
+        except Exception as e:
+            self._tts.speak_async(f"Error stopping swarm: {str(e)[:80]}")
+
+        self.call_from_thread(self._enter_quick_settings)
 
     def _show_history(self) -> None:
         """Show selection history for the focused session in a scrollable list.
@@ -5078,7 +5095,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         self._tts.speak_async("Spawn a new agent. Pick a target.")
 
     def _do_spawn(self, option: dict) -> None:
-        """Execute the agent spawn in a background thread."""
+        """Execute the agent spawn via a Textual worker."""
         label = option.get("label", "")
         host = option.get("_host", "")
         workdir = option.get("_workdir", "")
@@ -5088,67 +5105,68 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             return
 
         self._speak_ui(f"Spawning {label}")
+        self._do_spawn_worker(label, host, workdir)
 
-        def _spawn():
-            try:
-                import shutil
-                tmux = shutil.which("tmux")
-                if not tmux:
-                    self._tts.speak_async("tmux not found. Cannot spawn agent.")
-                    self.call_from_thread(self._exit_settings)
-                    return
+    @work(thread=True, exit_on_error=False, name="spawn_agent")
+    def _do_spawn_worker(self, label: str, host: str, workdir: str) -> None:
+        """Worker: spawn agent in background thread."""
+        try:
+            import shutil
+            tmux = shutil.which("tmux")
+            if not tmux:
+                self._tts.speak_async("tmux not found. Cannot spawn agent.")
+                self.call_from_thread(self._exit_settings)
+                return
 
-                claude_bin = shutil.which("claude")
-                if not claude_bin and not host:
-                    self._tts.speak_async("claude not found. Cannot spawn agent.")
-                    self.call_from_thread(self._exit_settings)
-                    return
+            claude_bin = shutil.which("claude")
+            if not claude_bin and not host:
+                self._tts.speak_async("claude not found. Cannot spawn agent.")
+                self.call_from_thread(self._exit_settings)
+                return
 
-                # Generate a session name
-                import time as _time
-                ts = int(_time.time()) % 10000
-                session_name = f"io-agent-{ts}"
+            # Generate a session name
+            import time as _time
+            ts = int(_time.time()) % 10000
+            session_name = f"io-agent-{ts}"
 
-                io_mcp_url = os.environ.get("IO_MCP_URL", "")
+            io_mcp_url = os.environ.get("IO_MCP_URL", "")
 
-                if host:
-                    # Remote spawn via SSH + tmux
-                    workdir_resolved = workdir or "~"
-                    remote_cmd = (
-                        f"cd {workdir_resolved} && "
-                        f"IO_MCP_URL={io_mcp_url} "
-                        f'claude --agent io-mcp "connect to io-mcp and greet the user"'
-                    )
-                    cmd = [
-                        tmux, "new-session", "-d", "-s", session_name,
-                        f"ssh -t {host} '{remote_cmd}'"
-                    ]
-                else:
-                    # Local spawn in new tmux session
-                    workdir_resolved = workdir or (
-                        self._config.agent_default_workdir if self._config else "~"
-                    )
-                    workdir_expanded = os.path.expanduser(workdir_resolved)
-                    cmd = [
-                        tmux, "new-session", "-d", "-s", session_name,
-                        "-c", workdir_expanded,
-                        "bash", "-c",
-                        f'IO_MCP_URL={io_mcp_url} claude --agent io-mcp "connect to io-mcp and greet the user"',
-                    ]
+            if host:
+                # Remote spawn via SSH + tmux
+                workdir_resolved = workdir or "~"
+                remote_cmd = (
+                    f"cd {workdir_resolved} && "
+                    f"IO_MCP_URL={io_mcp_url} "
+                    f'claude --agent io-mcp "connect to io-mcp and greet the user"'
+                )
+                cmd = [
+                    tmux, "new-session", "-d", "-s", session_name,
+                    f"ssh -t {host} '{remote_cmd}'"
+                ]
+            else:
+                # Local spawn in new tmux session
+                workdir_resolved = workdir or (
+                    self._config.agent_default_workdir if self._config else "~"
+                )
+                workdir_expanded = os.path.expanduser(workdir_resolved)
+                cmd = [
+                    tmux, "new-session", "-d", "-s", session_name,
+                    "-c", workdir_expanded,
+                    "bash", "-c",
+                    f'IO_MCP_URL={io_mcp_url} claude --agent io-mcp "connect to io-mcp and greet the user"',
+                ]
 
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-                if result.returncode == 0:
-                    self._speak_ui(f"Agent spawned: {session_name}. It will connect shortly.")
-                else:
-                    err = result.stderr[:100] if result.stderr else "unknown error"
-                    self._tts.speak_async(f"Spawn failed: {err}")
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            if result.returncode == 0:
+                self._speak_ui(f"Agent spawned: {session_name}. It will connect shortly.")
+            else:
+                err = result.stderr[:100] if result.stderr else "unknown error"
+                self._tts.speak_async(f"Spawn failed: {err}")
 
-            except Exception as e:
-                self._tts.speak_async(f"Spawn error: {str(e)[:80]}")
+        except Exception as e:
+            self._tts.speak_async(f"Spawn error: {str(e)[:80]}")
 
-            self.call_from_thread(self._exit_settings)
-
-        threading.Thread(target=_spawn, daemon=True).start()
+        self.call_from_thread(self._exit_settings)
 
     @_safe_action
     def action_toggle_conversation(self) -> None:
@@ -5271,31 +5289,32 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         elif action_type == "command":
             self._tts.speak_async(f"Running: {label}")
-
-            def _run():
-                try:
-                    result = subprocess.run(
-                        value, shell=True, capture_output=True, text=True, timeout=60
-                    )
-                    output = result.stdout.strip() or result.stderr.strip()
-                    if result.returncode == 0:
-                        summary = output[:200] if output else "Done"
-                        self._tts.speak_async(f"Done. {summary}")
-                    else:
-                        err = output[:100] if output else f"exit code {result.returncode}"
-                        self._tts.speak_async(f"Failed: {err}")
-                except subprocess.TimeoutExpired:
-                    self._tts.speak_async("Command timed out after 60 seconds")
-                except Exception as e:
-                    self._tts.speak_async(f"Error: {str(e)[:80]}")
-
-                self.call_from_thread(self._exit_settings)
-
-            threading.Thread(target=_run, daemon=True).start()
+            self._run_quick_action_command_worker(label, value)
 
         else:
             self._tts.speak_async(f"Unknown action type: {action_type}")
             self._exit_settings()
+
+    @work(thread=True, exit_on_error=False, name="quick_action_command")
+    def _run_quick_action_command_worker(self, label: str, command: str) -> None:
+        """Worker: run quick action command in background thread."""
+        try:
+            result = subprocess.run(
+                command, shell=True, capture_output=True, text=True, timeout=60
+            )
+            output = result.stdout.strip() or result.stderr.strip()
+            if result.returncode == 0:
+                summary = output[:200] if output else "Done"
+                self._tts.speak_async(f"Done. {summary}")
+            else:
+                err = output[:100] if output else f"exit code {result.returncode}"
+                self._tts.speak_async(f"Failed: {err}")
+        except subprocess.TimeoutExpired:
+            self._tts.speak_async("Command timed out after 60 seconds")
+        except Exception as e:
+            self._tts.speak_async(f"Error: {str(e)[:80]}")
+
+        self.call_from_thread(self._exit_settings)
 
 
 # ─── TUI Controller (public API for MCP server) ─────────────────────────────
