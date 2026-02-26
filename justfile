@@ -26,6 +26,9 @@ dev-desktop-rmconfig *FLAGS:
     just rmconfig
     just dev-desktop {{ FLAGS }}
 
+dev-desktop-tmux *FLAGS:
+    tmux new -A -s io-mcp-tui "while true; do just dev-desktop {{ FLAGS }}; sleep 3; done"
+
 dev-desktop-rmconfig-tmux *FLAGS:
     tmux new -A -s io-mcp-tui "while true; do just dev-desktop-rmconfig {{ FLAGS }}; sleep 3; done"
 
