@@ -108,7 +108,6 @@
               # Link agent/skill/hook files under $out/share
               mkdir -p $out/share/io-mcp/agents
               mkdir -p $out/share/io-mcp/skills/io-mcp
-              mkdir -p $out/share/io-mcp/hooks
               cp ${./agents/io-mcp.md} $out/share/io-mcp/agents/io-mcp.md
               cp ${./agents/io-mcp-admin.md} $out/share/io-mcp/agents/io-mcp-admin.md
               cp ${./skills/io-mcp/SKILL.md} $out/share/io-mcp/skills/io-mcp/SKILL.md

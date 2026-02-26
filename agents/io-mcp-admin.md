@@ -25,18 +25,18 @@ hooks:
   Start:
     - hooks:
         - type: command
-          command: "${CLAUDE_PLUGIN_ROOT}/hooks/start-register.sh"
+          command: "${CLAUDE_PLUGIN_ROOT}/agents/start-register.sh"
           timeout: 10
   Stop:
     - hooks:
         - type: command
-          command: "${CLAUDE_PLUGIN_ROOT}/hooks/enforce-choices.sh"
+          command: "${CLAUDE_PLUGIN_ROOT}/agents/enforce-choices.sh"
           timeout: 10
   PreToolUse:
     - matcher: "Bash|Edit|Write|NotebookEdit|Task"
       hooks:
         - type: command
-          command: "${CLAUDE_PLUGIN_ROOT}/hooks/nudge-speak.sh"
+          command: "${CLAUDE_PLUGIN_ROOT}/agents/nudge-speak.sh"
           timeout: 5
 ---
 
