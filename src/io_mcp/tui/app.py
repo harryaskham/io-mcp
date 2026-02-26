@@ -1960,6 +1960,28 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             ))
             di += 1
 
+            # ── Agent metadata (cwd, hostname) ───────────────
+            if session.registered:
+                meta_parts = []
+                if session.hostname:
+                    meta_parts.append(session.hostname)
+                if session.cwd:
+                    # Abbreviate home directory and long paths
+                    cwd = session.cwd
+                    home = os.path.expanduser("~")
+                    if cwd.startswith(home):
+                        cwd = "~" + cwd[len(home):]
+                    if len(cwd) > 50:
+                        cwd = "…" + cwd[-49:]
+                    meta_parts.append(cwd)
+                if meta_parts:
+                    meta_text = f"[{s['fg_dim']}]{'  ·  '.join(meta_parts)}[/{s['fg_dim']}]"
+                    list_view.append(ChoiceItem(
+                        meta_text, "",
+                        index=-997, display_index=di,
+                    ))
+                    di += 1
+
             # ── Essential shortcuts ──────────────────────────
             shortcuts = [
                 ("m", "Queue message"),
@@ -2053,7 +2075,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
             inbox_list.clear()
 
-            # Collect items from all sessions
+            # Collect choice items from all sessions (skip speech-only items
+            # which process automatically and add noise to the inbox)
             all_pending: list[tuple[InboxItem, Session]] = []
             all_done: list[tuple[InboxItem, Session]] = []
             any_registered = False
@@ -2062,15 +2085,16 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 if sess.registered:
                     any_registered = True
                 for item in sess.inbox:
-                    if not item.done:
+                    if not item.done and item.kind == "choices":
                         all_pending.append((item, sess))
                 for item in sess.inbox_done:
                     all_done.append((item, sess))
 
-            # Deduplicate done items per session
+            # Deduplicate done items per session — only show choice items
+            # (speech-only done items are noise: "Running tests", "All passed", etc.)
             done_deduped: list[tuple[InboxItem, Session]] = []
             for sess in sessions:
-                sess_done = [item for item in sess.inbox_done]
+                sess_done = [item for item in sess.inbox_done if item.kind == "choices"]
                 deduped = self._dedup_done_items(sess_done)
                 for item in deduped[-5:]:  # Last 5 done per session
                     done_deduped.append((item, sess))
