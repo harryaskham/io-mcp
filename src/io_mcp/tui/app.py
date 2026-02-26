@@ -1820,17 +1820,10 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         else:
             list_view.index = 0
 
-        # Focus the appropriate pane — respect restored inbox focus state
-        # (e.g. when switching back to a session that had inbox focused)
-        if self._inbox_pane_focused and self._inbox_pane_visible():
-            try:
-                inbox_list = self.query_one("#inbox-list", ListView)
-                inbox_list.focus()
-            except Exception:
-                list_view.focus()
-        else:
-            self._inbox_pane_focused = False
-            list_view.focus()
+        # Focus the choices pane (right side) — this is the actionable content.
+        # The inbox pane (left) is for context/navigation only.
+        self._inbox_pane_focused = False
+        list_view.focus()
 
         if self._dwell_time > 0:
             dwell_bar = self.query_one("#dwell-bar", DwellBar)
