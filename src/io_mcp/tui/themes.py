@@ -200,6 +200,12 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
         padding: 0;
         overflow-x: hidden;
         display: none;
+        scrollbar-background: {s['bg']};
+        scrollbar-background-hover: {s['bg']};
+        scrollbar-background-active: {s['bg']};
+        scrollbar-color: {s['border']};
+        scrollbar-color-hover: {s['fg_dim']};
+        scrollbar-color-active: {s['accent']};
     }}
 
     #choices-panel {{
@@ -240,6 +246,12 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
         overflow-x: hidden;
         padding: 1 0;
         background: {s['bg_alt']};
+        scrollbar-background: {s['bg_alt']};
+        scrollbar-background-hover: {s['bg_alt']};
+        scrollbar-background-active: {s['bg_alt']};
+        scrollbar-color: {s['border']};
+        scrollbar-color-hover: {s['fg_dim']};
+        scrollbar-color-active: {s['accent']};
     }}
 
     /* ─── Tmux pane view ──────────────────────────────────── */
@@ -251,6 +263,12 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
         background: {s['bg_alt']};
         color: {s['fg']};
         display: none;
+        scrollbar-background: {s['bg_alt']};
+        scrollbar-background-hover: {s['bg_alt']};
+        scrollbar-background-active: {s['bg_alt']};
+        scrollbar-color: {s['border']};
+        scrollbar-color-hover: {s['fg_dim']};
+        scrollbar-color-active: {s['accent']};
     }}
 
     /* ─── Choice item styling ─────────────────────────────── */
@@ -359,5 +377,25 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
 
     Header {{
         display: none;
+    }}
+
+    /* ─── Global scrollbar theming for all scrollable widgets ── */
+
+    ListView {{
+        scrollbar-background: {s['bg_alt']};
+        scrollbar-background-hover: {s['bg_alt']};
+        scrollbar-background-active: {s['bg_alt']};
+        scrollbar-color: {s['border']};
+        scrollbar-color-hover: {s['fg_dim']};
+        scrollbar-color-active: {s['accent']};
+    }}
+
+    TextArea {{
+        scrollbar-background: {s['bg']};
+        scrollbar-background-hover: {s['bg']};
+        scrollbar-background-active: {s['bg']};
+        scrollbar-color: {s['border']};
+        scrollbar-color-hover: {s['fg_dim']};
+        scrollbar-color-active: {s['accent']};
     }}
     """
