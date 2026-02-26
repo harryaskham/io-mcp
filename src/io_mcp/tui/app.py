@@ -1785,6 +1785,13 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         self._ensure_main_content_visible(show_inbox=True)
 
         list_view = self.query_one("#choices", ListView)
+
+        # Guard against MountError during TUI restarts — if the ListView
+        # isn't mounted yet, skip this update. The choices are stored on
+        # the session and will be shown when _show_choices is called again.
+        if not list_view.is_mounted:
+            return
+
         list_view.clear()
 
         # Build the extras portion based on expand/collapse state

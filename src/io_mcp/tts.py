@@ -818,21 +818,20 @@ class TTSEngine:
                 try:
                     retcode = play_proc.wait(timeout=60)
                     if retcode != 0:
-                        stderr_out = ""
-                        try:
-                            stderr_out = (play_proc.stderr.read() or b"").decode("utf-8", errors="replace").strip()
-                        except Exception:
-                            pass
-                        self._record_failure(
-                            f"paplay (streaming) exited with code {retcode}: {stderr_out or 'no stderr'}"
-                        )
                         # Negative return code = killed by signal (e.g. stop())
-                        # This is intentional interruption, not a real failure
-                        if retcode > 0:
-                            tts_failed = True
+                        # This is intentional interruption, not a failure
+                        if retcode < 0:
+                            pass  # Signal kill — don't log or count
                         else:
-                            # Signal kill is intentional — undo the failure count
-                            self._consecutive_failures = max(0, self._consecutive_failures - 1)
+                            stderr_out = ""
+                            try:
+                                stderr_out = (play_proc.stderr.read() or b"").decode("utf-8", errors="replace").strip()
+                            except Exception:
+                                pass
+                            self._record_failure(
+                                f"paplay (streaming) exited with code {retcode}: {stderr_out or 'no stderr'}"
+                            )
+                            tts_failed = True
                     else:
                         self._total_plays += 1
                         self._consecutive_failures = 0
@@ -868,21 +867,20 @@ class TTSEngine:
                     try:
                         retcode = play_proc.wait(timeout=60)
                         if retcode != 0:
-                            stderr_out = ""
-                            try:
-                                stderr_out = (play_proc.stderr.read() or b"").decode("utf-8", errors="replace").strip()
-                            except Exception:
-                                pass
-                            self._record_failure(
-                                f"paplay (streaming async) exited with code {retcode}: {stderr_out or 'no stderr'}"
-                            )
                             # Negative return code = killed by signal (e.g. stop())
-                            # This is intentional interruption, not a real failure
-                            if retcode > 0:
-                                tts_failed = True
+                            # This is intentional interruption, not a failure
+                            if retcode < 0:
+                                pass  # Signal kill — don't log or count
                             else:
-                                # Signal kill is intentional — undo the failure count
-                                self._consecutive_failures = max(0, self._consecutive_failures - 1)
+                                stderr_out = ""
+                                try:
+                                    stderr_out = (play_proc.stderr.read() or b"").decode("utf-8", errors="replace").strip()
+                                except Exception:
+                                    pass
+                                self._record_failure(
+                                    f"paplay (streaming async) exited with code {retcode}: {stderr_out or 'no stderr'}"
+                                )
+                                tts_failed = True
                         else:
                             self._total_plays += 1
                             self._consecutive_failures = 0
