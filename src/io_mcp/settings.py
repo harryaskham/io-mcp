@@ -36,12 +36,14 @@ class Settings:
 
     @property
     def voice(self) -> str:
+        """Current voice preset name."""
         if self._config:
-            return self._config.tts_voice
+            return self._config.tts_voice_preset
         return os.environ.get("OPENAI_TTS_VOICE", "sage")
 
     @voice.setter
     def voice(self, value: str) -> None:
+        """Set voice by preset name."""
         if self._config:
             self._config.set_tts_voice(value)
             self._config.save()
@@ -88,8 +90,9 @@ class Settings:
         return ["neutral"]
 
     def get_voices(self) -> list[str]:
+        """Get available voice preset names."""
         if self._config:
-            return self._config.tts_voice_options
+            return self._config.voice_preset_names
         return ["sage", "ballad", "alloy"]
 
     def get_tts_models(self) -> list[str]:
@@ -103,25 +106,22 @@ class Settings:
         return ["whisper"]
 
     def get_voice_model_pairs(self) -> list[tuple[str, str]]:
-        """Get all voice+model combinations across TTS models.
+        """Get all voice preset name + model combinations.
 
-        Returns list of (voice_name, model_name) tuples.
-        E.g. [("sage", "gpt-4o-mini-tts"), ("alloy", "gpt-4o-mini-tts"), ...]
+        Returns list of (preset_name, model_name) tuples.
+        E.g. [("sage", "gpt-4o-mini-tts"), ("noa", "mai-voice-1"), ...]
         """
         if not self._config:
             return [("sage", "gpt-4o-mini-tts")]
         pairs = []
-        for model_name in self._config.tts_model_names:
-            model_def = self._config.models.get("tts", {}).get(model_name, {})
-            voice_def = model_def.get("voice", {})
-            for voice in voice_def.get("options", []):
-                pairs.append((voice, model_name))
+        for name in self._config.voice_preset_names:
+            resolved = self._config.resolve_voice(name)
+            pairs.append((name, resolved["model"]))
         return pairs
 
     def set_voice_and_model(self, voice: str, model: str) -> None:
-        """Set both voice and TTS model atomically."""
+        """Set voice by preset name (model is inferred from preset)."""
         if self._config:
-            self._config.set_tts_model(model)
             self._config.set_tts_voice(voice)
             self._config.save()
 

@@ -49,12 +49,15 @@ class FakeConfig:
     ):
         self.tts_model_name = model
         self.tts_voice = voice
+        self.tts_voice_preset = voice  # preset name (same as voice for simple cases)
         self.tts_speed = speed
         self.tts_emotion = emotion
         self.tts_local_backend = local_backend
         self.tts_ui_voice = ""
+        self.tts_ui_voice_preset = ""
 
-    def tts_cli_args(self, text: str, voice_override=None, emotion_override=None):
+    def tts_cli_args(self, text: str, voice_override=None, emotion_override=None,
+                     model_override=None):
         voice = voice_override or self.tts_voice
         return [
             text,

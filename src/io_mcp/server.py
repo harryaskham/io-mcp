@@ -462,7 +462,7 @@ def create_mcp_server(
             frontend.config.set_tts_model(model)
             frontend.config.save()
             frontend.tts.clear_cache()
-            return f"TTS model set to {model}, voice reset to {frontend.config.tts_voice}"
+            return f"TTS model set to {model}, voice is now {frontend.config.tts_voice_preset}"
         return f"TTS model set to {model}"
 
     @server.tool()
@@ -519,13 +519,12 @@ def create_mcp_server(
         """
         if frontend.config:
             return json.dumps({
+                "tts_voice": frontend.config.tts_voice_preset,
                 "tts_model": frontend.config.tts_model_name,
-                "tts_voice": frontend.config.tts_voice,
                 "tts_speed": frontend.config.tts_speed,
                 "tts_emotion": frontend.config.tts_emotion,
-                "tts_voice_options": frontend.config.tts_voice_options,
-                "tts_models": frontend.config.tts_model_names,
-                "emotion_presets": frontend.config.emotion_preset_names,
+                "voices": frontend.config.voice_preset_names,
+                "styles": frontend.config.tts_style_options,
                 "stt_model": frontend.config.stt_model_name,
                 "stt_models": frontend.config.stt_model_names,
             })
@@ -662,8 +661,8 @@ def create_mcp_server(
             frontend.tts.clear_cache()
             return json.dumps({
                 "status": "reloaded",
+                "tts_voice": frontend.config.tts_voice_preset,
                 "tts_model": frontend.config.tts_model_name,
-                "tts_voice": frontend.config.tts_voice,
                 "tts_speed": frontend.config.tts_speed,
                 "tts_emotion": frontend.config.tts_emotion,
                 "stt_model": frontend.config.stt_model_name,

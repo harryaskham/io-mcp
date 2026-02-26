@@ -301,10 +301,10 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         """
         voice_ov = None
         if self._config:
-            ui_voice = self._config.tts_ui_voice
+            ui_preset = self._config.tts_ui_voice_preset
             # Only override if uiVoice is explicitly set and different from default
-            if ui_voice and ui_voice != self._config.tts_voice:
-                voice_ov = ui_voice
+            if ui_preset and ui_preset != self._config.tts_voice_preset:
+                voice_ov = ui_preset
         self._tts.speak_async(text, voice_override=voice_ov)
 
     @work(thread=True, exit_on_error=False, group="pregenerate")
@@ -3484,8 +3484,10 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         are in use, picks the one assigned to the fewest sessions (LRU-ish).
         """
         in_use = self.manager.in_use_voices()
-        # Find candidates not currently in use
-        available = [v for v in voice_rot if v.get("voice") not in in_use]
+        # Find candidates not currently in use (check both preset name and raw voice)
+        available = [v for v in voice_rot
+                     if v.get("preset", v.get("voice")) not in in_use
+                     and v.get("voice") not in in_use]
         if available:
             return random.choice(available)
         # All voices in use — just pick randomly from the full list
@@ -3524,7 +3526,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 else:
                     session_idx = self.manager.count() - 1  # 0-based
                     entry = voice_rot[session_idx % len(voice_rot)]
-                session.voice_override = entry.get("voice")
+                # Store preset name as voice_override (tts_cli_args resolves it)
+                session.voice_override = entry.get("preset", entry.get("voice"))
                 if entry.get("model"):
                     session.model_override = entry["model"]
             if emotion_rot:

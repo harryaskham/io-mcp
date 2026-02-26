@@ -38,14 +38,14 @@ class SettingsMixin:
 
         scheme = getattr(self, '_color_scheme', DEFAULT_SCHEME)
 
-        # Build current voice display: "voice (model)"
-        current_voice = f"{self.settings.voice} ({self.settings.tts_model})"
+        # Build current voice display: preset name
+        current_voice = self.settings.voice
 
         # UI voice display
         ui_voice = ""
         if self._config:
-            ui_voice = self._config.tts_ui_voice
-        ui_voice_display = f"{ui_voice} ({self.settings.tts_model})" if ui_voice and ui_voice != self.settings.voice else "same as agent"
+            ui_voice = self._config.tts_ui_voice_preset
+        ui_voice_display = ui_voice if ui_voice and ui_voice != self.settings.voice else "same as agent"
 
         # Build local TTS display
         local_backend = "termux"
@@ -166,36 +166,24 @@ class SettingsMixin:
             )
 
         elif key == "voice":
-            # Combined voice+model pairs: "sage (gpt-4o-mini-tts)"
-            pairs = self.settings.get_voice_model_pairs()
-            self._voice_model_pairs = pairs
-            self._setting_edit_values = [
-                f"{voice} ({model})" for voice, model in pairs
-            ]
+            # Voice preset names
+            self._setting_edit_values = self.settings.get_voices()
             current_voice = self.settings.voice
-            current_model = self.settings.tts_model
-            self._setting_edit_index = 0
-            for i, (v, m) in enumerate(pairs):
-                if v == current_voice and m == current_model:
-                    self._setting_edit_index = i
-                    break
+            self._setting_edit_index = (
+                self._setting_edit_values.index(current_voice)
+                if current_voice in self._setting_edit_values else 0
+            )
 
         elif key == "ui_voice":
-            # Same pairs as voice, plus "same as agent" option
-            pairs = self.settings.get_voice_model_pairs()
-            self._voice_model_pairs = [("", "")] + pairs  # empty = same as agent
-            self._setting_edit_values = ["same as agent"] + [
-                f"{voice} ({model})" for voice, model in pairs
-            ]
+            # Voice preset names, plus "same as agent" option
+            presets = self.settings.get_voices()
+            self._setting_edit_values = ["same as agent"] + presets
             ui_voice = ""
             if self._config:
-                ui_voice = self._config.tts_ui_voice
+                ui_voice = self._config.tts_ui_voice_preset
             self._setting_edit_index = 0
-            if ui_voice and ui_voice != self.settings.voice:
-                for i, (v, m) in enumerate(self._voice_model_pairs):
-                    if v == ui_voice:
-                        self._setting_edit_index = i
-                        break
+            if ui_voice and ui_voice != self.settings.voice and ui_voice in presets:
+                self._setting_edit_index = presets.index(ui_voice) + 1  # +1 for "same as agent"
 
         elif key == "style":
             self._setting_edit_values = self.settings.get_emotions()
@@ -267,23 +255,15 @@ class SettingsMixin:
         if key == "speed":
             self.settings.speed = float(value)
         elif key == "voice":
-            # Combined voice+model pair
-            pairs = getattr(self, '_voice_model_pairs', [])
-            if idx < len(pairs):
-                voice, model = pairs[idx]
-                self.settings.set_voice_and_model(voice, model)
-                value = f"{voice} ({model})"
+            # Direct preset name
+            self.settings.voice = value
         elif key == "ui_voice":
-            pairs = getattr(self, '_voice_model_pairs', [])
-            if idx < len(pairs):
-                voice, model = pairs[idx]
-                if self._config:
-                    if voice:
-                        self._config.raw.setdefault("config", {}).setdefault("tts", {})["uiVoice"] = voice
-                    else:
-                        # "same as agent" — clear uiVoice
-                        self._config.raw.setdefault("config", {}).setdefault("tts", {})["uiVoice"] = ""
-                    self._config.save()
+            if self._config:
+                if value == "same as agent":
+                    self._config.raw.setdefault("config", {}).setdefault("tts", {})["uiVoice"] = ""
+                else:
+                    self._config.raw.setdefault("config", {}).setdefault("tts", {})["uiVoice"] = value
+                self._config.save()
         elif key == "style":
             self.settings.emotion = value
         elif key == "stt_model":

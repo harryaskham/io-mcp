@@ -147,14 +147,17 @@ class TestConfigLoading:
         assert not os.path.isfile(tmp_config)
         config = IoMcpConfig.load(tmp_config)
         assert os.path.isfile(tmp_config)
-        assert config.tts_model_name == "gpt-4o-mini-tts"
+        # Default voice preset is "noa" → mai-voice-1
+        assert config.tts_model_name == "mai-voice-1"
+        assert config.tts_voice_preset == "noa"
 
     def test_loads_existing_file(self, tmp_config):
-        # Write a custom config
-        custom = {"config": {"tts": {"model": "gpt-4o-mini-tts", "speed": 2.0}}}
+        # Write a custom config with voice preset
+        custom = {"config": {"tts": {"voice": "sage", "speed": 2.0}}}
         with open(tmp_config, "w") as f:
             yaml.dump(custom, f)
         config = IoMcpConfig.load(tmp_config)
+        assert config.tts_voice_preset == "sage"
         assert config.tts_model_name == "gpt-4o-mini-tts"
         assert config.tts_speed == 2.0
 
@@ -166,8 +169,8 @@ class TestConfigLoading:
         config = IoMcpConfig.load(tmp_config)
         # Speed overridden
         assert config.tts_speed == 1.5
-        # Model comes from defaults
-        assert config.tts_model_name == "gpt-4o-mini-tts"
+        # Voice preset comes from defaults
+        assert config.tts_voice_preset == "noa"
         # Providers come from defaults
         assert "openai" in config.providers
 
@@ -189,7 +192,7 @@ class TestConfigLoading:
 
     def test_reload(self, tmp_config):
         config = IoMcpConfig.load(tmp_config)
-        assert config.tts_speed == 1.3  # default
+        assert config.tts_speed == 1.2  # new default
 
         # Modify the file
         config.raw["config"]["tts"]["speed"] = 2.5
@@ -241,9 +244,11 @@ class TestConfigLoading:
 class TestConfigAccessors:
     def test_tts_defaults(self, config_with_defaults):
         c = config_with_defaults
-        assert c.tts_model_name == "gpt-4o-mini-tts"
-        assert c.tts_voice == "shimmer"
-        assert c.tts_speed == 1.3
+        # Default voice preset is "noa" → mai-voice-1 on openai provider
+        assert c.tts_voice_preset == "noa"
+        assert c.tts_model_name == "mai-voice-1"
+        assert c.tts_voice == "en-US-Noa:MAI-Voice-1"
+        assert c.tts_speed == 1.2
         assert c.tts_provider_name == "openai"
 
     def test_stt_defaults(self, config_with_defaults):
@@ -262,32 +267,38 @@ class TestConfigAccessors:
         assert "whisper" in names
         assert "mai-ears-1" in names
 
+    def test_voice_preset_names(self, config_with_defaults):
+        names = config_with_defaults.voice_preset_names
+        assert "sage" in names
+        assert "noa" in names
+        assert "teo" in names
+        assert "alloy" in names
+
     def test_tts_voice_options(self, config_with_defaults):
         options = config_with_defaults.tts_voice_options
-        # Default model is now gpt-4o-mini-tts → openai voices
+        # Voice options are now voice preset names
         assert "sage" in options
+        assert "noa" in options
 
     def test_style_defaults(self, config_with_defaults):
         c = config_with_defaults
-        assert c.tts_style == "friendly"
-        assert c.tts_emotion == "friendly"  # legacy alias
+        assert c.tts_style == "terrified"
+        assert c.tts_emotion == "terrified"  # legacy alias
         assert "friendly" in c.tts_style_options
         assert "neutral" in c.tts_style_options
 
     def test_tts_instructions_returns_style_name(self, config_with_defaults):
         c = config_with_defaults
         # tts_instructions now just returns the style name
-        assert c.tts_instructions == "friendly"
+        assert c.tts_instructions == "terrified"
 
     def test_styles_list_has_all_entries(self, config_with_defaults):
         """Styles list contains entries from both old OpenAI and Azure presets."""
         c = config_with_defaults
         styles = c.tts_style_options
-        # From old OpenAI presets
         assert "shy" in styles
         assert "calm" in styles
         assert "storyteller" in styles
-        # From old Azure presets
         assert "curious" in styles
         assert "empathetic" in styles
 
@@ -298,20 +309,50 @@ class TestConfigAccessors:
 
     def test_style_rotation_defaults_populated(self, config_with_defaults):
         voice_rot = config_with_defaults.tts_voice_rotation
-        assert len(voice_rot) == 13  # 11 openai + 2 azure
-        assert voice_rot[0]["voice"] == "alloy"
-        assert voice_rot[-1]["model"] == "mai-voice-1"
+        assert len(voice_rot) == 13  # 11 openai + 2 mai
+        assert voice_rot[0]["preset"] == "alloy"
+        assert voice_rot[-1]["preset"] == "teo"
 
         style_rot = config_with_defaults.tts_style_rotation
-        assert len(style_rot) == 15
+        assert len(style_rot) == 6
         assert "friendly" in style_rot
-        assert "curious" in style_rot
+        assert "terrified" in style_rot
 
         # Legacy alias
         assert config_with_defaults.tts_emotion_rotation == style_rot
 
     def test_random_rotation_default_true(self, config_with_defaults):
         assert config_with_defaults.tts_random_rotation is True
+
+    def test_resolve_voice_preset(self, config_with_defaults):
+        """resolve_voice returns full definition for a named preset."""
+        c = config_with_defaults
+        resolved = c.resolve_voice("sage")
+        assert resolved["provider"] == "openai"
+        assert resolved["model"] == "gpt-4o-mini-tts"
+        assert resolved["voice"] == "sage"
+
+    def test_resolve_voice_preset_mai(self, config_with_defaults):
+        """resolve_voice resolves MAI voice presets correctly."""
+        c = config_with_defaults
+        resolved = c.resolve_voice("noa")
+        assert resolved["provider"] == "openai"
+        assert resolved["model"] == "mai-voice-1"
+        assert resolved["voice"] == "en-US-Noa:MAI-Voice-1"
+
+    def test_resolve_voice_fallback(self, config_with_defaults):
+        """resolve_voice falls back to raw voice string on openai for unknown presets."""
+        c = config_with_defaults
+        resolved = c.resolve_voice("unknown-voice")
+        assert resolved["provider"] == "openai"
+        assert resolved["model"] == "gpt-4o-mini-tts"
+        assert resolved["voice"] == "unknown-voice"
+
+    def test_ui_voice_preset(self, config_with_defaults):
+        """tts_ui_voice_preset returns the UI voice preset name."""
+        c = config_with_defaults
+        assert c.tts_ui_voice_preset == "teo"
+        assert c.tts_ui_voice == "en-US-Teo:MAI-Voice-1"
 
     def test_extra_options_default_empty(self, config_with_defaults):
         # Default config has no extra options (unless local .io-mcp.yml is present)
@@ -547,32 +588,39 @@ class TestConfigValidation:
 # ---------------------------------------------------------------------------
 
 class TestConfigMutation:
-    def test_set_tts_model(self, config_with_defaults):
+    def test_set_tts_voice_by_preset(self, config_with_defaults):
+        c = config_with_defaults
+        c.set_tts_voice("sage")
+        assert c.tts_voice_preset == "sage"
+        assert c.tts_voice == "sage"
+        assert c.tts_model_name == "gpt-4o-mini-tts"
+
+    def test_set_tts_voice_mai_preset(self, config_with_defaults):
+        c = config_with_defaults
+        c.set_tts_voice("teo")
+        assert c.tts_voice_preset == "teo"
+        assert c.tts_voice == "en-US-Teo:MAI-Voice-1"
+        assert c.tts_model_name == "mai-voice-1"
+
+    def test_set_tts_voice_by_raw_string(self, config_with_defaults):
+        """Setting voice by raw string finds matching preset."""
+        c = config_with_defaults
+        c.set_tts_voice("en-US-Teo:MAI-Voice-1")
+        assert c.tts_voice_preset == "teo"
+
+    def test_set_tts_model_finds_preset(self, config_with_defaults):
         c = config_with_defaults
         c.set_tts_model("gpt-4o-mini-tts")
         assert c.tts_model_name == "gpt-4o-mini-tts"
-        # Voice should be reset to the new model's default
-        assert c.tts_voice == "shimmer"
+        # Should have switched to a preset using this model
+        assert c.tts_voice_preset in ["alloy", "ash", "ballad", "coral", "echo",
+                                       "fable", "onyx", "nova", "sage", "shimmer", "verse"]
 
-    def test_set_tts_voice(self, config_with_defaults):
+    def test_set_tts_voice_preset_direct(self, config_with_defaults):
         c = config_with_defaults
-        # Default model is gpt-4o-mini-tts — set a valid openai voice
-        c.set_tts_voice("coral")
+        c.set_tts_voice_preset("coral")
+        assert c.tts_voice_preset == "coral"
         assert c.tts_voice == "coral"
-
-    def test_set_tts_voice_invalid(self, config_with_defaults):
-        c = config_with_defaults
-        # Setting an Azure voice on an OpenAI model should raise
-        import pytest
-        with pytest.raises(ValueError, match="not valid for model"):
-            c.set_tts_voice("en-US-Teo:MAI-Voice-1")
-
-    def test_set_tts_voice_cross_model(self, config_with_defaults):
-        c = config_with_defaults
-        # Switch to Azure model, then set an Azure voice — should work
-        c.set_tts_model("mai-voice-1")
-        c.set_tts_voice("en-US-Teo:MAI-Voice-1")
-        assert c.tts_voice == "en-US-Teo:MAI-Voice-1"
 
     def test_set_tts_speed(self, config_with_defaults):
         c = config_with_defaults
@@ -583,8 +631,7 @@ class TestConfigMutation:
         c = config_with_defaults
         c.set_tts_emotion("excited")
         assert c.tts_emotion == "excited"
-        # Default provider is now openai; "excited" maps to full text instructions
-        assert "energy" in c.tts_instructions.lower() or "excited" in c.tts_instructions.lower()
+        assert c.tts_instructions == "excited"
 
     def test_set_stt_model(self, config_with_defaults):
         c = config_with_defaults
@@ -613,23 +660,9 @@ class TestConfigMutation:
 # ---------------------------------------------------------------------------
 
 class TestCLIArgs:
-    def test_tts_args_azure_speech(self, config_with_defaults, monkeypatch):
-        monkeypatch.setenv("AZURE_SPEECH_API_KEY", "test-key")
-        monkeypatch.setenv("AZURE_SPEECH_ENDPOINT", "https://test.endpoint")
-        c = IoMcpConfig.load(config_with_defaults.config_path)
-        # Switch to azure model first since default is now openai
-        c.set_tts_model("mai-voice-1")
-        args = c.tts_cli_args("hello world")
-        assert args[0] == "hello world"
-        assert "--provider" in args
-        assert "azure-speech" in args
-        assert "--stdout" in args
-        assert "--response-format" in args
-        assert "wav" in args
-
     def test_tts_args_openai(self, tmp_config, monkeypatch):
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-        custom = {"config": {"tts": {"model": "gpt-4o-mini-tts", "voice": "sage"}}}
+        custom = {"config": {"tts": {"voice": "sage"}}}
         with open(tmp_config, "w") as f:
             yaml.dump(custom, f)
         c = IoMcpConfig.load(tmp_config)
@@ -639,11 +672,26 @@ class TestCLIArgs:
         assert "--voice" in args
         assert "sage" in args
 
+    def test_tts_args_mai_voice(self, config_with_defaults, monkeypatch):
+        """MAI voice preset resolves through openai provider."""
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        c = IoMcpConfig.load(config_with_defaults.config_path)
+        c.set_tts_voice("noa")
+        args = c.tts_cli_args("hello world")
+        assert args[0] == "hello world"
+        assert "--model" in args
+        assert "mai-voice-1" in args
+        assert "--voice" in args
+        assert "en-US-Noa:MAI-Voice-1" in args
+        assert "--stdout" in args
+        assert "--response-format" in args
+        assert "wav" in args
+
     def test_tts_args_openai_with_style(self, tmp_config, monkeypatch):
         """OpenAI + named style: sends --style only (no --instructions)."""
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         custom = {
-            "config": {"tts": {"model": "gpt-4o-mini-tts", "voice": "sage", "style": "happy"}},
+            "config": {"tts": {"voice": "sage", "style": "happy"}},
         }
         with open(tmp_config, "w") as f:
             yaml.dump(custom, f)
@@ -659,7 +707,7 @@ class TestCLIArgs:
         """OpenAI + custom text style: sends --style with the text."""
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         custom = {
-            "config": {"tts": {"model": "gpt-4o-mini-tts", "voice": "sage",
+            "config": {"tts": {"voice": "sage",
                                "style": "Speak like a pirate"}},
         }
         with open(tmp_config, "w") as f:
@@ -671,19 +719,26 @@ class TestCLIArgs:
         assert args[style_idx + 1] == "Speak like a pirate"
         assert "--instructions" not in args
 
-    def test_tts_args_with_overrides(self, config_with_defaults, monkeypatch):
-        monkeypatch.setenv("AZURE_SPEECH_API_KEY", "test-key")
-        monkeypatch.setenv("AZURE_SPEECH_ENDPOINT", "https://test.endpoint")
+    def test_tts_args_with_voice_preset_override(self, config_with_defaults, monkeypatch):
+        """voice_override with preset name resolves correctly."""
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         c = IoMcpConfig.load(config_with_defaults.config_path)
-        # Switch to azure model to test azure-specific override behavior
-        c.set_tts_model("mai-voice-1")
-        args = c.tts_cli_args("hello", voice_override="en-US-Teo:MAI-Voice-1",
+        args = c.tts_cli_args("hello", voice_override="teo",
                               emotion_override="happy")
         assert "en-US-Teo:MAI-Voice-1" in args
-        # --style is always passed now
         assert "--style" in args
         style_idx = args.index("--style")
         assert args[style_idx + 1] == "happy"
+
+    def test_tts_args_style_degree(self, config_with_defaults, monkeypatch):
+        """styleDegree is passed when set."""
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        c = IoMcpConfig.load(config_with_defaults.config_path)
+        # Default styleDegree is 2
+        args = c.tts_cli_args("hello")
+        assert "--style-degree" in args
+        degree_idx = args.index("--style-degree")
+        assert args[degree_idx + 1] == "2.0"
 
     def test_stt_args_basic(self, config_with_defaults, monkeypatch):
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
@@ -744,7 +799,7 @@ class TestConfigReset:
         """reset() deletes existing config and creates fresh defaults."""
         config_path = str(tmp_path / "config.yml")
         # Write a custom config
-        custom = {"config": {"tts": {"speed": 2.5, "model": "gpt-4o-mini-tts"}}}
+        custom = {"config": {"tts": {"speed": 2.5, "voice": "sage"}}}
         with open(config_path, "w") as f:
             yaml.dump(custom, f)
 
@@ -754,9 +809,9 @@ class TestConfigReset:
         # File should exist with defaults
         assert os.path.isfile(config_path)
         # Speed should be the default, not the custom value
-        assert config.tts_speed == 1.3
-        # Model should be the default
-        assert config.tts_model_name == "gpt-4o-mini-tts"
+        assert config.tts_speed == 1.2
+        # Voice preset should be the default
+        assert config.tts_voice_preset == "noa"
 
     def test_reset_when_no_file_exists(self, tmp_path):
         """reset() works fine when the file doesn't exist yet."""
@@ -767,7 +822,7 @@ class TestConfigReset:
 
         # File should be created with defaults
         assert os.path.isfile(config_path)
-        assert config.tts_speed == 1.3
+        assert config.tts_speed == 1.2
 
     def test_reset_preserves_all_defaults(self, tmp_path):
         """After reset, config has all DEFAULT_CONFIG keys."""
@@ -780,10 +835,12 @@ class TestConfigReset:
             on_disk = yaml.safe_load(f)
 
         assert "providers" in on_disk
-        assert "models" in on_disk
+        assert "voices" in on_disk
         assert "config" in on_disk
         assert "styles" in on_disk
         assert "openai" in on_disk["providers"]
+        assert "sage" in on_disk["voices"]
+        assert "noa" in on_disk["voices"]
         assert "healthMonitor" in on_disk["config"]
         assert "ambient" in on_disk["config"]
         assert "notifications" in on_disk["config"]

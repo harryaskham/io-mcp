@@ -9,8 +9,9 @@ expanded at load time.
 
 The config defines:
   - providers: named API endpoints with baseUrl and apiKey
-  - models: stt, tts, and realtime model definitions with provider associations
-  - config: runtime settings (selected models, voice, speed, etc.)
+  - voices: named voice presets mapping friendly names to provider/model/voice
+  - models: stt and realtime model definitions with provider associations
+  - config: runtime settings (selected voice preset, speed, etc.)
   - extraOptions: options appended to every choice list (with optional silent flag)
 """
 
@@ -93,28 +94,23 @@ DEFAULT_CONFIG: dict[str, Any] = {
                 "supportsRealtime": False,
             },
         },
-        "tts": {
-            "gpt-4o-mini-tts": {
-                "provider": "openai",
-                "voice": {
-                    "default": "shimmer",
-                    "options": [
-                        "alloy", "ash", "ballad", "coral", "echo",
-                        "fable", "onyx", "nova", "sage", "shimmer", "verse",
-                    ],
-                },
-            },
-            "mai-voice-1": {
-                "provider": "azure-speech",
-                "voice": {
-                    "default": "en-US-Noa:MAI-Voice-1",
-                    "options": [
-                        "en-US-Noa:MAI-Voice-1",
-                        "en-US-Teo:MAI-Voice-1",
-                    ],
-                },
-            },
-        },
+    },
+    # Named voice presets — each maps a friendly name to provider/model/voice.
+    # Use these names everywhere: config.tts.voice, voiceRotation, uiVoice.
+    "voices": {
+        "alloy": {"provider": "openai", "model": "gpt-4o-mini-tts", "voice": "alloy"},
+        "ash": {"provider": "openai", "model": "gpt-4o-mini-tts", "voice": "ash"},
+        "ballad": {"provider": "openai", "model": "gpt-4o-mini-tts", "voice": "ballad"},
+        "coral": {"provider": "openai", "model": "gpt-4o-mini-tts", "voice": "coral"},
+        "echo": {"provider": "openai", "model": "gpt-4o-mini-tts", "voice": "echo"},
+        "fable": {"provider": "openai", "model": "gpt-4o-mini-tts", "voice": "fable"},
+        "onyx": {"provider": "openai", "model": "gpt-4o-mini-tts", "voice": "onyx"},
+        "nova": {"provider": "openai", "model": "gpt-4o-mini-tts", "voice": "nova"},
+        "sage": {"provider": "openai", "model": "gpt-4o-mini-tts", "voice": "sage"},
+        "shimmer": {"provider": "openai", "model": "gpt-4o-mini-tts", "voice": "shimmer"},
+        "verse": {"provider": "openai", "model": "gpt-4o-mini-tts", "voice": "verse"},
+        "noa": {"provider": "openai", "model": "mai-voice-1", "voice": "en-US-Noa:MAI-Voice-1"},
+        "teo": {"provider": "openai", "model": "mai-voice-1", "voice": "en-US-Teo:MAI-Voice-1"},
     },
     "config": {
         "colorScheme": "nord",
@@ -122,33 +118,20 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "model": "gpt-realtime",
         },
         "tts": {
-            "model": "gpt-4o-mini-tts",
-            "voice": "shimmer",
-            "uiVoice": "alloy",
-            "speed": 1.3,
-            "style": "friendly",
-            "styleDegree": None,               # Azure Speech style intensity (0.01-2.0, None=default)
-            "localBackend": "none",  # "termux", "espeak", or "none"
+            "voice": "noa",
+            "uiVoice": "teo",
+            "speed": 1.2,
+            "style": "terrified",
+            "styleDegree": 2,
+            "localBackend": "espeak",  # "termux", "espeak", or "none"
             "voiceRotation": [
-                {"voice": "alloy", "model": "gpt-4o-mini-tts"},
-                {"voice": "ash", "model": "gpt-4o-mini-tts"},
-                {"voice": "ballad", "model": "gpt-4o-mini-tts"},
-                {"voice": "coral", "model": "gpt-4o-mini-tts"},
-                {"voice": "echo", "model": "gpt-4o-mini-tts"},
-                {"voice": "fable", "model": "gpt-4o-mini-tts"},
-                {"voice": "onyx", "model": "gpt-4o-mini-tts"},
-                {"voice": "nova", "model": "gpt-4o-mini-tts"},
-                {"voice": "sage", "model": "gpt-4o-mini-tts"},
-                {"voice": "shimmer", "model": "gpt-4o-mini-tts"},
-                {"voice": "verse", "model": "gpt-4o-mini-tts"},
-                {"voice": "en-US-Noa:MAI-Voice-1", "model": "mai-voice-1"},
-                {"voice": "en-US-Teo:MAI-Voice-1", "model": "mai-voice-1"},
+                "alloy", "ash", "ballad", "coral", "echo",
+                "fable", "onyx", "nova", "sage", "shimmer", "verse",
+                "noa", "teo",
             ],
             "randomRotation": True,  # random (True) vs sequential (False) voice/emotion assignment
             "styleRotation": [
-                "happy", "calm", "excited", "serious", "friendly",
-                "neutral", "storyteller", "gentle", "shy",
-                "empathetic", "encouraging", "confused", "sad", "surprised", "curious",
+                "whispering", "excited", "hopeful", "friendly", "unfriendly", "terrified",
             ],
         },
         "stt": {
@@ -218,8 +201,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         },
     },
     "styles": [
-        "happy", "calm", "excited", "serious", "friendly",
-        "neutral", "storyteller", "gentle", "shy",
+        "whispering", "excited", "hopeful", "friendly", "unfriendly", "terrified",
+        "happy", "calm", "serious", "neutral", "storyteller", "gentle", "shy",
         "empathetic", "encouraging", "confused", "sad", "surprised", "curious",
     ],
 }
@@ -378,15 +361,34 @@ class IoMcpConfig:
         warnings: list[str] = []
 
         # Check required top-level keys
-        for key in ("providers", "models", "config"):
+        for key in ("providers", "voices", "config"):
             if key not in self.raw:
                 warnings.append(f"Missing top-level key '{key}' — using defaults")
 
-        # Check TTS model exists in models
-        tts_model = self.runtime.get("tts", {}).get("model", "")
-        tts_models = self.raw.get("models", {}).get("tts", {})
-        if tts_model and tts_model not in tts_models:
-            warnings.append(f"TTS model '{tts_model}' not found in models.tts — available: {list(tts_models.keys())}")
+        voices = self.raw.get("voices", {})
+
+        # Check TTS voice preset exists
+        tts_voice = self.runtime.get("tts", {}).get("voice", "")
+        if tts_voice and tts_voice not in voices:
+            warnings.append(f"TTS voice preset '{tts_voice}' not found in voices — available: {list(voices.keys())}")
+
+        # Check UI voice preset exists
+        ui_voice = self.runtime.get("tts", {}).get("uiVoice", "")
+        if ui_voice and ui_voice not in voices:
+            warnings.append(f"UI voice preset '{ui_voice}' not found in voices — available: {list(voices.keys())}")
+
+        # Check voice rotation presets exist
+        voice_rot = self.runtime.get("tts", {}).get("voiceRotation", [])
+        for entry in voice_rot:
+            name = entry if isinstance(entry, str) else entry.get("voice", "") if isinstance(entry, dict) else ""
+            if name and name not in voices:
+                warnings.append(f"Voice rotation entry '{name}' not found in voices")
+
+        # Check providers referenced by voice presets exist
+        for name, vdef in voices.items():
+            provider = vdef.get("provider", "") if isinstance(vdef, dict) else ""
+            if provider and provider not in self.raw.get("providers", {}):
+                warnings.append(f"Voice preset '{name}' references provider '{provider}' which is not defined")
 
         # Check STT model exists in models
         stt_model = self.runtime.get("stt", {}).get("model", "")
@@ -394,20 +396,11 @@ class IoMcpConfig:
         if stt_model and stt_model not in stt_models:
             warnings.append(f"STT model '{stt_model}' not found in models.stt — available: {list(stt_models.keys())}")
 
-        # Check TTS voice is valid for current model
-        tts_voice = self.runtime.get("tts", {}).get("voice", "")
-        if tts_model and tts_model in tts_models:
-            model_def = tts_models[tts_model]
-            voice_options = model_def.get("voice", {}).get("options", [])
-            if voice_options and tts_voice and tts_voice not in voice_options:
-                warnings.append(f"TTS voice '{tts_voice}' not in options for {tts_model}: {voice_options}")
-
-        # Check providers referenced by models exist
-        for category in ("tts", "stt"):
-            for name, model_def in self.raw.get("models", {}).get(category, {}).items():
-                provider = model_def.get("provider", "")
-                if provider and provider not in self.raw.get("providers", {}):
-                    warnings.append(f"Model '{name}' references provider '{provider}' which is not defined")
+        # Check providers referenced by STT models exist
+        for name, model_def in self.raw.get("models", {}).get("stt", {}).items():
+            provider = model_def.get("provider", "")
+            if provider and provider not in self.raw.get("providers", {}):
+                warnings.append(f"STT model '{name}' references provider '{provider}' which is not defined")
 
         # Check style exists in styles list
         style = self.runtime.get("tts", {}).get("style",
@@ -519,19 +512,61 @@ class IoMcpConfig:
     def runtime(self) -> dict[str, Any]:
         return self.expanded.get("config", {})
 
+    # ─── Voice presets ────────────────────────────────────────────
+
+    @property
+    def voices(self) -> dict[str, Any]:
+        """Named voice presets: {name: {provider, model, voice}}."""
+        return self.expanded.get("voices", {})
+
+    def resolve_voice(self, name: str) -> dict[str, Any]:
+        """Resolve a voice preset name to its full definition.
+
+        Returns dict with keys: provider, model, voice, base_url, api_key.
+        Falls back to treating the name as a raw voice string on the
+        current default provider if no preset matches.
+        """
+        preset = self.voices.get(name, {})
+        if preset:
+            provider_name = preset.get("provider", "openai")
+            provider_def = self.providers.get(provider_name, {})
+            return {
+                "provider": provider_name,
+                "model": preset.get("model", "gpt-4o-mini-tts"),
+                "voice": preset.get("voice", name),
+                "base_url": provider_def.get("baseUrl", "https://api.openai.com"),
+                "api_key": provider_def.get("apiKey", ""),
+            }
+        # Fallback: treat name as raw voice string, use openai defaults
+        provider_def = self.providers.get("openai", {})
+        return {
+            "provider": "openai",
+            "model": "gpt-4o-mini-tts",
+            "voice": name,
+            "base_url": provider_def.get("baseUrl", "https://api.openai.com"),
+            "api_key": provider_def.get("apiKey", ""),
+        }
+
+    @property
+    def voice_preset_names(self) -> list[str]:
+        """All available voice preset names."""
+        return list(self.voices.keys())
+
     # ─── TTS accessors ──────────────────────────────────────────────
 
     @property
     def tts_model_name(self) -> str:
-        return self.runtime.get("tts", {}).get("model", "gpt-4o-mini-tts")
+        """The TTS model from the active voice preset."""
+        return self.resolve_voice(self.tts_voice_preset).get("model", "gpt-4o-mini-tts")
 
     @property
     def tts_model_def(self) -> dict[str, Any]:
-        return self.models.get("tts", {}).get(self.tts_model_name, {})
+        """Full resolved definition for the active voice preset."""
+        return self.resolve_voice(self.tts_voice_preset)
 
     @property
     def tts_provider_name(self) -> str:
-        return self.tts_model_def.get("provider", "openai")
+        return self.resolve_voice(self.tts_voice_preset).get("provider", "openai")
 
     @property
     def tts_provider(self) -> dict[str, Any]:
@@ -539,21 +574,32 @@ class IoMcpConfig:
 
     @property
     def tts_base_url(self) -> str:
-        return self.tts_provider.get("baseUrl", "https://api.openai.com")
+        return self.resolve_voice(self.tts_voice_preset).get("base_url", "https://api.openai.com")
 
     @property
     def tts_api_key(self) -> str:
-        return self.tts_provider.get("apiKey", "")
+        return self.resolve_voice(self.tts_voice_preset).get("api_key", "")
 
     @property
-    def tts_voice(self) -> str:
+    def tts_voice_preset(self) -> str:
+        """The current voice preset name (e.g. 'sage', 'noa')."""
         return self.runtime.get("tts", {}).get("voice", "sage")
 
     @property
-    def tts_ui_voice(self) -> str:
-        """Get the UI voice. Falls back to regular voice if not set."""
+    def tts_voice(self) -> str:
+        """The raw voice string for the TTS CLI (e.g. 'sage', 'en-US-Noa:MAI-Voice-1')."""
+        return self.resolve_voice(self.tts_voice_preset).get("voice", "sage")
+
+    @property
+    def tts_ui_voice_preset(self) -> str:
+        """Get the UI voice preset name. Falls back to regular voice if not set."""
         ui = self.runtime.get("tts", {}).get("uiVoice", "")
-        return ui if ui else self.tts_voice
+        return ui if ui else self.tts_voice_preset
+
+    @property
+    def tts_ui_voice(self) -> str:
+        """Get the UI voice raw string. Falls back to regular voice if not set."""
+        return self.resolve_voice(self.tts_ui_voice_preset).get("voice", self.tts_voice)
 
     @property
     def tts_speed(self) -> float:
@@ -594,22 +640,33 @@ class IoMcpConfig:
 
     @property
     def tts_voice_rotation(self) -> list[dict]:
-        """List of voice+model pairs to cycle through for multi-session tab assignment.
+        """List of resolved voice rotation entries for multi-session tab assignment.
 
-        Supports two formats:
-        - Strings (backward compat): ["sage", "ballad"] → uses current model
-        - Dicts (triple): [{"voice": "sage", "model": "gpt-4o-mini-tts"}, ...]
+        Voice rotation entries are preset names from the 'voices' dict.
+        Also supports legacy formats:
+        - Strings: ["sage", "noa"] → resolved via voice presets
+        - Dicts (legacy triple): [{"voice": "sage", "model": "gpt-4o-mini-tts"}]
 
-        Returns normalized list of dicts: [{"voice": "...", "model": "..."}, ...]
-        where "model" may be None for string entries.
+        Returns normalized list of dicts: [{"voice": "...", "model": "...", "preset": "..."}, ...]
         """
         raw = self.runtime.get("tts", {}).get("voiceRotation", [])
         result = []
         for entry in raw:
             if isinstance(entry, str):
-                result.append({"voice": entry, "model": None})
+                # Preset name — resolve to full definition
+                resolved = self.resolve_voice(entry)
+                result.append({
+                    "voice": resolved["voice"],
+                    "model": resolved["model"],
+                    "preset": entry,
+                })
             elif isinstance(entry, dict):
-                result.append({"voice": entry.get("voice", ""), "model": entry.get("model")})
+                # Legacy dict format — keep for backward compat
+                result.append({
+                    "voice": entry.get("voice", ""),
+                    "model": entry.get("model"),
+                    "preset": entry.get("preset", entry.get("voice", "")),
+                })
         return result
 
     @property
@@ -647,12 +704,17 @@ class IoMcpConfig:
 
     @property
     def tts_voice_options(self) -> list[str]:
-        voice_def = self.tts_model_def.get("voice", {})
-        return voice_def.get("options", [])
+        """Available voice preset names."""
+        return self.voice_preset_names
 
     @property
     def tts_model_names(self) -> list[str]:
-        return list(self.models.get("tts", {}).keys())
+        """Unique TTS model names across all voice presets."""
+        models = set()
+        for vdef in self.voices.values():
+            if isinstance(vdef, dict) and vdef.get("model"):
+                models.add(vdef["model"])
+        return sorted(models)
 
     # ─── STT accessors ──────────────────────────────────────────────
 
@@ -986,29 +1048,43 @@ class IoMcpConfig:
     # ─── Config mutation ────────────────────────────────────────────
 
     def set_tts_model(self, model_name: str) -> None:
-        """Set the TTS model and reset voice to the new model's default."""
-        self.raw.setdefault("config", {}).setdefault("tts", {})["model"] = model_name
-        # Reset voice to the new model's default
-        model_def = self.raw.get("models", {}).get("tts", {}).get(model_name, {})
-        voice_def = model_def.get("voice", {})
-        default_voice = voice_def.get("default", "")
-        if default_voice:
-            self.raw["config"]["tts"]["voice"] = default_voice
+        """Set the TTS model (legacy — prefer set_tts_voice_preset).
+
+        Finds the first voice preset using this model and switches to it.
+        """
+        # Find a preset using this model
+        for name, vdef in self.raw.get("voices", {}).items():
+            if isinstance(vdef, dict) and vdef.get("model") == model_name:
+                self.set_tts_voice_preset(name)
+                return
+        # No preset found — just update raw config
+        self.raw.setdefault("config", {}).setdefault("tts", {})["voice"] = model_name
         self.expanded = _expand_config(self.raw)
 
     def set_tts_voice(self, voice: str) -> None:
-        """Set the TTS voice. Validates against the current model's provider."""
-        # Check if the voice is valid for the current model
-        model_name = self.tts_model_name
-        model_def = self.raw.get("models", {}).get("tts", {}).get(model_name, {})
-        voice_def = model_def.get("voice", {})
-        options = voice_def.get("options", [])
-        if options and voice not in options:
-            raise ValueError(
-                f"Voice '{voice}' is not valid for model '{model_name}'. "
-                f"Valid voices: {', '.join(options)}"
-            )
+        """Set the TTS voice by preset name.
+
+        Accepts either a preset name (e.g. 'sage') or a raw voice string
+        for backward compatibility. If it matches a preset name, uses that.
+        Otherwise, searches for a preset with matching raw voice string.
+        """
+        # Direct preset name match
+        voices = self.raw.get("voices", {})
+        if voice in voices:
+            self.set_tts_voice_preset(voice)
+            return
+        # Search by raw voice string
+        for name, vdef in voices.items():
+            if isinstance(vdef, dict) and vdef.get("voice") == voice:
+                self.set_tts_voice_preset(name)
+                return
+        # No match — set directly (backward compat)
         self.raw.setdefault("config", {}).setdefault("tts", {})["voice"] = voice
+        self.expanded = _expand_config(self.raw)
+
+    def set_tts_voice_preset(self, preset_name: str) -> None:
+        """Set the TTS voice by preset name."""
+        self.raw.setdefault("config", {}).setdefault("tts", {})["voice"] = preset_name
         self.expanded = _expand_config(self.raw)
 
     def set_tts_speed(self, speed: float) -> None:
@@ -1045,16 +1121,22 @@ class IoMcpConfig:
         Returns the full argument list (excluding the 'tts' binary itself).
         Optional overrides for voice/emotion/model (used for per-session rotation).
 
+        voice_override can be a preset name or a raw voice string.
+        model_override overrides the model from the voice preset.
+
         Style handling: always passes ``--style <name>`` for both providers.
         The tts CLI handles OpenAI instructions and Azure SSML internally.
         """
-        model_name = model_override or self.tts_model_name
-        model_def = self.models.get("tts", {}).get(model_name, {})
-        provider = model_def.get("provider", "openai")
-        provider_def = self.providers.get(provider, {})
-        base_url = provider_def.get("baseUrl", "https://api.openai.com")
-        api_key = provider_def.get("apiKey", "")
-        voice = voice_override or self.tts_voice
+        # Resolve voice preset — override or current
+        preset_name = voice_override or self.tts_voice_preset
+        resolved = self.resolve_voice(preset_name)
+
+        model_name = model_override or resolved["model"]
+        provider = resolved.get("provider", "openai")
+        base_url = resolved["base_url"]
+        api_key = resolved["api_key"]
+        voice = resolved["voice"]
+
         args = [text]
 
         if provider == "azure-speech":

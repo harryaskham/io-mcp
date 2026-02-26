@@ -121,17 +121,43 @@ SSE events: `choices_presented`, `speech_requested`, `selection_made`, `recordin
 ## Configuration
 
 ```yaml
+# Named voice presets — use these names in config.tts.voice, uiVoice, voiceRotation
+voices:
+  sage:
+    provider: openai
+    model: gpt-4o-mini-tts
+    voice: sage
+  noa:
+    provider: openai
+    model: mai-voice-1
+    voice: en-US-Noa:MAI-Voice-1
+  teo:
+    provider: openai
+    model: mai-voice-1
+    voice: en-US-Teo:MAI-Voice-1
+  # ... alloy, ash, ballad, coral, echo, fable, onyx, nova, shimmer, verse
+
 config:
   colorScheme: nord         # nord, tokyo-night, catppuccin, dracula
   tts:
-    model: gpt-4o-mini-tts
-    speed: 1.3
-    emotion: friendly
-    styleDegree: null         # Azure Speech style intensity (0.01-2.0, null=default)
-    localBackend: termux      # termux (Android TTS), espeak (espeak-ng), none
-    uiVoice: ""             # separate voice for UI narration (settings, prompts)
-    voiceRotation: []       # cycle voices across agent tabs (strings or {voice, model} objects)
-    emotionRotation: []
+    voice: noa              # voice preset name (from voices section)
+    uiVoice: teo            # separate voice preset for UI narration
+    speed: 1.2
+    style: terrified        # TTS style/emotion instruction
+    styleDegree: 2          # style intensity (0.01-2.0)
+    localBackend: espeak    # termux (Android TTS), espeak (espeak-ng), none
+    voiceRotation:          # cycle voice presets across agent tabs
+      - alloy
+      - ash
+      - sage
+      - noa
+      - teo
+    randomRotation: true    # random (true) vs sequential (false) assignment
+    styleRotation:          # cycle styles across agent tabs
+      - whispering
+      - excited
+      - friendly
+      - terrified
   stt:
     model: whisper
     realtime: false
@@ -174,17 +200,12 @@ config:
     prevTab: h
     refresh: r
 
-emotionPresets:
-  openai:                     # text instructions for OpenAI TTS
-    shy: "Speak in a soft, quiet whisper. Hesitant and gentle."
-    happy: "Speak in a warm, cheerful tone."
-    calm: "Speak in a soothing, relaxed tone."
-    # ... plus excited, serious, friendly, neutral, storyteller, gentle
-  azure-speech:               # SSML express-as style names for MAI Voice
-    friendly: friendly
-    happy: joy
-    excited: excitement
-    # ... plus empathetic, neutral, encouragement, confusion, sadness, surprise, curiosity
+styles:                       # available TTS style/emotion names
+  - whispering
+  - excited
+  - friendly
+  - terrified
+  # ... plus happy, calm, serious, neutral, etc.
 
 extraOptions:               # project-local in .io-mcp.yml
   - title: Commit and push
@@ -326,7 +347,7 @@ register_session(
 
 - Config is at `~/.config/io-mcp/config.yml` — use `set_*` tools or `reload_config` to change settings
 - Local `.io-mcp.yml` in cwd is merged on top (for project-specific extra options)
-- Per-session voice/emotion rotation: set `voiceRotation`/`emotionRotation` lists in config. Voice rotation supports cross-provider triples: `[{voice: sage, model: gpt-4o-mini-tts}, {voice: en-US-Noa:MAI-Voice-1, model: mai-voice-1}]`
+- Per-session voice/emotion rotation: set `voiceRotation`/`styleRotation` lists in config. Voice rotation uses preset names from the top-level `voices` section
 - Key bindings are configurable in `config.keyBindings`
 - Use `rename_session()` on connect to set a descriptive tab name
 - Use `run_command()` to execute shell commands on the server device with user approval

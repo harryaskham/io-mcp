@@ -635,12 +635,11 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
     def _tool_set_voice(args, session_id):
         voice = args.get("voice", "")
         if frontend.config:
-            valid = frontend.config.tts_voice_options
+            valid = frontend.config.voice_preset_names
             if valid and voice not in valid:
                 return json.dumps({
-                    "error": f"Unsupported voice: {voice}",
+                    "error": f"Unsupported voice preset: {voice}",
                     "valid_voices": valid,
-                    "current_model": frontend.config.tts_model_name,
                 })
             frontend.config.set_tts_voice(voice)
             frontend.config.save()
@@ -659,7 +658,7 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
             frontend.config.set_tts_model(model)
             frontend.config.save()
             frontend.tts.clear_cache()
-            return f"TTS model set to {model}, voice reset to {frontend.config.tts_voice}"
+            return f"TTS model set to {model}, voice is now {frontend.config.tts_voice_preset}"
         return f"TTS model set to {model}"
 
     def _tool_set_stt_model(args, session_id):
@@ -692,12 +691,11 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
     def _tool_get_settings(args, session_id):
         if frontend.config:
             return json.dumps({
+                "tts_voice": frontend.config.tts_voice_preset,
                 "tts_model": frontend.config.tts_model_name,
-                "tts_voice": frontend.config.tts_voice,
                 "tts_speed": frontend.config.tts_speed,
                 "tts_style": frontend.config.tts_style,
-                "tts_voice_options": frontend.config.tts_voice_options,
-                "tts_models": frontend.config.tts_model_names,
+                "voices": frontend.config.voice_preset_names,
                 "styles": frontend.config.tts_style_options,
                 "stt_model": frontend.config.stt_model_name,
                 "stt_models": frontend.config.stt_model_names,
@@ -776,8 +774,8 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
             frontend.tts.clear_cache()
             return json.dumps({
                 "status": "reloaded",
+                "tts_voice": frontend.config.tts_voice_preset,
                 "tts_model": frontend.config.tts_model_name,
-                "tts_voice": frontend.config.tts_voice,
                 "tts_speed": frontend.config.tts_speed,
                 "tts_style": frontend.config.tts_style,
                 "stt_model": frontend.config.stt_model_name,

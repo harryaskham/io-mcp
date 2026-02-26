@@ -135,7 +135,7 @@ class TTSEngine:
 
         mode = "espeak-ng (local)" if self._local else "tts CLI (API)"
         if not self._local and self._config:
-            mode = f"{self._config.tts_model_name} ({self._config.tts_voice})"
+            mode = f"{self._config.tts_voice_preset} ({self._config.tts_model_name})"
         local_mode = {"termux": "termux-tts-speak", "espeak": "espeak-ng", "none": "none"}[self._local_backend]
         print(f"  TTS engine: {mode}", flush=True)
         print(f"  TTS local: {local_mode}", flush=True)
