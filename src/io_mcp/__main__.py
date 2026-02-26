@@ -544,6 +544,9 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
             session.last_preamble = preamble
             session.last_choices = list(all_choices)
             result = frontend.present_choices(session, preamble, all_choices)
+            if result.get("selected") == "_cancelled":
+                # MCP client cancelled the tool call — return immediately
+                return json.dumps({"selected": "error", "summary": "Cancelled by client"})
             if result.get("selected") == "_undo":
                 restart_retries = 0
                 continue
@@ -1595,7 +1598,29 @@ def main() -> None:
         dispatch = _create_tool_dispatcher(app_ref, args.append_option, args.append_silent_option or [])
 
         from .backend import start_backend_server
-        start_backend_server(dispatch, host="0.0.0.0", port=args.port)
+
+        def _cancel_dispatch(tool_name: str, session_id: str) -> None:
+            """Cancel a pending tool call — resolves inbox items with _cancelled."""
+            try:
+                _app = app_ref[0]
+                session = _app.manager.get(session_id)
+                if not session:
+                    return
+                # Cancel the front inbox item if it matches the tool
+                front = session.peek_inbox()
+                if front and not front.done:
+                    front.result = {"selected": "_cancelled", "summary": f"Cancelled by client"}
+                    front.done = True
+                    front.event.set()
+                    session.drain_kick.set()
+                    # Update UI
+                    _app.call_from_thread(_app._update_inbox_list)
+                    _app.call_from_thread(_app._update_tab_bar)
+            except Exception:
+                pass
+
+        start_backend_server(dispatch, host="0.0.0.0", port=args.port,
+                           cancel_dispatch=_cancel_dispatch)
         print(f"  Backend: /handle-mcp on 0.0.0.0:{args.port}", flush=True)
 
         # Start Android SSE API on :8445

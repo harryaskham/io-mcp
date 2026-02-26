@@ -334,11 +334,9 @@ class TestPlayCached:
             key = engine._cache_key("hello")
             engine._cache[key] = f.name
 
-            with mock.patch.object(engine, "stop_sync") as mock_stop:
-                with mock.patch.object(engine, "_start_playback") as mock_play:
-                    engine.play_cached("hello")
-                    mock_stop.assert_called_once()
-                    mock_play.assert_called_once_with(f.name, max_attempts=2)
+            with mock.patch.object(engine, "_start_playback") as mock_play:
+                engine.play_cached("hello")
+                mock_play.assert_called_once_with(f.name, max_attempts=2)
 
             os.unlink(f.name)
 
@@ -348,11 +346,10 @@ class TestPlayCached:
 
         fake_path = "/tmp/test_generated.wav"
         with mock.patch.object(engine, "_generate_to_file", return_value=fake_path) as mock_gen:
-            with mock.patch.object(engine, "stop_sync"):
-                with mock.patch.object(engine, "_start_playback") as mock_play:
-                    engine.play_cached("hello")
-                    mock_gen.assert_called_once()
-                    mock_play.assert_called_once_with(fake_path, max_attempts=2)
+            with mock.patch.object(engine, "_start_playback") as mock_play:
+                engine.play_cached("hello")
+                mock_gen.assert_called_once()
+                mock_play.assert_called_once_with(fake_path, max_attempts=2)
 
     def test_cache_miss_generation_fails_no_crash(self):
         engine = _make_engine()

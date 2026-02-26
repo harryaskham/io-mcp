@@ -89,6 +89,20 @@ class BackendHandler(BaseHTTPRequestHandler):
             return
 
         # ── MCP proxy endpoint (/handle-mcp) ──────────────────────
+        if self.path == "/cancel-mcp":
+            # Cancel a pending tool call (e.g. present_choices aborted by client)
+            tool = request.get("tool", "")
+            session_id = request.get("session_id", "")
+            try:
+                cancel_fn = getattr(self, 'cancel_dispatch', None)
+                if cancel_fn:
+                    cancel_fn(tool, session_id)
+                self._json_response(200, {"status": "cancelled"})
+            except Exception as e:
+                log.error(f"Cancel dispatch error: {tool}: {e}")
+                self._json_response(500, {"error": str(e)[:200]})
+            return
+
         if self.path != "/handle-mcp":
             self._json_response(404, {"error": "not found"})
             return
@@ -131,6 +145,7 @@ def start_backend_server(
     tool_dispatch: Callable[[str, dict, str], str],
     host: str = "127.0.0.1",
     port: int = 8446,
+    cancel_dispatch: Callable[[str, str], None] | None = None,
 ) -> None:
     """Start the backend HTTP server in a daemon thread.
 
@@ -138,12 +153,16 @@ def start_backend_server(
         tool_dispatch: Function(tool_name, args, session_id) -> str
         host: Bind address (default: localhost only)
         port: Port number
+        cancel_dispatch: Function(tool_name, session_id) -> None for MCP cancellation
     """
     # Bind dispatch function to handler class
+    attrs = {"tool_dispatch": staticmethod(tool_dispatch)}
+    if cancel_dispatch:
+        attrs["cancel_dispatch"] = staticmethod(cancel_dispatch)
     handler_class = type(
         "BoundBackendHandler",
         (BackendHandler,),
-        {"tool_dispatch": staticmethod(tool_dispatch)},
+        attrs,
     )
 
     server = ThreadingHTTPServer((host, port), handler_class)

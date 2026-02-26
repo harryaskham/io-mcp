@@ -170,6 +170,11 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         super().__init__(**kwargs)
         self._tts = tts
         self._freeform_tts = freeform_tts or tts
+
+        # Register TTS error callback for visible error reporting
+        self._tts._on_tts_error = self._on_tts_error
+        self._last_tts_error: str = ""
+        self._last_tts_error_time: float = 0.0
         self._freeform_delimiters = set(freeform_delimiters)
         self._scroll_debounce = scroll_debounce
         self._invert_scroll = invert_scroll
@@ -212,9 +217,6 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         # Dwell timer
         self._dwell_timer: Optional[Timer] = None
         self._dwell_start: float = 0.0
-
-        # Flag: is foreground currently speaking (blocks bg playback)
-        self._fg_speaking = False
 
         # Haptic feedback — disabled by default, enabled via config.haptic.enabled
         self._termux_vibrate = _find_binary("termux-vibrate")
@@ -292,6 +294,29 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
     def _is_focused(self, session_id: str) -> bool:
         """Check if a session is the focused one."""
         return self.manager.active_session_id == session_id
+
+    def _on_tts_error(self, message: str) -> None:
+        """Handle TTS error — show in status line.
+
+        Called from the TTSEngine when API TTS fails. Shows a brief
+        error message in the TUI status area so the user knows audio
+        failed without falling back to local TTS.
+        """
+        import time as _time
+        self._last_tts_error = message
+        self._last_tts_error_time = _time.time()
+        try:
+            def _show():
+                try:
+                    s = self._cs
+                    status = self.query_one("#status", Label)
+                    status.update(f"[{s['error']}]⚠ TTS error: {message[:80]}[/{s['error']}]")
+                    status.display = True
+                except Exception:
+                    pass
+            self._safe_call(_show)
+        except Exception:
+            pass
 
     def _speak_ui(self, text: str) -> None:
         """Speak a UI message (settings, navigation, prompts) with optional separate voice.
@@ -1554,9 +1579,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             self._safe_call(_show_convo)
 
             # Speak preamble only (no options readout)
-            self._fg_speaking = True
             self._tts.speak(preamble)
-            self._fg_speaking = False
 
             # Auto-start voice recording after a brief pause
             _time.sleep(0.3)
@@ -1615,24 +1638,20 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         self._pregenerate_worker(bg_texts)
 
         if is_fg:
-            # Wait for any in-progress speak_async to finish before
-            # starting the intro readout (which would kill it via stop).
-            self._tts.wait_for_speech(timeout=5.0)
-
             # Audio + haptic cue for new choices
             self._tts.play_chime("choices")
             self._vibrate_pattern("pulse")
 
-            # Foreground: speak intro and read options
-            self._fg_speaking = True
+            # Speak the full intro (preamble + option titles) sequentially.
+            # The speech lock in TTSEngine ensures this queues behind any
+            # in-progress speech without interrupting it.
             self._tts.speak(full_intro)
 
             session.intro_speaking = False
-            # Only read options if intro wasn't interrupted by scrolling
+            # Read each option with full summary — breaks if user scrolls
             if session.active and not session.selection:
                 session.reading_options = True
                 for i, text in enumerate(numbered_full_all):
-                    # Check session still exists and is active on each iteration
                     if not session.reading_options or not session.active:
                         break
                     if not self.manager.get(session.session_id):
@@ -1642,10 +1661,6 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                         continue
                     self._tts.speak(text)
                 session.reading_options = False
-            self._fg_speaking = False
-
-            # Don't re-read the current highlight after intro — it was just read
-            # The user can scroll to trigger readout of individual items
 
             # Try playing any background queued speech
             self._try_play_background_queue()
@@ -2344,14 +2359,10 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             # Per-call emotion > session override > config default
             emotion_ov = emotion if emotion else getattr(session, 'emotion_override', None)
 
-            # Urgent messages always interrupt
-            if priority >= 1:
-                self._tts.stop()
-
-            self._fg_speaking = True
+            # No interruption — speech queues sequentially via the
+            # TTSEngine speech lock. Urgent items queue at front of
+            # the inbox but don't kill current playback.
             if block:
-                # Use cached play for blocking calls to avoid
-                # streaming truncation (audio starting mid-sentence)
                 self._tts.speak(text, voice_override=voice_ov,
                                 emotion_override=emotion_ov,
                                 model_override=model_ov)
@@ -2359,7 +2370,6 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 self._tts.speak_async(text, voice_override=voice_ov,
                                      emotion_override=emotion_ov,
                                      model_override=model_ov)
-            self._fg_speaking = False
         else:
             # Background: queue (urgent goes to front)
             entry.played = False
@@ -2470,9 +2480,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         is_focused = self._is_focused(session.session_id)
 
         if is_focused:
-            if priority >= 1:
-                self._tts.stop()
-
+            # No interruption — speech queues sequentially via the
+            # TTSEngine speech lock.
             self._tts.speak(text, voice_override=voice_ov,
                             emotion_override=emotion_ov,
                             model_override=model_ov)
@@ -2512,16 +2521,11 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
     def _try_play_background_queue(self) -> None:
         """Try to play queued background speech if foreground is idle."""
-        if self._fg_speaking:
-            return
-
         # Find any session with unplayed speech
         for session in self.manager.all_sessions():
             if session.session_id == self.manager.active_session_id:
                 continue  # skip foreground
             while session.unplayed_speech:
-                if self._fg_speaking:
-                    return  # foreground took over
                 entry = session.unplayed_speech.pop(0)
                 entry.played = True
                 self._tts.speak(entry.text)  # blocking so we play in order
@@ -2579,9 +2583,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         while session.unplayed_speech:
             entry = session.unplayed_speech.pop(0)
             entry.played = True
-            self._fg_speaking = True
             self._tts.speak(entry.text)
-            self._fg_speaking = False
 
         # Then read prompt + options
         if session.active:
@@ -2590,9 +2592,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             ]
             titles_readout = " ".join(numbered_labels)
             full_intro = f"{session.preamble} Your options are: {titles_readout}"
-            self._fg_speaking = True
             self._tts.speak(full_intro)
-            self._fg_speaking = False
 
             # Read all options
             session.reading_options = True
@@ -2601,9 +2601,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                     break
                 s = c.get('summary', '')
                 text = f"{i+1}. {c.get('label', '')}. {s}" if s else f"{i+1}. {c.get('label', '')}"
-                self._fg_speaking = True
                 self._tts.speak(text)
-                self._fg_speaking = False
             session.reading_options = False
 
     @work(thread=True, exit_on_error=False, group="play_inbox")
@@ -2612,9 +2610,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         while session.unplayed_speech:
             entry = session.unplayed_speech.pop(0)
             entry.played = True
-            self._fg_speaking = True
             self._tts.speak(entry.text)
-            self._fg_speaking = False
 
     def _show_session_waiting(self, session: Session) -> None:
         """Show waiting state for a specific session."""
@@ -3636,7 +3632,6 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
     @work(thread=True, exit_on_error=False, name="replay_prompt", exclusive=True)
     def _replay_prompt_worker(self, session: Session) -> None:
         """Worker: replay preamble and all options in background thread."""
-        self._fg_speaking = True
         self._tts.speak(session.preamble)
         numbered_labels = [
             f"{i+1}. {c.get('label', '')}" for i, c in enumerate(session.choices)
@@ -3650,7 +3645,6 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             text = f"{i+1}. {c.get('label', '')}. {s}" if s else f"{i+1}. {c.get('label', '')}"
             self._tts.speak(text)
         session.reading_options = False
-        self._fg_speaking = False
 
     # ─── Voice input ──────────────────────────────────────────────
     # Defined in VoiceMixin (tui/voice.py)
@@ -4742,6 +4736,29 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             pass
 
         self._show_waiting(label)
+
+        # Auto-advance: if another session has pending choices, switch to it
+        # immediately so the user doesn't have to hit "n"
+        self._auto_advance_to_next_choices(session)
+
+    def _auto_advance_to_next_choices(self, current_session: Session) -> None:
+        """Auto-switch to the next session with pending choices.
+
+        Called after a selection is made. If the current session has no
+        more pending choices, finds another session that does and switches
+        to it immediately, so the user doesn't have to press "n".
+        """
+        # Check if current session still has pending choices (from same session)
+        if current_session.inbox_choices_count() > 0:
+            return  # Same session has more — drain loop will present them
+
+        # Find another session with pending choices
+        next_session = self.manager.next_with_choices()
+        if next_session and next_session.session_id != current_session.session_id:
+            # Brief delay so "Selected: X" audio has a moment to start
+            import time as _time
+            _time.sleep(0.3)
+            self._switch_to_session(next_session)
 
     def _handle_extra_select(self, label: str) -> None:
         """Handle selection of extra options by label."""

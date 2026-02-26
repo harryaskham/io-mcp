@@ -103,6 +103,35 @@ def _forward_to_backend(
     }) + _crash_log_hint()
 
 
+def _cancel_backend_tool(
+    backend_url: str,
+    tool_name: str,
+    session_id: str,
+) -> None:
+    """Send a cancel request to the backend when an MCP tool call is aborted.
+
+    This tells the backend to resolve any pending inbox items (e.g.
+    present_choices) with a _cancelled result so the TUI cleans up.
+    """
+    url = f"{backend_url}/cancel-mcp"
+    payload = json.dumps({
+        "tool": tool_name,
+        "session_id": session_id,
+    }).encode()
+
+    try:
+        req = urllib.request.Request(
+            url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            resp.read()
+    except Exception:
+        pass  # Best effort — don't propagate cancel errors
+
+
 def _crash_log_hint() -> str:
     """Read recent crash logs and return self-healing instructions.
 
@@ -208,12 +237,24 @@ def create_proxy_server(
         if the event loop blocks (e.g. during a long present_choices wait),
         the SSE stream to the MCP client goes silent, the client times out,
         and retries the tool call — causing duplicate presentations and TTS.
+
+        If the MCP client cancels the tool call, sends a cancel request to
+        the backend to clean up pending inbox items (e.g. present_choices).
         """
         sid = _get_session_id(ctx)
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(
-            None, _forward_to_backend, backend_url, tool_name, args, sid
-        )
+        try:
+            return await loop.run_in_executor(
+                None, _forward_to_backend, backend_url, tool_name, args, sid
+            )
+        except asyncio.CancelledError:
+            # MCP client cancelled the tool call — tell the backend to clean up
+            log.info(f"Tool call cancelled by client: {tool_name} (session {sid})")
+            try:
+                _cancel_backend_tool(backend_url, tool_name, sid)
+            except Exception as e:
+                log.warning(f"Failed to cancel backend tool: {e}")
+            raise
 
     # ─── Tool definitions (thin proxies) ──────────────────────────
 

@@ -78,6 +78,15 @@ class TTSEngine:
         self._muted = False  # when True, play_cached is a no-op
         self._config = config
 
+        # Sequential speech lock — ensures only one speech plays at a time.
+        # speak() and speak_async() acquire this to serialize playback.
+        # speak_with_local_fallback() (scroll/select overlay) does NOT
+        # acquire this — it interrupts via stop_sync() instead.
+        self._speech_lock = threading.Lock()
+
+        # TTS error callback — set by the TUI to show errors visually
+        self._on_tts_error = None
+
         # PulseAudio/paplay health tracking
         self._consecutive_failures = 0
         self._last_failure_time: float = 0
@@ -379,7 +388,9 @@ class TTSEngine:
 
         If block=True, waits for playback to finish before returning.
         If block=False, starts playback and returns immediately.
-        Falls back to local TTS (termux/espeak) when API generation fails.
+
+        Does NOT stop current speech — callers use the _speech_lock to
+        serialize playback. Scroll/select overlay uses stop_sync() directly.
         """
         if not self._paplay or self._muted:
             return
@@ -389,8 +400,6 @@ class TTSEngine:
         path = self._cache.get(key)
 
         if path and os.path.isfile(path):
-            # Fast path: cached — kill current and play immediately
-            self.stop_sync()
             _time_mod.sleep(0.05)  # Brief pause to let PulseAudio settle
             if not self._start_playback(path, max_attempts=self._max_retries):
                 self._log_tts_error("paplay failed for cached audio", text)
@@ -401,23 +410,39 @@ class TTSEngine:
             p = self._generate_to_file(text, voice_override, emotion_override,
                                        model_override=model_override)
             if p:
-                self.stop_sync()
                 _time_mod.sleep(0.05)  # Brief pause to let PulseAudio settle
                 if not self._start_playback(p, max_attempts=self._max_retries):
                     self._log_tts_error("paplay failed after generation", text)
                 elif block:
                     self._wait_for_playback()
             else:
-                # API generation failed — fall back to local TTS
-                self._local_tts_fallback(text)
+                # API generation failed — report error (no local fallback)
+                self._report_tts_error(f"TTS generation failed for: {text[:60]}")
+
+    def _report_tts_error(self, message: str) -> None:
+        """Report a TTS error via the error callback (if set).
+
+        Called when API TTS fails and local fallback is disabled.
+        The TUI registers a callback to show errors visually.
+        """
+        self._log_tts_error(message)
+        cb = getattr(self, '_on_tts_error', None)
+        if cb:
+            try:
+                cb(message)
+            except Exception:
+                pass
 
     def _local_tts_fallback(self, text: str) -> None:
         """Fall back to local TTS when API TTS fails (e.g. missing API key).
 
-        Only uses local backends (termux/espeak) when explicitly configured.
-        When localBackend is "none", this is a no-op — espeak is never used
-        as a fallback in API mode.
+        Disabled by default — reports an error instead of falling back.
+        Only uses local backends (termux/espeak) when in --local mode.
         """
+        if not self._local:
+            # Not in local mode — report error instead of falling back
+            self._report_tts_error(f"TTS failed: {text[:60]}")
+            return
         try:
             if self._local_backend == "termux" and self._termux_exec:
                 self._speak_termux(text)
@@ -530,79 +555,62 @@ class TTSEngine:
               model_override: Optional[str] = None) -> None:
         """Speak text and BLOCK until playback finishes.
 
-        Uses streaming TTS for uncached audio (same as speak_async but blocking)
-        to avoid the 5-second file generation timeout. Cached audio uses the
-        fast play_cached path.
-
-        When in local mode, uses the configured local backend (termux-tts-speak
-        or espeak-ng) rather than always falling back to espeak file generation.
+        Acquires the speech lock to ensure sequential playback — no
+        self-interruption. Previous speech finishes before this starts.
         """
-        if self._local and self._local_backend == "termux" and self._termux_exec:
-            self._speak_termux(text)
-            return
-        # Check cache first — if cached, use play_cached (instant)
-        key = self._cache_key(text, voice_override, emotion_override,
-                              model_override=model_override)
-        cached = self._cache.get(key)
-        if cached and os.path.isfile(cached):
-            self.play_cached(text, block=True, voice_override=voice_override,
-                            emotion_override=emotion_override,
-                            model_override=model_override)
-        elif not self._local and self._tts_bin and self._config:
-            # Uncached API audio — use streaming (blocking) to avoid the
-            # file generation timeout that causes speak() to return instantly
-            self.speak_streaming(text, voice_override=voice_override,
-                               emotion_override=emotion_override,
-                               model_override=model_override,
-                               block=True)
-        else:
-            # Local mode or no config — fall back to play_cached
-            self.play_cached(text, block=True, voice_override=voice_override,
-                            emotion_override=emotion_override,
-                            model_override=model_override)
+        with self._speech_lock:
+            if self._local and self._local_backend == "termux" and self._termux_exec:
+                self._speak_termux(text)
+                return
+            # Check cache first — if cached, use play_cached (instant)
+            key = self._cache_key(text, voice_override, emotion_override,
+                                  model_override=model_override)
+            cached = self._cache.get(key)
+            if cached and os.path.isfile(cached):
+                self.play_cached(text, block=True, voice_override=voice_override,
+                                emotion_override=emotion_override,
+                                model_override=model_override)
+            elif not self._local and self._tts_bin and self._config:
+                self.speak_streaming(text, voice_override=voice_override,
+                                   emotion_override=emotion_override,
+                                   model_override=model_override,
+                                   block=True)
+            else:
+                self.play_cached(text, block=True, voice_override=voice_override,
+                                emotion_override=emotion_override,
+                                model_override=model_override)
 
     def speak_async(self, text: str, voice_override: Optional[str] = None,
                     emotion_override: Optional[str] = None,
                     model_override: Optional[str] = None) -> None:
-        """Speak text without blocking. Used for agent narration.
+        """Speak text without blocking. Queues behind any current speech.
 
-        Uses streaming TTS when possible (API mode, uncached) to reduce
-        time-to-first-audio and avoid the generate-then-play race condition
-        where stop() from another thread could kill playback during the gap
-        between file generation and paplay startup.
-
-        When in local mode, uses the configured local backend (termux-tts-speak
-        or espeak-ng) rather than always falling back to espeak file generation.
+        Acquires the speech lock in a background thread to ensure
+        sequential playback — speech queues up naturally without
+        interrupting what's currently playing.
         """
         def _do():
             try:
-                if self._local and self._local_backend == "termux" and self._termux_exec:
-                    self._speak_termux(text)
-                    return
-                # Use streaming for uncached API audio — pipes tts stdout
-                # directly to paplay, eliminating the file generation delay.
-                # For cached audio, play_cached is still faster.
-                key = self._cache_key(text, voice_override, emotion_override,
-                                      model_override=model_override)
-                cached = self._cache.get(key)
-                if cached and os.path.isfile(cached):
-                    # Cache hit — use play_cached for instant playback
-                    self.play_cached(text, block=False, voice_override=voice_override,
-                                   emotion_override=emotion_override,
-                                   model_override=model_override)
-                elif not self._local and self._tts_bin and self._config:
-                    # Cache miss with API backend — use streaming to avoid
-                    # the race condition where file generation takes seconds
-                    # and stop() kills playback before it starts.
-                    self.speak_streaming(text, voice_override=voice_override,
+                with self._speech_lock:
+                    if self._local and self._local_backend == "termux" and self._termux_exec:
+                        self._speak_termux(text)
+                        return
+                    key = self._cache_key(text, voice_override, emotion_override,
+                                          model_override=model_override)
+                    cached = self._cache.get(key)
+                    if cached and os.path.isfile(cached):
+                        self.play_cached(text, block=True, voice_override=voice_override,
                                        emotion_override=emotion_override,
-                                       model_override=model_override,
-                                       block=False)
-                else:
-                    # Local mode or no config — fall back to play_cached
-                    self.play_cached(text, block=False, voice_override=voice_override,
-                                   emotion_override=emotion_override,
-                                   model_override=model_override)
+                                       model_override=model_override)
+                    elif not self._local and self._tts_bin and self._config:
+                        self.speak_streaming(text, voice_override=voice_override,
+                                           emotion_override=emotion_override,
+                                           model_override=model_override,
+                                           block=True)
+                    else:
+                        self.play_cached(text, block=True, voice_override=voice_override,
+                                       emotion_override=emotion_override,
+                                       model_override=model_override)
             except Exception as e:
                 _log.error("speak_async error", exc_info=True)
         threading.Thread(target=_do, daemon=True).start()
@@ -757,7 +765,6 @@ class TTSEngine:
                               model_override=model_override)
         cached = self._cache.get(key)
         if cached and os.path.isfile(cached):
-            self.stop_sync()
             self._start_playback(cached, max_attempts=self._max_retries)
             if block:
                 self._wait_for_playback()
@@ -775,9 +782,9 @@ class TTSEngine:
                            model_override=model_override)
             return
 
-        # Skip streaming when API is known-broken — go straight to local fallback
+        # Skip streaming when API is known-broken — report error
         if not self._api_gen_available():
-            self._local_tts_fallback(text)
+            self._report_tts_error(f"TTS API unavailable: {text[:60]}")
             return
 
         # Build tts command
@@ -785,8 +792,6 @@ class TTSEngine:
             text, voice_override=voice_override,
             emotion_override=emotion_override,
             model_override=model_override)
-
-        self.stop_sync()
 
         try:
             # Start TTS process first and verify we get a valid WAV header
@@ -830,7 +835,7 @@ class TTSEngine:
                     f"tts CLI produced no/invalid WAV header ({len(header)} bytes): {tts_stderr[:120]}",
                     text)
                 self._record_api_gen_failure()
-                self._local_tts_fallback(text)
+                self._report_tts_error(f"TTS streaming failed: {tts_stderr[:80]}")
                 return
 
             # Header looks valid — start paplay with a relay thread that
@@ -922,10 +927,9 @@ class TTSEngine:
                         self._record_api_gen_failure()
                 except Exception:
                     pass
-                # Fall back to local TTS if streaming failed
+                # Report error if streaming failed (no local fallback)
                 if tts_failed:
-                    self._local_tts_fallback(text)
-            else:
+                    self._report_tts_error(f"TTS streaming failed: {text[:60]}")
                 # Non-blocking: monitor in background thread for error reporting
                 def _monitor():
                     tts_failed = False
@@ -980,9 +984,9 @@ class TTSEngine:
                             self._record_api_gen_failure()
                     except Exception:
                         pass
-                    # Fall back to local TTS if streaming failed
+                    # Report error if streaming failed (no local fallback)
                     if tts_failed:
-                        self._local_tts_fallback(text)
+                        self._report_tts_error(f"TTS streaming async failed: {text[:60]}")
                 threading.Thread(target=_monitor, daemon=True).start()
         except Exception as e:
             self._record_failure(f"Streaming TTS setup failed: {e}")
