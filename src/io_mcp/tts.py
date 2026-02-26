@@ -919,8 +919,8 @@ class TTSEngine:
                     else:
                         self._total_plays += 1
                         self._consecutive_failures = 0
+                        self._record_api_gen_success()  # Reset API failure tracking
                 except subprocess.TimeoutExpired:
-                    self._record_failure("paplay (streaming) timed out after 60s")
                     tts_failed = True
                 except Exception:
                     pass
@@ -976,8 +976,8 @@ class TTSEngine:
                         else:
                             self._total_plays += 1
                             self._consecutive_failures = 0
+                            self._record_api_gen_success()  # Reset API failure tracking
                     except subprocess.TimeoutExpired:
-                        self._record_failure("paplay (streaming async) timed out after 60s")
                         tts_failed = True
                     except Exception:
                         pass
