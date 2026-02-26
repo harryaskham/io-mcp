@@ -26,3 +26,6 @@ extraOptions:
   - title: Summarize session
     description: Summarize all changes made in this coding session
     silent: true
+  - title: Audit io-mcp logs
+    description: View the logs via MCP and look for any issues
+    silent: true

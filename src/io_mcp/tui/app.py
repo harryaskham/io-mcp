@@ -5035,7 +5035,12 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         self._tts.stop()
 
         # Build spawn options
-        options = [{"label": "Local agent", "summary": "Spawn Claude Code on this machine in a new tmux window"}]
+        options = [
+            {"label": "Local agent", "summary": "Spawn Claude Code on this machine in a new tmux window",
+             "_agent": "io-mcp:io-mcp"},
+            {"label": "Local admin agent", "summary": "Spawn admin agent for backlog, swarm, and PR management",
+             "_agent": "io-mcp:io-mcp-admin"},
+        ]
 
         # Add remote hosts from config
         if self._config:
@@ -5054,6 +5059,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                     "summary": f"SSH to {hostname}, work in {workdir}",
                     "_host": hostname,
                     "_workdir": workdir,
+                    "_agent": "io-mcp:io-mcp",
                 })
 
         options.append({"label": "Cancel", "summary": "Go back"})
@@ -5089,16 +5095,17 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         label = option.get("label", "")
         host = option.get("_host", "")
         workdir = option.get("_workdir", "")
+        agent = option.get("_agent", "io-mcp:io-mcp")
 
         if label == "Cancel":
             self._exit_settings()
             return
 
         self._speak_ui(f"Spawning {label}")
-        self._do_spawn_worker(label, host, workdir)
+        self._do_spawn_worker(label, host, workdir, agent)
 
     @work(thread=True, exit_on_error=False, name="spawn_agent")
-    def _do_spawn_worker(self, label: str, host: str, workdir: str) -> None:
+    def _do_spawn_worker(self, label: str, host: str, workdir: str, agent: str) -> None:
         """Worker: spawn agent in background thread."""
         try:
             import shutil
@@ -5127,7 +5134,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 remote_cmd = (
                     f"cd {workdir_resolved} && "
                     f"IO_MCP_URL={io_mcp_url} "
-                    f'claude --agent io-mcp "connect to io-mcp and greet the user"'
+                    f'claude --agent {agent} "connect to io-mcp and greet the user"'
                 )
                 cmd = [
                     tmux, "new-session", "-d", "-s", session_name,
@@ -5143,7 +5150,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                     tmux, "new-session", "-d", "-s", session_name,
                     "-c", workdir_expanded,
                     "bash", "-c",
-                    f'IO_MCP_URL={io_mcp_url} claude --agent io-mcp "connect to io-mcp and greet the user"',
+                    f'IO_MCP_URL={io_mcp_url} claude --agent {agent} "connect to io-mcp and greet the user"',
                 ]
 
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
