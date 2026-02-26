@@ -5,5 +5,5 @@
   "author": {
     "name": "Harry Askham"
   },
-  "mcpServers": "../mcp-config.json"
+  "mcpServers": "${CLAUDE_PLUGIN_DIR}/mcp-config.json"
 }
