@@ -296,25 +296,36 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         return self.manager.active_session_id == session_id
 
     def _on_tts_error(self, message: str) -> None:
-        """Handle TTS error — show in status line.
+        """Handle TTS error — show in status line with auto-dismiss.
 
         Called from the TTSEngine when API TTS fails. Shows a brief
         error message in the TUI status area so the user knows audio
-        failed without falling back to local TTS.
+        failed without falling back to local TTS. Auto-dismisses after
+        5 seconds to avoid persistent stale errors.
         """
         import time as _time
         self._last_tts_error = message
         self._last_tts_error_time = _time.time()
+        error_id = self._last_tts_error_time  # unique ID for this error
         try:
             def _show():
                 try:
                     s = self._cs
                     status = self.query_one("#status", Label)
-                    status.update(f"[{s['error']}]⚠ TTS error: {message[:80]}[/{s['error']}]")
+                    status.update(f"[{s['error']}]⚠ TTS: {message[:80]}[/{s['error']}]")
                     status.display = True
                 except Exception:
                     pass
             self._safe_call(_show)
+            # Auto-dismiss after 5 seconds (only if no newer error has appeared)
+            def _dismiss():
+                if self._last_tts_error_time == error_id:
+                    try:
+                        status = self.query_one("#status", Label)
+                        status.display = False
+                    except Exception:
+                        pass
+            self.set_timer(5.0, _dismiss)
         except Exception:
             pass
 
