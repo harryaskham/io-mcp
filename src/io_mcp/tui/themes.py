@@ -280,6 +280,7 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
         width: 1fr;
         margin: 0 0;
         background: {s['bg_alt']};
+        border-bottom: dashed {s['border']};
     }}
 
     ChoiceItem > .choice-label {{
