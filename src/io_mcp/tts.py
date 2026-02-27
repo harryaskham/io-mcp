@@ -234,6 +234,16 @@ class TTSEngine:
         """Record a successful API TTS generation."""
         self._api_gen_consecutive_failures = 0
 
+    def reset_failure_counters(self) -> None:
+        """Reset all failure counters (API gen + playback).
+
+        Called by the TUI when PulseAudio recovers — PulseAudio outages
+        cause paplay failures that get misattributed as API failures,
+        so clearing counters lets TTS resume immediately.
+        """
+        self._api_gen_consecutive_failures = 0
+        self._consecutive_failures = 0
+
     @property
     def tts_health(self) -> dict:
         """Return TTS health status for diagnostics.
@@ -438,8 +448,17 @@ class TTSEngine:
 
         Called when API TTS fails and local fallback is disabled.
         The TUI registers a callback to show errors visually.
+
+        When the API is known-broken (past the failure threshold), only
+        log at DEBUG level to avoid flooding the error log with hundreds
+        of identical "TTS API unavailable" messages per minute.
         """
-        self._log_tts_error(message)
+        if not self._api_gen_available():
+            # API is known-broken — don't spam ERROR log for every single
+            # speech attempt. The initial failures were already logged.
+            _log.debug("TTS suppressed (API unavailable): %s", message[:80])
+        else:
+            self._log_tts_error(message)
         cb = getattr(self, '_on_tts_error', None)
         if cb:
             try:
@@ -1087,6 +1106,10 @@ class TTSEngine:
         pulse_server = env.get("PULSE_SERVER", "127.0.0.1")
         diagnostics: list[str] = []
 
+        # Use a longer timeout for remote PulseAudio (over Tailscale etc.)
+        is_remote = pulse_server not in ("127.0.0.1", "localhost", "")
+        pactl_timeout = 8 if is_remote else 3
+
         # No pactl binary → can't check PulseAudio at all
         if not pactl:
             return False, "pactl binary not found"
@@ -1095,13 +1118,13 @@ class TTSEngine:
         try:
             result = subprocess.run(
                 [pactl, "info"],
-                env=env, capture_output=True, timeout=3,
+                env=env, capture_output=True, timeout=pactl_timeout,
             )
             if result.returncode == 0:
                 return True, "PulseAudio was already reachable"
             diagnostics.append(f"pactl info failed (rc={result.returncode})")
         except subprocess.TimeoutExpired:
-            diagnostics.append("pactl info timed out")
+            diagnostics.append(f"pactl info timed out ({pactl_timeout}s)")
         except Exception as e:
             diagnostics.append(f"pactl info error: {e}")
 
@@ -1122,11 +1145,14 @@ class TTSEngine:
             except Exception as e:
                 diagnostics.append(f"pulseaudio --start error: {e}")
 
-            # Check after daemon start
+            # Check after daemon start — give it a moment for remote
+            if is_remote:
+                _time_mod.sleep(1)
+
             try:
                 result = subprocess.run(
                     [pactl, "info"],
-                    env=env, capture_output=True, timeout=3,
+                    env=env, capture_output=True, timeout=pactl_timeout,
                 )
                 if result.returncode == 0:
                     return True, "; ".join(diagnostics + ["recovered after daemon start"])

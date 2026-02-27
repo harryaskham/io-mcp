@@ -577,6 +577,14 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             # Recovered! Reset counters
             self._pulse_reconnect_attempts = 0
             self._pulse_last_reconnect = 0.0
+            # Also reset TTS failure counters — PulseAudio being down
+            # causes paplay failures that get counted as API failures,
+            # so the TTS engine thinks the API is broken when really
+            # it was just the audio output that was unreachable.
+            try:
+                self._tts.reset_failure_counters()
+            except Exception:
+                pass
             try:
                 self._tts.play_chime("success")
             except Exception:
@@ -736,6 +744,12 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             self._pulse_was_ok = True
             self._pulse_reconnect_attempts = 0
             self._pulse_last_reconnect = 0.0
+            # Reset TTS failure counters — PulseAudio outage causes
+            # paplay failures that get misattributed as API failures
+            try:
+                self._tts.reset_failure_counters()
+            except Exception:
+                pass
             try:
                 self._tts.play_chime("success")
             except Exception:
@@ -1826,20 +1840,29 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             # Collapsed: just "More options ›" + primary extras (Record response)
             visible_extras = [MORE_OPTIONS_ITEM] + list(PRIMARY_EXTRAS)
 
-        # Add extras (negative indices)
-        for i, e in enumerate(visible_extras):
-            logical_idx = -(len(visible_extras) - 1 - i)
-            list_view.append(ChoiceItem(
-                e["label"], e.get("summary", ""),
-                index=logical_idx, display_index=i,
-            ))
+        # Wrap all appends in a try/except to catch MountError — the
+        # is_mounted check above can race with a concurrent TUI restart
+        # that unmounts the ListView between our check and the append.
+        try:
+            # Add extras (negative indices)
+            for i, e in enumerate(visible_extras):
+                logical_idx = -(len(visible_extras) - 1 - i)
+                list_view.append(ChoiceItem(
+                    e["label"], e.get("summary", ""),
+                    index=logical_idx, display_index=i,
+                ))
 
-        # Add real choices (indices 1, 2, 3, ...)
-        for i, c in enumerate(session.choices):
-            list_view.append(ChoiceItem(
-                c.get("label", "???"), c.get("summary", ""),
-                index=i + 1, display_index=len(visible_extras) + i,
-            ))
+            # Add real choices (indices 1, 2, 3, ...)
+            for i, c in enumerate(session.choices):
+                list_view.append(ChoiceItem(
+                    c.get("label", "???"), c.get("summary", ""),
+                    index=i + 1, display_index=len(visible_extras) + i,
+                ))
+        except Exception:
+            # MountError or similar — the ListView was unmounted mid-append.
+            # Choices are stored on the session and will be re-shown when
+            # _show_choices is called again after the TUI restart completes.
+            return
 
         list_view.display = True
         # Restore scroll position or default to first real choice
