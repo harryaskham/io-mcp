@@ -1,1 +1,3 @@
 .claude/settings.local.json
+.env.local
+.io-mcp.local.yml

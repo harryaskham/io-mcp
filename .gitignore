@@ -16,3 +16,4 @@ result
 .djent/bin/
 .env.local
 .io-mcp.local.yml
+.local/
