@@ -449,16 +449,16 @@ class TTSEngine:
         Called when API TTS fails and local fallback is disabled.
         The TUI registers a callback to show errors visually.
 
-        When the API is known-broken (past the failure threshold), only
-        log at DEBUG level to avoid flooding the error log with hundreds
-        of identical "TTS API unavailable" messages per minute.
+        When the API is known-broken (past the failure threshold), suppress
+        both logging and the visual callback to avoid flooding the user with
+        hundreds of identical "TTS API unavailable" red error messages.
         """
         if not self._api_gen_available():
-            # API is known-broken — don't spam ERROR log for every single
+            # API is known-broken — don't spam ERROR log or TUI for every single
             # speech attempt. The initial failures were already logged.
             _log.debug("TTS suppressed (API unavailable): %s", message[:80])
-        else:
-            self._log_tts_error(message)
+            return
+        self._log_tts_error(message)
         cb = getattr(self, '_on_tts_error', None)
         if cb:
             try:
@@ -857,6 +857,23 @@ class TTSEngine:
                     break
 
             if len(header) < 44 or header[:4] != b"RIFF":
+                # Check if the process was killed by a signal (intentional cancellation)
+                # e.g. cancel_all() from stop()/stop_sync() during scroll or new speech
+                tts_rc = tts_proc.poll()
+                if tts_rc is not None and tts_rc < 0:
+                    # Killed by signal — intentional interruption, not an error
+                    _log.debug("TTS streaming cancelled by signal %d: %s",
+                               -tts_rc, text[:60])
+                    return
+                # Also check if the process is no longer tracked by the manager
+                # (cancel_all() removes it from tracking before killing)
+                if not tts_tracked.alive and tts_rc is not None:
+                    # Process was killed/died — check if it was a signal
+                    if tts_rc < 0 or tts_rc == -9 or tts_rc == 137:
+                        _log.debug("TTS streaming cancelled (rc=%d): %s",
+                                   tts_rc, text[:60])
+                        return
+
                 # TTS failed to produce valid WAV — get diagnostics
                 tts_stderr = ""
                 try:
@@ -947,17 +964,22 @@ class TTSEngine:
                 try:
                     tts_retcode = tts_proc.wait(timeout=5)
                     if tts_retcode != 0:
-                        tts_stderr = ""
-                        try:
-                            tts_stderr = (tts_proc.stderr.read() or b"").decode("utf-8", errors="replace").strip()
-                        except Exception:
-                            pass
-                        if tts_stderr:
-                            self._log_tts_error(
-                                f"tts CLI (streaming) failed (code {tts_retcode}): {tts_stderr}",
-                                text)
-                        tts_failed = True
-                        self._record_api_gen_failure()
+                        # Negative return code = killed by signal (intentional cancel)
+                        if tts_retcode < 0:
+                            _log.debug("TTS streaming tts_proc cancelled by signal %d: %s",
+                                       -tts_retcode, text[:60])
+                        else:
+                            tts_stderr = ""
+                            try:
+                                tts_stderr = (tts_proc.stderr.read() or b"").decode("utf-8", errors="replace").strip()
+                            except Exception:
+                                pass
+                            if tts_stderr:
+                                self._log_tts_error(
+                                    f"tts CLI (streaming) failed (code {tts_retcode}): {tts_stderr}",
+                                    text)
+                            tts_failed = True
+                            self._record_api_gen_failure()
                 except Exception:
                     pass
                 # Report error if streaming failed (no local fallback)
@@ -1004,17 +1026,22 @@ class TTSEngine:
                     try:
                         tts_retcode = tts_proc.wait(timeout=5)
                         if tts_retcode != 0:
-                            tts_stderr = ""
-                            try:
-                                tts_stderr = (tts_proc.stderr.read() or b"").decode("utf-8", errors="replace").strip()
-                            except Exception:
-                                pass
-                            if tts_stderr:
-                                self._log_tts_error(
-                                    f"tts CLI (streaming async) failed (code {tts_retcode}): {tts_stderr}",
-                                    text)
-                            tts_failed = True
-                            self._record_api_gen_failure()
+                            # Negative return code = killed by signal (intentional cancel)
+                            if tts_retcode < 0:
+                                _log.debug("TTS streaming async tts_proc cancelled by signal %d: %s",
+                                           -tts_retcode, text[:60])
+                            else:
+                                tts_stderr = ""
+                                try:
+                                    tts_stderr = (tts_proc.stderr.read() or b"").decode("utf-8", errors="replace").strip()
+                                except Exception:
+                                    pass
+                                if tts_stderr:
+                                    self._log_tts_error(
+                                        f"tts CLI (streaming async) failed (code {tts_retcode}): {tts_stderr}",
+                                        text)
+                                tts_failed = True
+                                self._record_api_gen_failure()
                     except Exception:
                         pass
                     # Report error if streaming failed (no local fallback)
