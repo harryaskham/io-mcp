@@ -16,13 +16,15 @@ tmux-new *FLAGS:
     tmux new-session -d -s io-mcp-tui "just {{ FLAGS }}"
 
 clio-local *FLAGS:
-    clio-local {{ FLAGS }}
+    export IO_MCP_URL=http://localhost:8444/mcp
+    export PULSE_SERVER=samsung-sm-s928b.miku-owl.ts.net
+    claude --agent io-mcp:io-mcp {{ FLAGS }}
 
 tmux-clio:
     tmux split-window -v -t io-mcp-tui:1.1 "just loop clio-local"
 
 tmux-attach:
-    tmux new -A -s io-mcp-tui
+    tmux new -A -s io-mcp-tui || true
 
 tmux *FLAGS:
     just tmux-new {{ FLAGS }}
