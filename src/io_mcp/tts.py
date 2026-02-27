@@ -897,12 +897,44 @@ class TTSEngine:
         the entire response. Falls back to cached play if streaming is
         unavailable (local mode or missing binaries).
 
+        Retries up to 2 times on API errors (HTTP 500, timeouts) with
+        exponential backoff (1s, 2s). Signal kills and intentional
+        cancellations are not retried.
+
         Args:
             text: Text to speak.
             voice_override: Optional voice name for per-session rotation.
             emotion_override: Optional emotion preset for per-session rotation.
             model_override: Optional model name for cross-provider rotation.
             block: If True, wait for playback to finish before returning.
+        """
+        max_retries = 2
+        for attempt in range(max_retries + 1):
+            result = self._speak_streaming_once(
+                text, voice_override=voice_override,
+                emotion_override=emotion_override,
+                model_override=model_override, block=block)
+            if result != "retry":
+                return
+            # Exponential backoff: 1s, 2s
+            delay = 2 ** attempt
+            _log.info("TTS streaming retry %d/%d in %ds: %s",
+                      attempt + 1, max_retries, delay, text[:60])
+            _time_mod.sleep(delay)
+        # All retries exhausted — fall back to non-streaming
+        _log.warning("TTS streaming failed after %d retries, falling back: %s",
+                     max_retries, text[:60])
+        self.play_cached(text, block=block, voice_override=voice_override,
+                        emotion_override=emotion_override,
+                        model_override=model_override)
+
+    def _speak_streaming_once(self, text: str, voice_override: Optional[str] = None,
+                              emotion_override: Optional[str] = None,
+                              model_override: Optional[str] = None,
+                              block: bool = True) -> Optional[str]:
+        """Single attempt at streaming TTS. Returns "retry" if retriable error.
+
+        Returns None on success or non-retriable failure, "retry" on API error.
         """
         if not self._paplay or self._muted:
             return
@@ -999,8 +1031,11 @@ class TTSEngine:
                     f"tts CLI produced no/invalid WAV header ({len(header)} bytes): {tts_stderr[:120]}",
                     text)
                 self._record_api_gen_failure()
+                # Check if this is a retriable API error (500, timeout, etc.)
+                if "500" in tts_stderr or "Internal Server Error" in tts_stderr:
+                    return "retry"
                 self._report_tts_error(f"TTS streaming failed: {tts_stderr[:80]}")
-                return
+                return None
 
             # Header looks valid — start paplay with a relay thread that
             # feeds the header we already read + the rest of tts stdout.
@@ -1164,10 +1199,7 @@ class TTSEngine:
                 threading.Thread(target=_monitor, daemon=True).start()
         except Exception as e:
             self._record_failure(f"Streaming TTS setup failed: {e}")
-            # Fall back to non-streaming on any error
-            self.play_cached(text, block=block, voice_override=voice_override,
-                           emotion_override=emotion_override,
-                           model_override=model_override)
+            return "retry"
 
     def speak_streaming_async(self, text: str, voice_override: Optional[str] = None,
                               emotion_override: Optional[str] = None,
