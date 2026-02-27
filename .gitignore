@@ -14,3 +14,4 @@ result
 .djent/
 # </djent-init>
 .djent/bin/
+.env.local
