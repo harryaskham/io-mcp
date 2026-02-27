@@ -1339,7 +1339,13 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                     health_icon = f" [{s['warning']}]![/{s['warning']}]"
                 elif health == "unresponsive":
                     health_icon = f" [{s['error']}]x[/{s['error']}]"
-                lhs = f"[bold {s['accent']}]{name}[/bold {s['accent']}]{health_icon}"
+                # Streak fire
+                streak = session.streak_minutes
+                streak_text = ""
+                if streak >= 3:
+                    fires = min(streak // 5, 5)  # max 5 flames
+                    streak_text = f" {'🔥' * max(1, fires)}{streak}m"
+                lhs = f"[bold {s['accent']}]{name}[/bold {s['accent']}]{health_icon}{streak_text}"
             else:
                 lhs = f"[bold {s['accent']}]io-mcp[/bold {s['accent']}]"
         else:

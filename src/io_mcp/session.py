@@ -121,6 +121,24 @@ class Session:
     # ── Achievements ──────────────────────────────────────────────
     achievements_unlocked: set = field(default_factory=set)
 
+    @property
+    def streak_minutes(self) -> int:
+        """Consecutive minutes of activity. Resets after 2min idle."""
+        if not self.activity_log:
+            return 0
+        now = time.time()
+        # Check if currently idle (gap > 120s since last activity)
+        if now - self.activity_log[-1]["timestamp"] > 120:
+            return 0
+        # Walk backward to find the start of the streak
+        streak_start = self.activity_log[-1]["timestamp"]
+        for i in range(len(self.activity_log) - 1, 0, -1):
+            gap = self.activity_log[i]["timestamp"] - self.activity_log[i - 1]["timestamp"]
+            if gap > 120:  # 2 minute gap breaks the streak
+                break
+            streak_start = self.activity_log[i - 1]["timestamp"]
+        return max(1, int((now - streak_start) / 60))
+
     # ── Selection history ─────────────────────────────────────────
     history: list[HistoryEntry] = field(default_factory=list)
 
