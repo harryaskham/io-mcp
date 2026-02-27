@@ -828,12 +828,16 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
     def _tool_request_restart(args, session_id):
         session = _get_session(session_id)
         session.last_tool_name = "request_restart"
-        result = frontend.present_choices(session,
-            "Agent requests TUI restart. Sessions reset, MCP proxy stays alive.",
-            [{"label": "Approve restart", "summary": "Restart io-mcp TUI now"},
-             {"label": "Deny", "summary": "Keep running"}])
-        if result.get("selected", "").lower() != "approve restart":
-            return json.dumps({"status": "rejected", "message": "User denied restart"})
+
+        # Skip confirmation if config allows it
+        auto_approve = (frontend.config and frontend.config.always_allow_restart_tui)
+        if not auto_approve:
+            result = frontend.present_choices(session,
+                "Agent requests TUI restart. Sessions reset, MCP proxy stays alive.",
+                [{"label": "Approve restart", "summary": "Restart io-mcp TUI now"},
+                 {"label": "Deny", "summary": "Keep running"}])
+            if result.get("selected", "").lower() != "approve restart":
+                return json.dumps({"status": "rejected", "message": "User denied restart"})
 
         # Use the TUI restart loop (not os.execv which kills everything)
         def _do_restart():

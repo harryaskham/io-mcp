@@ -2816,6 +2816,12 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         The main() function wraps app.run() in a restart loop. Exit code 42
         means "restart", any other code means "quit for real".
         """
+        # Skip confirmation if config allows it
+        if self._config and self._config.always_allow_restart_tui:
+            self._speak_ui("Restarting TUI in 2 seconds")
+            self._do_tui_restart_worker()
+            return
+
         def _on_confirm(label: str):
             if label.lower().startswith("restart"):
                 self._speak_ui("Restarting TUI in 2 seconds")

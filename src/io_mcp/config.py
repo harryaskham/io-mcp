@@ -199,6 +199,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "djent": {
             "enabled": False,
         },
+        "alwaysAllow": {
+            "restartTUI": True,             # skip confirmation dialog for TUI restart
+        },
     },
     "styles": [
         "angry", "chat", "cheerful", "excited", "friendly",
@@ -1060,6 +1063,15 @@ class IoMcpConfig:
         user = self.expanded.get("config", {}).get("keyBindings", {})
         merged = {**defaults, **user}
         return merged
+
+    @property
+    def always_allow_restart_tui(self) -> bool:
+        """If True, TUI restart skips confirmation dialog."""
+        return bool(
+            self.expanded.get("config", {})
+            .get("alwaysAllow", {})
+            .get("restartTUI", True)
+        )
 
     # ─── Config mutation ────────────────────────────────────────────
 
