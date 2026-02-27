@@ -28,9 +28,70 @@ class ViewsMixin:
     def _close_session(self: "IoMcpApp", session) -> None:
         """Close a session tab without killing the tmux pane."""
         name = session.name
+        epitaph = self._generate_epitaph(session)
         self.on_session_removed(session.session_id)
-        self._speak_ui(f"Closed {name}")
+        if epitaph:
+            self._speak_ui(f"{name}: {epitaph}")
+        else:
+            self._speak_ui(f"Closed {name}")
         self._exit_settings()
+
+    def _generate_epitaph(self: "IoMcpApp", session) -> str:
+        """Generate a poetic one-liner about the agent's session."""
+        import time as _time
+        import random
+
+        tc = session.tool_call_count
+        sels = len(session.history)
+        speeches = len(session.speech_log)
+        achievements = len(session.achievements_unlocked)
+        streak = session.streak_minutes
+
+        if tc == 0:
+            return random.choice([
+                "Came, saw, left quietly.",
+                "A brief visit. No words exchanged.",
+                "Connected. Contemplated. Departed.",
+            ])
+
+        # Calculate session duration
+        if session.activity_log:
+            first = session.activity_log[0]["timestamp"]
+            duration_mins = int((_time.time() - first) / 60)
+        else:
+            duration_mins = 0
+
+        templates = []
+        if tc > 200:
+            templates.extend([
+                f"A titan of {tc} actions. Rest now, warrior.",
+                f"{tc} tool calls in {duration_mins} minutes. Absolute machine.",
+            ])
+        elif tc > 50:
+            templates.extend([
+                f"Wrote history in {tc} strokes.",
+                f"Fifty-plus actions and counting. Left it better than found.",
+            ])
+        if speeches > 10:
+            templates.append(f"Spoke {speeches} truths into the void.")
+        if sels > 10:
+            templates.append(f"Made {sels} choices. Each one mattered.")
+        if streak > 10:
+            templates.append(f"Burned bright for {streak} minutes straight. 🔥")
+        if achievements > 3:
+            templates.append(f"Unlocked {achievements} achievements. Legend.")
+        if duration_mins > 30:
+            templates.append(f"A {duration_mins}-minute saga. The code remembers.")
+
+        # Fallback templates
+        if not templates:
+            templates = [
+                f"{tc} actions. Brief but impactful.",
+                f"Connected for {duration_mins}m. Left the codebase changed.",
+                "Another chapter written in silicon.",
+            ]
+
+        return random.choice(templates)
 
     def _kill_session(self: "IoMcpApp", session) -> None:
         """Kill a session's tmux pane and close the tab."""
