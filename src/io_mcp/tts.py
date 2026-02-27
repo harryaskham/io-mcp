@@ -382,12 +382,18 @@ class TTSEngine:
                         self._record_api_gen_failure()
                     return None
 
-    def pregenerate(self, texts: list[str]) -> None:
-        """Generate audio clips for all texts in parallel.
+    def pregenerate(self, texts: list[str],
+                    max_workers: int = 3) -> None:
+        """Generate audio clips for texts in parallel using a thread pool.
 
         Call this when choices arrive so scrolling is instant.
         Skips API generation when the API is known-broken to avoid
         spawning processes that timeout after 30s.
+
+        Args:
+            texts: List of text strings to pregenerate audio for.
+            max_workers: Maximum concurrent tts CLI processes (default 3).
+                         Higher values cache faster but use more CPU/API bandwidth.
         """
         # Skip entirely when API is known-broken
         if not self._local and not self._api_gen_available():
@@ -398,11 +404,116 @@ class TTSEngine:
         if not to_generate:
             return
 
-        # Generate sequentially to avoid overwhelming the API.
-        # Pregeneration runs in a background thread anyway, so parallel
-        # generation just increases API concurrency without benefit.
-        for text in to_generate:
-            self._generate_to_file(text)
+        # Generate in parallel using a thread pool.
+        # Each worker runs _generate_to_file_unlocked which doesn't acquire
+        # the speech lock (no playback involved) or the API lock (we want
+        # concurrent API calls for speed). The API service handles concurrent
+        # requests fine, and each tts CLI process writes to its own file.
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            pool.map(self._generate_to_file_unlocked, to_generate)
+
+    def _generate_to_file_unlocked(self, text: str,
+                                   voice_override: Optional[str] = None,
+                                   emotion_override: Optional[str] = None,
+                                   model_override: Optional[str] = None) -> Optional[str]:
+        """Generate audio for text and save to WAV. No locks acquired.
+
+        Used by pregenerate() for parallel generation. Does NOT acquire
+        _speech_lock or _api_lock — callers handle concurrency themselves.
+        For sequential generation that serializes with playback, use
+        _generate_to_file() instead.
+        """
+        key = self._cache_key(text, voice_override, emotion_override,
+                              model_override=model_override)
+
+        # Check cache
+        cached = self._cache.get(key)
+        if cached and os.path.isfile(cached):
+            return cached
+
+        out_path = os.path.join(CACHE_DIR, f"{key}.wav")
+
+        try:
+            if self._local:
+                if not self._espeak:
+                    return None
+                wpm = int(TTS_SPEED * self._speed)
+                cmd = [self._espeak, "--stdout", "-s", str(wpm), text]
+                with open(out_path, "wb") as f:
+                    proc = subprocess.run(
+                        cmd, stdout=f, stderr=subprocess.PIPE,
+                        env=self._env, timeout=10,
+                    )
+                if proc.returncode != 0:
+                    stderr_out = (proc.stderr or b"").decode("utf-8", errors="replace").strip()
+                    self._log_tts_error(
+                        f"espeak-ng failed (code {proc.returncode}): {stderr_out}", text)
+                    return None
+            else:
+                if not self._tts_bin:
+                    return None
+
+                if not self._api_gen_available():
+                    return None
+
+                if self._config:
+                    cmd = [self._tts_bin] + self._config.tts_cli_args(
+                        text, voice_override=voice_override,
+                        emotion_override=emotion_override,
+                        model_override=model_override)
+                else:
+                    cmd = [self._tts_bin, text, "--stdout", "--response-format", "wav"]
+
+                with open(out_path, "wb") as f:
+                    proc = subprocess.run(
+                        cmd, stdout=f, stderr=subprocess.PIPE,
+                        env=self._env, timeout=15,
+                    )
+                if proc.returncode != 0:
+                    # Signal kill = intentional cancellation, not an error
+                    if proc.returncode < 0:
+                        _log.debug("Pregenerate cancelled by signal %d: %s",
+                                   -proc.returncode, text[:60])
+                    else:
+                        stderr_out = (proc.stderr or b"").decode("utf-8", errors="replace").strip()
+                        self._log_tts_error(
+                            f"tts CLI failed (code {proc.returncode}): {stderr_out}", text)
+                        self._record_api_gen_failure()
+                    try:
+                        os.unlink(out_path)
+                    except OSError:
+                        pass
+                    return None
+
+                try:
+                    fsize = os.path.getsize(out_path)
+                    if fsize < 44:
+                        self._log_tts_error(
+                            f"tts CLI produced invalid WAV ({fsize} bytes)", text)
+                        self._record_api_gen_failure()
+                        try:
+                            os.unlink(out_path)
+                        except OSError:
+                            pass
+                        return None
+                except OSError:
+                    pass
+
+            self._cache[key] = out_path
+            self._record_api_gen_success()
+            return out_path
+
+        except subprocess.TimeoutExpired:
+            self._log_tts_error("TTS generation timed out", text)
+            if not self._local:
+                self._record_api_gen_failure()
+            return None
+        except Exception as e:
+            self._log_tts_error(f"TTS generation exception: {e}", text)
+            if not self._local:
+                self._record_api_gen_failure()
+            return None
 
     def play_cached(self, text: str, block: bool = False,
                     voice_override: Optional[str] = None,

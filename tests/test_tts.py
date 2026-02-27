@@ -550,7 +550,7 @@ class TestPregenerate:
         key = engine._cache_key("cached text")
         engine._cache[key] = "/tmp/fake.wav"
 
-        with mock.patch.object(engine, "_generate_to_file") as mock_gen:
+        with mock.patch.object(engine, "_generate_to_file_unlocked") as mock_gen:
             engine.pregenerate(["cached text"])
             mock_gen.assert_not_called()
 
@@ -563,13 +563,13 @@ class TestPregenerate:
             generated.append(text)
             return f"/tmp/{text}.wav"
 
-        with mock.patch.object(engine, "_generate_to_file", side_effect=fake_generate):
+        with mock.patch.object(engine, "_generate_to_file_unlocked", side_effect=fake_generate):
             engine.pregenerate(["alpha", "beta", "gamma"])
             assert set(generated) == {"alpha", "beta", "gamma"}
 
     def test_empty_list_is_noop(self):
         engine = _make_engine()
-        with mock.patch.object(engine, "_generate_to_file") as mock_gen:
+        with mock.patch.object(engine, "_generate_to_file_unlocked") as mock_gen:
             engine.pregenerate([])
             mock_gen.assert_not_called()
 
@@ -584,7 +584,7 @@ class TestPregenerate:
             generated.append(text)
             return f"/tmp/{text}.wav"
 
-        with mock.patch.object(engine, "_generate_to_file", side_effect=fake_generate):
+        with mock.patch.object(engine, "_generate_to_file_unlocked", side_effect=fake_generate):
             engine.pregenerate(["cached", "new1", "new2"])
             assert "cached" not in generated
             assert "new1" in generated
