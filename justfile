@@ -12,12 +12,22 @@ run *FLAGS:
 loop *FLAGS:
     while true; do just {{ FLAGS }}; sleep 3; done
 
-tmux *FLAGS:
-    tmux new -A -s io-mcp-tui "just {{ FLAGS }}"
+tmux-new *FLAGS:
+    tmux new-session -d -s io-mcp-tui "just {{ FLAGS }}"
 
-# Base: run io-mcp --dev with any extra flags (e.g. just dev --local --default-config)
-dev *FLAGS:
-    uv run io-mcp --dev {{ FLAGS }}
+clio-local *FLAGS:
+    clio-local {{ FLAGS }}
+
+tmux-clio *FLAGS:
+    tmux split-window -h -l '50%' -t io-mcp-tui:1.1 "just {{ FLAGS }} clio-local"
+
+tmux-attach:
+    tmux new -A -s io-mcp-tui
+
+tmux *FLAGS:
+    just tmux-new {{ FLAGS }}
+    just tmux-clio {{ FLAGS }}
+    just tmux-attach
 
 # Dev on desktop, routing audio to phone via PulseAudio over Tailscale
 desktop *FLAGS:
