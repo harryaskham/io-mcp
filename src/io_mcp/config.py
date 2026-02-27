@@ -2,7 +2,8 @@
 
 Reads/writes config from $HOME/.config/io-mcp/config.yml (or --config-file).
 Also merges with a local .io-mcp.yml if found in the current directory
-(local takes precedence over global config).
+(local takes precedence over global config), and .io-mcp.local.yml on top
+of that for personal/gitignored overrides.
 
 Config strings can include shell variables like ${OPENAI_API_KEY} which are
 expanded at load time.
@@ -292,8 +293,13 @@ class IoMcpConfig:
     def load(cls, config_path: Optional[str] = None) -> "IoMcpConfig":
         """Load config from file, creating with defaults if not found.
 
-        Also merges with a local .io-mcp.yml if found in the current directory.
-        Local config takes precedence over the global config.
+        Merge order (later takes precedence):
+        1. DEFAULT_CONFIG (built-in defaults)
+        2. ~/.config/io-mcp/config.yml (user config)
+        3. .io-mcp.yml in cwd (project-local, checked into repo)
+        4. .io-mcp.local.yml in cwd (personal overrides, gitignored)
+
+        CLI flags override all of the above at runtime.
         """
         path = config_path or DEFAULT_CONFIG_FILE
         raw = copy.deepcopy(DEFAULT_CONFIG)
@@ -319,7 +325,7 @@ class IoMcpConfig:
             except Exception as e:
                 print(f"WARNING: Failed to write default config to {path}: {e}", flush=True)
 
-        # Merge local .io-mcp.yml (cwd takes precedence)
+        # Merge local .io-mcp.yml (cwd takes precedence over user config)
         local_path = os.path.join(os.getcwd(), ".io-mcp.yml")
         if os.path.isfile(local_path):
             try:
@@ -330,6 +336,18 @@ class IoMcpConfig:
                     print(f"  Config: merged local {local_path}", flush=True)
             except Exception as e:
                 print(f"WARNING: Failed to load local config from {local_path}: {e}", flush=True)
+
+        # Merge .io-mcp.local.yml (personal overrides, should be gitignored)
+        local_override_path = os.path.join(os.getcwd(), ".io-mcp.local.yml")
+        if os.path.isfile(local_override_path):
+            try:
+                with open(local_override_path, "r") as f:
+                    local_override = yaml.safe_load(f)
+                if local_override and isinstance(local_override, dict):
+                    raw = _deep_merge(raw, local_override)
+                    print(f"  Config: merged local override {local_override_path}", flush=True)
+            except Exception as e:
+                print(f"WARNING: Failed to load local override from {local_override_path}: {e}", flush=True)
 
         expanded = _expand_config(raw)
         cfg = cls(raw=raw, expanded=expanded, config_path=path)

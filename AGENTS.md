@@ -121,6 +121,13 @@ SSE events: `choices_presented`, `speech_requested`, `selection_made`, `recordin
 
 ## Configuration
 
+Config merge order (later takes precedence):
+1. Built-in defaults
+2. `~/.config/io-mcp/config.yml` (user config)
+3. `.io-mcp.yml` in cwd (project-local, checked into repo)
+4. `.io-mcp.local.yml` in cwd (personal overrides, gitignored)
+5. CLI flags (`--speed`, `--voice`, etc.)
+
 ```yaml
 # Named voice presets — use these names in config.tts.voice, uiVoice, voiceRotation
 voices:
@@ -348,6 +355,7 @@ register_session(
 
 - Config is at `~/.config/io-mcp/config.yml` — use `set_*` tools or `reload_config` to change settings
 - Local `.io-mcp.yml` in cwd is merged on top (for project-specific extra options)
+- Local `.io-mcp.local.yml` in cwd overrides `.io-mcp.yml` (gitignored, for personal overrides)
 - Per-session voice/emotion rotation: set `voiceRotation`/`styleRotation` lists in config. Voice rotation uses preset names from the top-level `voices` section
 - Key bindings are configurable in `config.keyBindings`
 - Use `rename_session()` on connect to set a descriptive tab name

@@ -15,3 +15,4 @@ result
 # </djent-init>
 .djent/bin/
 .env.local
+.io-mcp.local.yml
