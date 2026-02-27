@@ -1252,12 +1252,55 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
     _SPEECH_TOOLS = {"speak", "speak_async", "speak_urgent",
                      "present_choices", "present_multi_select"}
 
+    # Tools that are just metadata/status queries — don't clutter the activity log
+    _QUIET_TOOLS = {"check_inbox", "get_logs", "get_sessions",
+                    "get_speech_history", "get_current_choices", "get_tui_state",
+                    "get_settings"}
+
     def dispatch(tool_name: str, args: dict, session_id: str) -> str:
         handler = TOOLS.get(tool_name)
         if handler is None:
             return json.dumps({"error": f"Unknown tool: {tool_name}"})
         try:
             result = handler(args, session_id)
+
+            # Log activity (skip quiet/meta tools to keep the feed useful)
+            if tool_name not in _QUIET_TOOLS:
+                session = frontend.manager.get(session_id)
+                if session:
+                    detail = ""
+                    kind = "tool"
+                    if tool_name in ("speak", "speak_async", "speak_urgent"):
+                        detail = args.get("text", "")[:80]
+                        kind = "speech"
+                    elif tool_name == "present_choices":
+                        detail = args.get("preamble", "")[:80]
+                        kind = "choices"
+                    elif tool_name == "present_multi_select":
+                        detail = args.get("preamble", "")[:80]
+                        kind = "choices"
+                    elif tool_name == "register_session":
+                        detail = args.get("name", args.get("cwd", ""))[:80]
+                        kind = "status"
+                    elif tool_name == "rename_session":
+                        detail = args.get("name", "")[:80]
+                    elif tool_name == "run_command":
+                        detail = args.get("command", "")[:80]
+                    elif tool_name in ("set_speed", "set_voice", "set_emotion",
+                                       "set_tts_model", "set_stt_model"):
+                        # Extract the value being set
+                        for k, v in args.items():
+                            detail = str(v)[:40]
+                            break
+                        kind = "settings"
+                    session.log_activity(tool_name, detail, kind)
+
+                    # Update TUI waiting view to reflect new activity
+                    try:
+                        frontend.update_tab_bar()
+                    except Exception:
+                        pass
+
             # Add speech reminder for non-speech tools
             if tool_name not in _SPEECH_TOOLS:
                 session = frontend.manager.get(session_id)

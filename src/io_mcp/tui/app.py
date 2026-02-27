@@ -2164,6 +2164,49 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                     ))
                     di += 1
 
+            # ── Activity log (recent agent actions) ────────────
+            activity = session.activity_log[-8:] if session.activity_log else []
+            if activity:
+                import time as _time_mod
+                now = _time_mod.time()
+                list_view.append(ChoiceItem(
+                    f"[{s['fg_dim']}]─── Activity ───[/{s['fg_dim']}]", "",
+                    index=-990, display_index=di,
+                ))
+                di += 1
+
+                # Icons for different activity kinds
+                _icons = {
+                    "speech": "🔊",
+                    "choices": "📋",
+                    "settings": "⚙",
+                    "status": "📡",
+                    "tool": "⚡",
+                }
+
+                for entry in reversed(activity):
+                    elapsed = now - entry["timestamp"]
+                    if elapsed < 60:
+                        ago = f"{int(elapsed)}s"
+                    elif elapsed < 3600:
+                        ago = f"{int(elapsed) // 60}m"
+                    else:
+                        ago = f"{int(elapsed) // 3600}h"
+
+                    icon = _icons.get(entry["kind"], "·")
+                    tool = entry["tool"]
+                    detail = entry.get("detail", "")
+                    if detail:
+                        text = f"[{s['fg_dim']}]{icon} {ago:>4}  {tool}  {detail[:50]}[/{s['fg_dim']}]"
+                    else:
+                        text = f"[{s['fg_dim']}]{icon} {ago:>4}  {tool}[/{s['fg_dim']}]"
+
+                    list_view.append(ChoiceItem(
+                        text, "",
+                        index=-989, display_index=di,
+                    ))
+                    di += 1
+
             # ── Pending messages indicator ───────────────────
             if session.pending_messages:
                 count = len(session.pending_messages)

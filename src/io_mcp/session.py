@@ -114,6 +114,10 @@ class Session:
     heartbeat_spoken: bool = False
     ambient_count: int = 0                  # how many ambient updates spoken this silence period
 
+    # ── Activity log (timestamped feed of agent actions) ──────────
+    activity_log: list[dict] = field(default_factory=list)
+    _activity_log_max: int = 50  # cap to prevent unbounded growth
+
     # ── Selection history ─────────────────────────────────────────
     history: list[HistoryEntry] = field(default_factory=list)
 
@@ -151,6 +155,26 @@ class Session:
     def touch(self) -> None:
         """Update the last_activity timestamp."""
         self.last_activity = time.time()
+
+    def log_activity(self, tool: str, detail: str = "", kind: str = "tool") -> None:
+        """Append a timestamped entry to the activity log.
+
+        Args:
+            tool: Tool name or action identifier.
+            detail: Short description or preview text.
+            kind: Event type — "tool", "speech", "selection", "status".
+        """
+        entry = {
+            "timestamp": time.time(),
+            "tool": tool,
+            "detail": detail,
+            "kind": kind,
+        }
+        self.activity_log.append(entry)
+        # Trim from the front when over the cap
+        overflow = len(self.activity_log) - self._activity_log_max
+        if overflow > 0:
+            self.activity_log = self.activity_log[overflow:]
 
     def enqueue(self, item: InboxItem) -> None:
         """Add an item to the inbox queue."""
