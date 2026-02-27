@@ -3830,9 +3830,28 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         except Exception:
             pass
 
-        # Speak the connection
+        # Speak the connection + fortune cookie
         try:
-            self._speak_ui(f"{session.name} connected")
+            import random as _random
+            _fortunes = [
+                "The code you write today is tomorrow's legacy.",
+                "Every bug is a feature in disguise.",
+                "Commit early, commit often, commit with conviction.",
+                "The best error message is the one you never see.",
+                "Today's refactor is tomorrow's relief.",
+                "A well-named variable is worth a thousand comments.",
+                "The compiler doesn't judge. Ship it.",
+                "In the dance of curly braces, find your rhythm.",
+                "Not all who wander through the codebase are lost.",
+                "The tests that pass in silence protect the loudest.",
+                "May your merges be clean and your deploys boring.",
+                "A journey of a thousand lines begins with a single import.",
+                "Trust the process. Also trust the tests.",
+                "The scroll wheel spins, the code flows.",
+                "Fortune favors the well-documented.",
+            ]
+            fortune = _random.choice(_fortunes)
+            self._speak_ui(f"{session.name} connected. {fortune}")
         except Exception:
             pass
 
