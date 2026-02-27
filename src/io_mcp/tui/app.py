@@ -4554,6 +4554,16 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             if getattr(self, '_history_mode', False):
                 return
 
+            # Setting edit mode — number picks from value list
+            # Must check BEFORE _settings_items since that's still set
+            # during edit mode (it's the parent menu items).
+            if self._setting_edit_mode:
+                list_view = self.query_one("#choices", ListView)
+                if 1 <= n <= len(list_view.children):
+                    list_view.index = n - 1
+                    self._apply_setting_edit()
+                return
+
             # Settings items (Speed, Voice, Emotion, etc.)
             if hasattr(self, '_settings_items') and self._settings_items:
                 if 1 <= n <= len(self._settings_items):
@@ -4562,14 +4572,6 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                         self._exit_settings()
                     else:
                         self._enter_setting_edit(key)
-                return
-
-            # Setting edit mode — number picks from value list
-            if self._setting_edit_mode:
-                list_view = self.query_one("#choices", ListView)
-                if 1 <= n <= len(list_view.children):
-                    list_view.index = n - 1
-                    self._apply_setting_edit()
                 return
 
             return
