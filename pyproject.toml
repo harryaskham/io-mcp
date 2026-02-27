@@ -12,6 +12,9 @@ dependencies = [
 [project.optional-dependencies]
 test = ["pytest>=8.0", "pytest-asyncio>=0.24"]
 
+[dependency-groups]
+dev = ["editables>=0.5"]
+
 [project.scripts]
 io-mcp = "io_mcp.__main__:main"
 io-mcp-msg = "io_mcp.cli:main"

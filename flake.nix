@@ -47,6 +47,16 @@
         root = "$REPO_ROOT";
       };
 
+      # Overlay to ensure `editables` is available as a build input for hatchling
+      # editable builds. Without this, hatchling fails with "No module named 'editables'".
+      editablesFixOverlay = final: prev: {
+        io-mcp = prev.io-mcp.overrideAttrs (old: {
+          nativeBuildInputs = (old.nativeBuildInputs or []) ++ [
+            final.editables
+          ];
+        });
+      };
+
       pythonSets = eachDefaultSystem (system:
         let
           pkgs = import nixpkgs { inherit system; };
@@ -65,7 +75,12 @@
       devShells = eachDefaultSystem (system:
         let
           pkgs = import nixpkgs { inherit system; };
-          pythonSet = pythonSets.${system}.overrideScope editableOverlay;
+          pythonSet = pythonSets.${system}.overrideScope (
+            lib.composeManyExtensions [
+              editableOverlay
+              editablesFixOverlay
+            ]
+          );
           venv = pythonSet.mkVirtualEnv "io-mcp" workspace.deps.all;
         in
         {
