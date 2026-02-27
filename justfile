@@ -18,8 +18,8 @@ tmux-new *FLAGS:
 clio-local *FLAGS:
     clio-local {{ FLAGS }}
 
-tmux-clio *FLAGS:
-    tmux split-window -h -l '50%' -t io-mcp-tui:1.1 "just {{ FLAGS }} clio-local"
+tmux-clio:
+    tmux split-window -v -t io-mcp-tui:1.1 "just loop clio-local"
 
 tmux-attach:
     tmux new -A -s io-mcp-tui
