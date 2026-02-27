@@ -32,6 +32,11 @@ hooks:
         - type: command
           command: "${CLAUDE_PLUGIN_ROOT}/agents/nudge-speak.sh"
           timeout: 5
+    - matcher: "Bash|Edit|Write|Read|Glob|Grep|WebSearch|WebFetch|Task|NotebookEdit"
+      hooks:
+        - type: command
+          command: "${CLAUDE_PLUGIN_ROOT}/agents/report-activity.sh"
+          timeout: 5
 ---
 
 # Hands-Free Agent — Scroll Wheel + Earphones

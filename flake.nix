@@ -128,6 +128,7 @@
               cp ${./agents/enforce-choices.sh} $out/share/io-mcp/agents/enforce-choices.sh
               cp ${./agents/nudge-speak.sh} $out/share/io-mcp/agents/nudge-speak.sh
               cp ${./agents/start-register.sh} $out/share/io-mcp/agents/start-register.sh
+              cp ${./agents/report-activity.sh} $out/share/io-mcp/agents/report-activity.sh
               cp ${./skills/io-mcp/SKILL.md} $out/share/io-mcp/skills/io-mcp/SKILL.md
             '';
           };

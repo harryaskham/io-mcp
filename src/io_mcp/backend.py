@@ -103,6 +103,22 @@ class BackendHandler(BaseHTTPRequestHandler):
                 self._json_response(500, {"error": str(e)[:200]})
             return
 
+        if self.path == "/report-activity":
+            # Lightweight activity report from hooks (fire-and-forget).
+            # No full MCP dispatch — just log directly to the session.
+            session_id = request.get("session_id", "")
+            tool = request.get("tool", "")
+            detail = request.get("detail", "")
+            kind = request.get("kind", "tool")
+            try:
+                activity_fn = getattr(self, 'report_activity', None)
+                if activity_fn:
+                    activity_fn(session_id, tool, detail, kind)
+                self._json_response(200, {"status": "logged"})
+            except Exception as e:
+                self._json_response(200, {"status": "ok"})  # Don't fail hooks
+            return
+
         if self.path != "/handle-mcp":
             self._json_response(404, {"error": "not found"})
             return
@@ -146,6 +162,7 @@ def start_backend_server(
     host: str = "127.0.0.1",
     port: int = 8446,
     cancel_dispatch: Callable[[str, str], None] | None = None,
+    report_activity: Callable[[str, str, str, str], None] | None = None,
 ) -> None:
     """Start the backend HTTP server in a daemon thread.
 
@@ -154,11 +171,14 @@ def start_backend_server(
         host: Bind address (default: localhost only)
         port: Port number
         cancel_dispatch: Function(tool_name, session_id) -> None for MCP cancellation
+        report_activity: Function(session_id, tool, detail, kind) -> None for hook activity
     """
     # Bind dispatch function to handler class
     attrs = {"tool_dispatch": staticmethod(tool_dispatch)}
     if cancel_dispatch:
         attrs["cancel_dispatch"] = staticmethod(cancel_dispatch)
+    if report_activity:
+        attrs["report_activity"] = staticmethod(report_activity)
     handler_class = type(
         "BoundBackendHandler",
         (BackendHandler,),

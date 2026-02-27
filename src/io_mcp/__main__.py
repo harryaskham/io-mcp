@@ -1686,8 +1686,26 @@ def main() -> None:
             except Exception:
                 pass
 
+        def _report_activity(session_id: str, tool: str, detail: str, kind: str) -> None:
+            """Log an activity from a hook (e.g. PreToolUse) to the session's feed."""
+            try:
+                _app = app_ref[0]
+                # Find the session — hooks may send Claude's session_id which
+                # doesn't match the MCP session_id. Try all sessions.
+                session = _app.manager.get(session_id)
+                if not session:
+                    # Try finding by matching any active session
+                    sessions = _app.manager.all_sessions()
+                    if sessions:
+                        session = sessions[-1]  # Use most recent
+                if session:
+                    session.log_activity(tool, detail, kind)
+            except Exception:
+                pass
+
         start_backend_server(dispatch, host="0.0.0.0", port=args.port,
-                           cancel_dispatch=_cancel_dispatch)
+                           cancel_dispatch=_cancel_dispatch,
+                           report_activity=_report_activity)
         print(f"  Backend: /handle-mcp on 0.0.0.0:{args.port}", flush=True)
 
         # Start Android SSE API on :8445
