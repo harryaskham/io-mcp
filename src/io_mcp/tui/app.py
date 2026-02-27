@@ -3670,18 +3670,18 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
     # ─── Prompt replay ────────────────────────────────────────────
 
     def action_replay_prompt(self) -> None:
-        """Replay just the preamble."""
+        """Replay just the preamble (works even after selection)."""
         session = self._focused()
-        if not session or not session.active or not session.preamble:
+        if not session or not session.preamble:
             return
         session.reading_options = False
         self._tts.stop()
         self._tts.speak_async(session.preamble)
 
     def action_replay_prompt_full(self) -> None:
-        """Replay preamble + all options."""
+        """Replay preamble + all options (works even after selection)."""
         session = self._focused()
-        if not session or not session.active:
+        if not session or not session.preamble:
             return
         session.reading_options = False
         self._tts.stop()
