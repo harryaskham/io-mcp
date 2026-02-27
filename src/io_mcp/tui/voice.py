@@ -266,7 +266,9 @@ class VoiceMixin:
 
         # Check file exists
         if not rec_file or not os.path.isfile(rec_file):
-            self._tts.speak_async("No recording file found. Back to choices.")
+            # Diagnose WHY the file wasn't created
+            diag = self._diagnose_recording_failure(termux_exec_bin, rec_file)
+            self._tts.speak_async(diag)
             self._safe_call_from_thread(self._restore_choices)
             return
 
@@ -486,6 +488,57 @@ class VoiceMixin:
         except Exception as e:
             self._tts.speak_async(f"Notification check failed: {str(e)[:60]}")
             self._safe_call_from_thread(self._restore_choices)
+
+    def _diagnose_recording_failure(self, termux_exec_bin: Optional[str],
+                                     rec_file: Optional[str]) -> str:
+        """Diagnose why the recording file wasn't created.
+
+        Checks Termux API health and gives a specific error message
+        instead of the generic "No recording file found".
+        """
+        if not termux_exec_bin:
+            return "Recording failed: termux-exec not found."
+
+        if not rec_file:
+            return "Recording failed: no recording path configured."
+
+        # Check if Termux:API is responding at all
+        try:
+            result = subprocess.run(
+                [termux_exec_bin, "termux-battery-status"],
+                capture_output=True, timeout=5,
+            )
+            if result.returncode != 0:
+                stderr = result.stderr.decode("utf-8", errors="replace").strip()[:80]
+                return (
+                    f"Termux API not responding. "
+                    f"Force-stop and restart the Termux API app. {stderr}"
+                )
+            # Battery works but recording doesn't — likely mic permission
+            stdout = result.stdout.decode("utf-8", errors="replace").strip()
+            if not stdout or stdout == "{}":
+                return (
+                    "Termux API returned empty data. "
+                    "Restart the Termux API app and grant permissions."
+                )
+        except subprocess.TimeoutExpired:
+            return (
+                "Termux API timed out. "
+                "The Termux API app may be frozen. Force-stop and restart it."
+            )
+        except Exception as e:
+            return f"Termux API check failed: {str(e)[:60]}"
+
+        # Check if recording directory is writable
+        rec_dir = os.path.dirname(rec_file)
+        if not os.path.isdir(rec_dir):
+            return f"Recording directory {rec_dir} does not exist."
+
+        # Termux API works but no recording file — mic permission issue
+        return (
+            "Recording file not created. "
+            "Check microphone permission for the Termux API app in Android settings."
+        )
 
     def _transcribe_via_api(self, wav_path: str) -> str:
         """Send a WAV file directly to the transcription API.
