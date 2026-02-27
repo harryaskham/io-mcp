@@ -2492,7 +2492,11 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         self._safe_call(self._update_inbox_list)
 
         # Start a drain worker for this session if speech items need processing
-        self._drain_session_inbox_worker(session)
+        try:
+            self._drain_session_inbox_worker(session)
+        except RuntimeError:
+            # App is not running (e.g. during TUI restart) — skip drain
+            pass
 
     @work(thread=True, exit_on_error=False, group="drain_inbox")
     def _drain_session_inbox_worker(self, session: Session) -> None:

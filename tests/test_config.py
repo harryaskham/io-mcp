@@ -192,7 +192,7 @@ class TestConfigLoading:
 
     def test_reload(self, tmp_config):
         config = IoMcpConfig.load(tmp_config)
-        assert config.tts_speed == 1.2  # new default
+        assert config.tts_speed == 1.0  # default
 
         # Modify the file
         config.raw["config"]["tts"]["speed"] = 2.5
@@ -248,7 +248,7 @@ class TestConfigAccessors:
         assert c.tts_voice_preset == "noa"
         assert c.tts_model_name == "azure/speech/azure-tts"
         assert c.tts_voice == "en-US-Noa:MAI-Voice-1"
-        assert c.tts_speed == 1.2
+        assert c.tts_speed == 1.0
         assert c.tts_provider_name == "openai"
 
     def test_stt_defaults(self, config_with_defaults):
@@ -282,25 +282,23 @@ class TestConfigAccessors:
 
     def test_style_defaults(self, config_with_defaults):
         c = config_with_defaults
-        assert c.tts_style == "terrified"
-        assert c.tts_emotion == "terrified"  # legacy alias
+        assert c.tts_style == "whispering"
+        assert c.tts_emotion == "whispering"  # legacy alias
         assert "friendly" in c.tts_style_options
-        assert "neutral" in c.tts_style_options
+        assert "terrified" in c.tts_style_options
 
     def test_tts_instructions_returns_style_name(self, config_with_defaults):
         c = config_with_defaults
         # tts_instructions now just returns the style name
-        assert c.tts_instructions == "terrified"
+        assert c.tts_instructions == "whispering"
 
     def test_styles_list_has_all_entries(self, config_with_defaults):
-        """Styles list contains entries from both old OpenAI and Azure presets."""
+        """Styles list contains entries from the Azure Speech presets."""
         c = config_with_defaults
         styles = c.tts_style_options
-        assert "shy" in styles
-        assert "calm" in styles
-        assert "storyteller" in styles
-        assert "curious" in styles
-        assert "empathetic" in styles
+        assert "angry" in styles
+        assert "cheerful" in styles
+        assert "excited" in styles
 
     def test_emotion_preset_names_is_style_alias(self, config_with_defaults):
         """emotion_preset_names returns same as tts_style_options (legacy compat)."""
@@ -309,12 +307,12 @@ class TestConfigAccessors:
 
     def test_style_rotation_defaults_populated(self, config_with_defaults):
         voice_rot = config_with_defaults.tts_voice_rotation
-        assert len(voice_rot) == 13  # 11 openai + 2 mai
-        assert voice_rot[0]["preset"] == "alloy"
+        assert len(voice_rot) == 2  # noa + teo
+        assert voice_rot[0]["preset"] == "noa"
         assert voice_rot[-1]["preset"] == "teo"
 
         style_rot = config_with_defaults.tts_style_rotation
-        assert len(style_rot) == 6
+        assert len(style_rot) == 11
         assert "friendly" in style_rot
         assert "terrified" in style_rot
 
@@ -809,7 +807,7 @@ class TestConfigReset:
         # File should exist with defaults
         assert os.path.isfile(config_path)
         # Speed should be the default, not the custom value
-        assert config.tts_speed == 1.2
+        assert config.tts_speed == 1.0
         # Voice preset should be the default
         assert config.tts_voice_preset == "noa"
 
@@ -822,7 +820,7 @@ class TestConfigReset:
 
         # File should be created with defaults
         assert os.path.isfile(config_path)
-        assert config.tts_speed == 1.2
+        assert config.tts_speed == 1.0
 
     def test_reset_preserves_all_defaults(self, tmp_path):
         """After reset, config has all DEFAULT_CONFIG keys."""

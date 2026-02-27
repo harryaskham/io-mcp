@@ -336,6 +336,9 @@ async def test_inbox_items_show_agent_name_in_multi_agent_mode():
 
     app = make_app()
     async with app.run_test() as pilot:
+        # Ensure inbox is not collapsed for this test
+        app._inbox_collapsed = False
+
         # Create two agent sessions (multi-agent mode)
         session1, _ = app.manager.get_or_create("test-1")
         session1.registered = True
@@ -383,6 +386,9 @@ async def test_inbox_items_no_agent_name_in_single_agent_mode():
 
     app = make_app()
     async with app.run_test() as pilot:
+        # Ensure inbox is not collapsed for this test
+        app._inbox_collapsed = False
+
         # Create only one agent session
         session, _ = app.manager.get_or_create("test-1")
         session.registered = True
@@ -442,6 +448,9 @@ async def test_inbox_focus_syncs_with_widget_focus():
 
     app = make_app()
     async with app.run_test() as pilot:
+        # Ensure inbox is not collapsed for this test
+        app._inbox_collapsed = False
+
         session, _ = app.manager.get_or_create("test-1")
         session.registered = True
         session.name = "Test"
