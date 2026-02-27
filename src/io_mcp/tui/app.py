@@ -1886,15 +1886,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         status.update(after_text)
         status.display = True
 
-        # Show a simple waiting state in the right pane (not full activity feed)
-        list_view = self.query_one("#choices", ListView)
-        list_view.clear()
-        s = self._cs
-        list_view.append(ChoiceItem(
-            f"[{s['fg_dim']}]Waiting for agent...[/{s['fg_dim']}]", "",
-            index=-999, display_index=0,
-        ))
-        list_view.display = True
+        # Show waiting state with metadata in the right pane
+        self._show_waiting_with_shortcuts(session)
 
         # Return to unified inbox — scroll to top so newest items are visible
         self._inbox_scroll_index = 0
@@ -1934,15 +1927,9 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         # Show inbox view with history
         self._ensure_main_content_visible(show_inbox=True)
 
-        # Show simple waiting state in right pane
-        s = self._cs
-        list_view = self.query_one("#choices", ListView)
-        list_view.clear()
-        list_view.append(ChoiceItem(
-            f"[{s['fg_dim']}]Waiting for agent...[/{s['fg_dim']}]", "",
-            index=-999, display_index=0,
-        ))
-        list_view.display = True
+        # Delegate to _show_waiting_with_shortcuts for a richer waiting state
+        # that includes agent metadata, shortcuts, and pending messages
+        self._show_waiting_with_shortcuts(session)
 
     def _show_waiting_with_shortcuts(self, session) -> None:
         """Show a clean waiting state with essential keyboard shortcuts.
@@ -1984,7 +1971,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             ))
             di += 1
 
-            # ── Agent metadata (cwd, hostname) ───────────────
+            # ── Agent metadata (cwd, hostname, tool stats) ────
             if session.registered:
                 meta_parts = []
                 if session.hostname:
@@ -2005,6 +1992,33 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                         index=-997, display_index=di,
                     ))
                     di += 1
+
+                # Tool call stats line
+                stats_parts = []
+                if session.tool_call_count > 0:
+                    stats_parts.append(f"{session.tool_call_count} tool calls")
+                if session.last_tool_name:
+                    stats_parts.append(f"last: {session.last_tool_name}")
+                if session.tmux_pane:
+                    stats_parts.append(f"pane {session.tmux_pane}")
+                if stats_parts:
+                    stats_text = f"[{s['fg_dim']}]{'  ·  '.join(stats_parts)}[/{s['fg_dim']}]"
+                    list_view.append(ChoiceItem(
+                        stats_text, "",
+                        index=-996, display_index=di,
+                    ))
+                    di += 1
+
+                # Custom metadata from agent_metadata dict
+                if session.agent_metadata:
+                    custom_parts = [f"{k}={v}" for k, v in session.agent_metadata.items()]
+                    if custom_parts:
+                        custom_text = f"[{s['fg_dim']}]{'  ·  '.join(custom_parts)}[/{s['fg_dim']}]"
+                        list_view.append(ChoiceItem(
+                            custom_text, "",
+                            index=-995, display_index=di,
+                        ))
+                        di += 1
 
             # ── Essential shortcuts ──────────────────────────
             shortcuts = [
@@ -2636,16 +2650,9 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         status.update(f"[{self._cs['warning']}]⧗[/{self._cs['warning']}] [{session.name}] Waiting for agent...{msg_info} [dim](u=undo)[/dim]")
         status.display = True
 
-        # Clear the right pane and show a clean waiting state
-        # (prevents stale extras/activity feed from persisting)
-        s = self._cs
-        list_view = self.query_one("#choices", ListView)
-        list_view.clear()
-        list_view.append(ChoiceItem(
-            f"[{s['fg_dim']}]Waiting for agent...[/{s['fg_dim']}]", "",
-            index=-999, display_index=0,
-        ))
-        list_view.display = True
+        # Delegate to _show_waiting_with_shortcuts for a richer waiting state
+        # that includes agent metadata, shortcuts, and pending messages
+        self._show_waiting_with_shortcuts(session)
 
     # ─── Dialog system ────────────────────────────────────────────
 
