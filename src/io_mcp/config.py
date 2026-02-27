@@ -125,6 +125,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "style": "whispering",
             "styleDegree": 2,
             "localBackend": "espeak",  # "termux", "espeak", or "none"
+            "pregenerateWorkers": 3,   # concurrent TTS processes for pregeneration (1-8)
             "voiceRotation": [
                 "noa", "teo",
             ],
@@ -1072,6 +1073,16 @@ class IoMcpConfig:
             .get("alwaysAllow", {})
             .get("restartTUI", True)
         )
+
+    @property
+    def tts_pregenerate_workers(self) -> int:
+        """Number of concurrent TTS processes for pregeneration (1-8)."""
+        val = (
+            self.expanded.get("config", {})
+            .get("tts", {})
+            .get("pregenerateWorkers", 3)
+        )
+        return max(1, min(8, int(val)))
 
     # ─── Config mutation ────────────────────────────────────────────
 

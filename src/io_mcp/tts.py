@@ -383,7 +383,7 @@ class TTSEngine:
                     return None
 
     def pregenerate(self, texts: list[str],
-                    max_workers: int = 3) -> None:
+                    max_workers: int = 0) -> None:
         """Generate audio clips for texts in parallel using a thread pool.
 
         Call this when choices arrive so scrolling is instant.
@@ -392,8 +392,8 @@ class TTSEngine:
 
         Args:
             texts: List of text strings to pregenerate audio for.
-            max_workers: Maximum concurrent tts CLI processes (default 3).
-                         Higher values cache faster but use more CPU/API bandwidth.
+            max_workers: Maximum concurrent tts CLI processes. 0 = use config
+                         value (config.tts.pregenerateWorkers, default 3).
         """
         # Skip entirely when API is known-broken
         if not self._local and not self._api_gen_available():
@@ -404,11 +404,14 @@ class TTSEngine:
         if not to_generate:
             return
 
+        # Determine worker count: explicit arg > config > default 3
+        if max_workers <= 0:
+            if self._config and hasattr(self._config, 'tts_pregenerate_workers'):
+                max_workers = self._config.tts_pregenerate_workers
+            else:
+                max_workers = 3
+
         # Generate in parallel using a thread pool.
-        # Each worker runs _generate_to_file_unlocked which doesn't acquire
-        # the speech lock (no playback involved) or the API lock (we want
-        # concurrent API calls for speed). The API service handles concurrent
-        # requests fine, and each tts CLI process writes to its own file.
         from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             pool.map(self._generate_to_file_unlocked, to_generate)
