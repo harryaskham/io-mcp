@@ -85,6 +85,7 @@ SECONDARY_EXTRAS = [
     {"label": "Queue message", "summary": "Type or speak a message to queue for the agent's next response"},
     {"label": "Interrupt agent", "summary": "Send text directly to the agent's tmux pane via tmux-cli"},
     {"label": "Multi select", "summary": "Toggle multiple choices then confirm -- do several things at once"},
+    {"label": "Dismiss", "summary": "Mark this choice as done without responding (clears dead/stale items)"},
     {"label": "Branch to worktree", "summary": "Create a git worktree for isolated work on a new branch"},
     {"label": "Compact context", "summary": "Compact the agent's context window to free up space"},
     {"label": "Pane view", "summary": "Show live tmux pane output for the focused agent"},

@@ -358,6 +358,7 @@ class ViewsMixin:
             (kb.get("conversationMode", "c"), "Toggle continuous voice conversation mode"),
             (kb.get("paneView", "v"), "Show live tmux pane output"),
             (kb.get("undoSelection", "u"), "Undo last selection"),
+            (kb.get("dismiss", "d"), "Dismiss active choice without responding"),
             (kb.get("filterChoices", "slash"), "Filter choices by typing"),
             (kb.get("replayPrompt", "p"), "Replay the last prompt via TTS"),
             (kb.get("hotReload", "r"), "Refresh / hot reload"),

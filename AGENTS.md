@@ -207,6 +207,7 @@ config:
     nextTab: l
     prevTab: h
     refresh: r
+    dismiss: d                # dismiss active choice without responding
 
 styles:                       # available TTS style/emotion names
   - whispering
@@ -241,6 +242,7 @@ quickActions:               # macros accessible via 'x' key
 | `h`/`l` | Previous/Next tab |
 | `n` | Next tab with open choices |
 | `u` | Undo last selection (re-present choices) |
+| `d` | Dismiss active choice without responding (clears stale items) |
 | `/` | Filter choices by typing |
 | `t` | Spawn new Claude Code agent (local or remote) |
 | `x` | Quick actions (configurable macros) |

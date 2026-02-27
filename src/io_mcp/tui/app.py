@@ -79,6 +79,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         Binding("c", "toggle_conversation", "Chat", show=False),
         Binding("v", "pane_view", "Pane", show=False),
         Binding("b", "toggle_sidebar", "Sidebar", show=False),
+        Binding("d", "dismiss_item", "Dismiss", show=False),
         Binding("question_mark", "show_help", "Help", show=False),
         Binding("r", "hot_reload", "Refresh", show=False),
         Binding("1", "pick_1", "", show=False),
@@ -125,6 +126,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         multi_select_key = kb.get("multiSelect", "x")
         convo_key = kb.get("conversationMode", "c")
         pane_key = kb.get("paneView", "v")
+        dismiss_key = kb.get("dismiss", "d")
         help_key = kb.get("help", "question_mark")
         reload_key = kb.get("refresh", kb.get("hotReload", "r"))
         quit_key = kb.get("quit", "q")
@@ -151,6 +153,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             Binding(multi_select_key, "multi_select_toggle", "Multi", show=False),
             Binding(convo_key, "toggle_conversation", "Chat", show=False),
             Binding(pane_key, "pane_view", "Pane", show=False),
+            Binding(dismiss_key, "dismiss_item", "Dismiss", show=False),
             Binding(help_key, "show_help", "Help", show=False),
             Binding(reload_key, "hot_reload", "Refresh", show=False),
         ] + [Binding(str(i), f"pick_{i}", "", show=False) for i in range(1, 10)]
@@ -1434,6 +1437,70 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         # Update inbox list to show item as done
         self._safe_call(self._update_inbox_list)
 
+    def _dismiss_active_item(self) -> None:
+        """Dismiss the active inbox item without sending a response to the agent.
+
+        Marks the item as done with a _dismissed result. If the agent thread
+        is alive, present_choices will return a cancelled-style result. If the
+        agent is dead (restarted/crashed), this simply cleans up the stale item.
+
+        Triggered by the "Dismiss" extra option or the 'd' keyboard shortcut.
+        """
+        session = self._focused()
+        if not session:
+            return
+
+        item = getattr(session, '_active_inbox_item', None)
+        if item and not item.done:
+            # Mark done with a dismissed result — event.set() unblocks
+            # any waiting thread (live agent) or is a no-op (dead agent)
+            item.result = {"selected": "_dismissed", "summary": "Dismissed by user"}
+            item.done = True
+            item.event.set()
+            session.drain_kick.set()
+
+            # Move to done list if it's still in the inbox queue
+            if item in session.inbox:
+                session.inbox.remove(item)
+                session._append_done(item)
+                session._inbox_generation += 1
+
+            # Clear active state
+            session._active_inbox_item = None
+            session.active = False
+            session.preamble = ""
+            session.choices = []
+
+            self._speak_ui("Dismissed")
+            self._safe_call(self._update_inbox_list)
+            self._safe_call(self._update_tab_bar)
+
+            # Auto-advance to next pending item or show waiting view
+            self._safe_call(self._show_next_or_waiting)
+        else:
+            self._speak_ui("Nothing to dismiss")
+
+    def _show_next_or_waiting(self) -> None:
+        """After dismissing, show the next pending item or the waiting view."""
+        session = self._focused()
+        if session:
+            # Check if there's another pending choice item
+            front = session.peek_inbox()
+            if front and front.kind == "choices" and not front.done:
+                # Activate the next item
+                session.preamble = front.preamble
+                session.choices = list(front.choices)
+                session.active = True
+                session._active_inbox_item = front
+                from .widgets import EXTRA_OPTIONS
+                session.extras_count = len(EXTRA_OPTIONS)
+                session.all_items = list(EXTRA_OPTIONS) + session.choices
+                self._show_choices()
+                return
+
+            # No more pending items — show waiting state
+            self._show_waiting_with_shortcuts(session)
+
     # ─── Choice presentation (called from MCP server thread) ─────────
 
     def present_choices(self, session: Session, preamble: str, choices: list[dict]) -> dict:
@@ -2059,7 +2126,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 ("m", "Queue message"),
                 ("p", "Replay last"),
                 ("s", "Settings"),
-                ("d", "Dashboard"),
+                ("d", "Dismiss"),
             ]
             if session.tmux_pane:
                 shortcuts.insert(3, ("v", "Pane view"))
@@ -2074,7 +2141,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             # ── Last selection (what the user chose) ──────────
             if session.selection:
                 sel_text = session.selection.get("selected", "")[:60]
-                if sel_text and sel_text not in ("_restart", "_cancelled", "error"):
+                if sel_text and sel_text not in ("_restart", "_cancelled", "_dismissed", "error"):
                     list_view.append(ChoiceItem(
                         f"[{s['fg_dim']}]Last: {sel_text}[/{s['fg_dim']}]", "",
                         index=-993, display_index=di,
@@ -3539,6 +3606,21 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         else:
             self._speak_ui("No other tabs with choices")
 
+    @_safe_action
+    def action_dismiss_item(self) -> None:
+        """Dismiss the active inbox item (keyboard shortcut for 'Dismiss' extra)."""
+        session = self._focused()
+        if not session:
+            return
+        # Block during text input and voice recording
+        if session.input_mode or session.voice_recording:
+            return
+        # Only works when there's an active choice item
+        if not session.active:
+            self._speak_ui("Nothing to dismiss")
+            return
+        self._dismiss_active_item()
+
     def action_toggle_sidebar(self) -> None:
         """Toggle the inbox sidebar collapsed/expanded. Persists across restarts."""
         session = self._focused()
@@ -4909,6 +4991,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             session = self._focused()
             if session:
                 self._close_session(session)
+        elif label == "Dismiss":
+            self._dismiss_active_item()
         elif label == "Quick settings":
             self._enter_quick_settings()
         elif label == "History":

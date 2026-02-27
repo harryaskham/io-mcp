@@ -547,6 +547,9 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
             if result.get("selected") == "_cancelled":
                 # MCP client cancelled the tool call — return immediately
                 return json.dumps({"selected": "error", "summary": "Cancelled by client"})
+            if result.get("selected") == "_dismissed":
+                # User dismissed this choice without responding — return immediately
+                return json.dumps({"selected": "_dismissed", "summary": "Dismissed by user"})
             if result.get("selected") == "_undo":
                 restart_retries = 0
                 continue
