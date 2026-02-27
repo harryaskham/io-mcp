@@ -3701,9 +3701,16 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         # Inbox list highlight: read preamble preview of highlighted item
         if isinstance(event.item, InboxListItem):
+            # Skip TTS for done items — only read pending (unresolved) items.
+            # Done items are visual history; reading them aloud after auto-focus
+            # is confusing. The user can still select done items to review them.
+            if event.item.is_done:
+                self._inbox_scroll_index = event.item.inbox_index
+                return
+
             preamble = event.item.inbox_preamble if event.item.inbox_preamble else "no preamble"
             n = event.item.n_choices
-            status = "done" if event.item.is_done else f"{n} option{'s' if n != 1 else ''}"
+            status = f"{n} option{'s' if n != 1 else ''}"
             # Include agent name in TTS when in multi-agent mode
             agent_prefix = f"{event.item.session_name}. " if event.item.session_name else ""
             text = f"{agent_prefix}{preamble}. {status}"

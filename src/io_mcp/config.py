@@ -120,18 +120,17 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "tts": {
             "voice": "noa",
             "uiVoice": "teo",
-            "speed": 1.2,
-            "style": "terrified",
+            "speed": 1.0,
+            "style": "whispering",
             "styleDegree": 2,
             "localBackend": "espeak",  # "termux", "espeak", or "none"
             "voiceRotation": [
-                "alloy", "ash", "ballad", "coral", "echo",
-                "fable", "onyx", "nova", "sage", "shimmer", "verse",
                 "noa", "teo",
             ],
             "randomRotation": True,  # random (True) vs sequential (False) voice/emotion assignment
             "styleRotation": [
-                "whispering", "excited", "hopeful", "friendly", "unfriendly", "terrified",
+                "angry", "chat", "cheerful", "excited", "friendly",
+                "hopeful", "sad", "shouting", "terrified", "unfriendly", "whispering",
             ],
         },
         "stt": {
@@ -201,9 +200,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         },
     },
     "styles": [
-        "whispering", "excited", "hopeful", "friendly", "unfriendly", "terrified",
-        "happy", "calm", "serious", "neutral", "storyteller", "gentle", "shy",
-        "empathetic", "encouraging", "confused", "sad", "surprised", "curious",
+        "angry", "chat", "cheerful", "excited", "friendly",
+        "hopeful", "sad", "shouting", "terrified", "unfriendly", "whispering",
     ],
 }
 
