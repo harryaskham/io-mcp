@@ -20,15 +20,15 @@ clio-local *FLAGS:
     export PULSE_SERVER=samsung-sm-s928b.miku-owl.ts.net
     claude --agent io-mcp:io-mcp {{ FLAGS }}
 
-tmux-clio:
-    tmux split-window -v -t io-mcp-tui:1.1 "just loop clio-local"
+tmux-clio *FLAGS:
+    tmux split-window -v -t io-mcp-tui:1.1 "just loop clio-local {{ FLAGS }}"
 
 tmux-attach:
     tmux new -A -s io-mcp-tui || true
 
 tmux *FLAGS:
     just tmux-new {{ FLAGS }}
-    just tmux-clio {{ FLAGS }}
+    just tmux-clio
     just tmux-attach
 
 # Dev on desktop, routing audio to phone via PulseAudio over Tailscale
