@@ -2160,6 +2160,28 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             ))
             di += 1
 
+            # ── Activity sparkline (tool calls per minute) ──────
+            if session.activity_log and len(session.activity_log) >= 3:
+                import time as _time_mod
+                now = _time_mod.time()
+                # Bucket activity into 1-minute slots over last 10 minutes
+                _blocks = " ▁▂▃▄▅▆▇█"
+                buckets = [0] * 10
+                for entry in session.activity_log:
+                    age_mins = int((now - entry["timestamp"]) / 60)
+                    if 0 <= age_mins < 10:
+                        buckets[9 - age_mins] += 1  # newest on right
+                max_val = max(buckets) if max(buckets) > 0 else 1
+                sparkline = ""
+                for b in buckets:
+                    idx = min(int(b / max_val * 8), 8) if max_val > 0 else 0
+                    sparkline += _blocks[idx]
+                list_view.append(ChoiceItem(
+                    f"[{s['accent']}]{sparkline}[/{s['accent']}] [{s['fg_dim']}]activity (10m)[/{s['fg_dim']}]", "",
+                    index=-997, display_index=di,
+                ))
+                di += 1
+
             # ── Last selection (what the user chose) ──────────
             if session.selection:
                 sel_text = session.selection.get("selected", "")[:60]
@@ -2226,6 +2248,34 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                     list_view.append(ChoiceItem(
                         text, "",
                         index=-989, display_index=di,
+                    ))
+                    di += 1
+
+            # ── Session timeline bar ───────────────────────────
+            if session.activity_log and len(session.activity_log) >= 2:
+                import time as _time_mod2
+                now2 = _time_mod2.time()
+                first_ts = session.activity_log[0]["timestamp"]
+                span = now2 - first_ts
+                if span > 60:  # Only show if session is 1+ minutes old
+                    bar_width = 30
+                    bar = ["░"] * bar_width  # empty slots
+                    _kind_chars = {
+                        "speech": "█", "choices": "▓",
+                        "tool": "▒", "settings": "░", "status": "▒",
+                    }
+                    for entry in session.activity_log:
+                        pos = int((entry["timestamp"] - first_ts) / span * (bar_width - 1))
+                        pos = min(pos, bar_width - 1)
+                        ch = _kind_chars.get(entry["kind"], "▒")
+                        # Higher priority overwrites
+                        if bar[pos] == "░" or ch in ("█", "▓"):
+                            bar[pos] = ch
+                    bar_str = "".join(bar)
+                    mins = int(span / 60)
+                    list_view.append(ChoiceItem(
+                        f"[{s['accent']}]{bar_str}[/{s['accent']}] [{s['fg_dim']}]{mins}m session[/{s['fg_dim']}]", "",
+                        index=-988, display_index=di,
                     ))
                     di += 1
 
