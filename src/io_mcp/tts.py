@@ -1010,15 +1010,16 @@ class TTSEngine:
                     # Killed by signal — intentional interruption, not an error
                     _log.debug("TTS streaming cancelled by signal %d: %s",
                                -tts_rc, text[:60])
-                    return
+                    return None
                 # Also check if the process is no longer tracked by the manager
                 # (cancel_all() removes it from tracking before killing)
                 if not tts_tracked.alive and tts_rc is not None:
                     # Process was killed/died — check if it was a signal
-                    if tts_rc < 0 or tts_rc == -9 or tts_rc == 137:
+                    # rc < 0: Unix signal, 137: SIGKILL (128+9), 143: SIGTERM (128+15)
+                    if tts_rc < 0 or tts_rc in (137, 143):
                         _log.debug("TTS streaming cancelled (rc=%d): %s",
                                    tts_rc, text[:60])
-                        return
+                        return None
 
                 # TTS failed to produce valid WAV — get diagnostics
                 tts_stderr = ""
@@ -1027,6 +1028,14 @@ class TTSEngine:
                     tts_stderr = (tts_proc.stderr.read() or b"").decode("utf-8", errors="replace").strip()
                 except Exception:
                     pass
+
+                # 0 bytes + empty stderr = most likely killed/cancelled
+                # (the process never had a chance to produce output or error)
+                if len(header) == 0 and not tts_stderr:
+                    _log.debug("TTS streaming likely cancelled (0 bytes, no stderr): %s",
+                               text[:60])
+                    return None
+
                 self._log_tts_error(
                     f"tts CLI produced no/invalid WAV header ({len(header)} bytes): {tts_stderr[:120]}",
                     text)
