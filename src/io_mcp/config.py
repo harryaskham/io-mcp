@@ -917,7 +917,7 @@ class IoMcpConfig:
         return float(
             self.expanded.get("config", {})
             .get("pulseAudio", {})
-            .get("reconnectCooldownSecs", 30)
+            .get("reconnectCooldownSecs", 15)
         )
 
     # ─── Health monitor settings ─────────────────────────────────

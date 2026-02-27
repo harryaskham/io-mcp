@@ -5,7 +5,6 @@ Contains the IoMcpApp (Textual App subclass) and TUI controller wrapper.
 
 from __future__ import annotations
 
-import asyncio
 import os
 import random
 import shutil
@@ -18,21 +17,21 @@ from typing import Optional
 from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.containers import Horizontal, Vertical
 from textual.events import MouseScrollDown, MouseScrollUp
 from textual.reactive import reactive
 from textual.timer import Timer
 from textual.widget import Widget
-from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, RichLog, Static
+from textual.widgets import Header, Input, Label, ListItem, ListView, RichLog, Static
 
 from ..session import Session, SessionManager, SpeechEntry, HistoryEntry, InboxItem
 from ..settings import Settings
-from ..tts import PORTAUDIO_LIB, TTSEngine, _find_binary
+from ..tts import TTSEngine, _find_binary
 from .. import api as frontend_api
 from .. import state as ui_state
 from ..logging import get_logger, log_context, TUI_ERROR_LOG
 from ..notifications import (
-    NotificationDispatcher, NotificationEvent, create_dispatcher,
+    NotificationEvent, create_dispatcher,
 )
 
 _log = get_logger("io-mcp.tui", TUI_ERROR_LOG)
@@ -684,16 +683,25 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             return
 
         max_attempts = 3
-        cooldown = 30.0
+        cooldown = 15.0  # Must be < health check interval (30s) to avoid race
         if self._config:
             max_attempts = self._config.pulse_max_reconnect_attempts
             cooldown = self._config.pulse_reconnect_cooldown
 
         now = time.time()
 
-        # Check if we've exceeded max attempts
+        # Check if we've exceeded max attempts — auto-reset after 5× cooldown
+        # so reconnection keeps retrying periodically even after exhaustion
         if self._pulse_reconnect_attempts >= max_attempts:
-            return
+            backoff = cooldown * 5
+            if now - self._pulse_last_reconnect >= backoff:
+                self._pulse_reconnect_attempts = 0
+                try:
+                    _log.info("PulseAudio reconnect attempts reset after backoff")
+                except Exception:
+                    pass
+            else:
+                return
 
         # Check cooldown
         if now - self._pulse_last_reconnect < cooldown:

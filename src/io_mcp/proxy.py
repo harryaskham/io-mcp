@@ -23,7 +23,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP, Context
 
-from .logging import get_logger, log_context, SERVER_LOG, TUI_ERROR_LOG, TOOL_ERROR_LOG, read_log_tail
+from .logging import get_logger, SERVER_LOG, TUI_ERROR_LOG, TOOL_ERROR_LOG, read_log_tail
 
 log = logging.getLogger("io-mcp.proxy")
 _server_log = get_logger("io-mcp.proxy.server", SERVER_LOG, json_format=False)

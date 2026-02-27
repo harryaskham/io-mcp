@@ -33,7 +33,7 @@ import threading
 from .config import IoMcpConfig
 from .tui import IoMcpApp
 from .tts import TTSEngine
-from .logging import get_logger, log_context, TUI_ERROR_LOG, TOOL_ERROR_LOG, SERVER_LOG
+from .logging import get_logger, log_context, TUI_ERROR_LOG, TOOL_ERROR_LOG
 
 log = logging.getLogger("io_mcp")
 _file_log = get_logger("io-mcp.main", TUI_ERROR_LOG)
