@@ -28,13 +28,53 @@ class ViewsMixin:
     def _close_session(self: "IoMcpApp", session) -> None:
         """Close a session tab without killing the tmux pane."""
         name = session.name
+        stats = self._generate_battle_stats(session)
         epitaph = self._generate_epitaph(session)
         self.on_session_removed(session.session_id)
+        # Speak stats first, then epitaph
+        if stats:
+            self._speak_ui(f"{name} final stats: {stats}")
         if epitaph:
-            self._speak_ui(f"{name}: {epitaph}")
+            self._tts.speak_async(epitaph)
         else:
             self._speak_ui(f"Closed {name}")
         self._exit_settings()
+
+    def _generate_battle_stats(self: "IoMcpApp", session) -> str:
+        """Generate KDA-style battle stats for the session."""
+        import time as _time
+
+        tc = session.tool_call_count
+        if tc == 0:
+            return ""
+
+        sels = len(session.history)
+        speeches = len(session.speech_log)
+        achievements = len(session.achievements_unlocked)
+        streak = session.streak_minutes
+
+        # Calculate duration
+        if session.activity_log:
+            first = session.activity_log[0]["timestamp"]
+            duration_mins = int((_time.time() - first) / 60)
+        else:
+            duration_mins = 0
+
+        # Actions per minute
+        apm = round(tc / max(duration_mins, 1), 1)
+
+        parts = [f"{tc} actions"]
+        if sels > 0:
+            parts.append(f"{sels} decisions")
+        if speeches > 0:
+            parts.append(f"{speeches} speeches")
+        parts.append(f"{apm} per minute")
+        if streak > 0:
+            parts.append(f"peak streak {streak}m")
+        if achievements > 0:
+            parts.append(f"{achievements} achievements")
+
+        return " · ".join(parts)
 
     def _generate_epitaph(self: "IoMcpApp", session) -> str:
         """Generate a poetic one-liner about the agent's session."""
