@@ -2057,11 +2057,12 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             # ── Essential shortcuts ──────────────────────────
             shortcuts = [
                 ("m", "Queue message"),
+                ("p", "Replay last"),
                 ("s", "Settings"),
                 ("d", "Dashboard"),
             ]
             if session.tmux_pane:
-                shortcuts.insert(2, ("v", "Pane view"))
+                shortcuts.insert(3, ("v", "Pane view"))
 
             shortcut_parts = [f"[{s['fg_dim']}]{key}[/{s['fg_dim']}]={label}" for key, label in shortcuts]
             list_view.append(ChoiceItem(
@@ -2069,6 +2070,32 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 index=-998, display_index=di,
             ))
             di += 1
+
+            # ── Last selection (what the user chose) ──────────
+            if session.selection:
+                sel_text = session.selection.get("selected", "")[:60]
+                if sel_text and sel_text not in ("_restart", "_cancelled", "error"):
+                    list_view.append(ChoiceItem(
+                        f"[{s['fg_dim']}]Last: {sel_text}[/{s['fg_dim']}]", "",
+                        index=-993, display_index=di,
+                    ))
+                    di += 1
+
+            # ── Recent speech log (last 3 entries) ────────────
+            recent_speech = session.speech_log[-3:] if session.speech_log else []
+            if recent_speech:
+                list_view.append(ChoiceItem(
+                    f"[{s['fg_dim']}]─── Recent ───[/{s['fg_dim']}]", "",
+                    index=-992, display_index=di,
+                ))
+                di += 1
+                for entry in recent_speech:
+                    text_preview = entry.text[:80] if entry.text else ""
+                    list_view.append(ChoiceItem(
+                        f"[{s['fg_dim']}]{text_preview}[/{s['fg_dim']}]", "",
+                        index=-991, display_index=di,
+                    ))
+                    di += 1
 
             # ── Pending messages indicator ───────────────────
             if session.pending_messages:
