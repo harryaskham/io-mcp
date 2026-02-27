@@ -100,6 +100,7 @@ android/
 | `request_restart()` | Restart backend (TUI reloads, proxy stays) |
 | `request_proxy_restart()` | Restart proxy (breaks MCP connections) |
 | `check_inbox()` | Poll for queued user messages without waiting |
+| `report_status(status)` | Push a status update to the activity feed (no TTS) |
 
 All tool responses include any queued user messages.
 

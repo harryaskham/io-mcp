@@ -952,6 +952,22 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
             return json.dumps({"messages": messages, "count": len(messages)})
         return json.dumps({"messages": [], "count": 0})
 
+    def _tool_report_status(args, session_id):
+        """Report a lightweight status update to the activity feed."""
+        session = _get_session(session_id)
+        session.last_tool_name = "report_status"
+        session.tool_call_count += 1
+        status = args.get("status", "")
+        if not status:
+            return json.dumps({"error": "No status provided"})
+        session.log_activity("report_status", status[:120], kind="status")
+        # Update TUI to show the new activity
+        try:
+            frontend.update_tab_bar()
+        except Exception:
+            pass
+        return _attach_messages(json.dumps({"status": "logged", "text": status[:120]}), session)
+
     def _tool_get_logs(args, session_id):
         """Return recent io-mcp logs: TUI errors, proxy output, and backend stderr."""
         session = _get_session(session_id)
@@ -1241,6 +1257,7 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
         "request_restart": _tool_request_restart,
         "request_proxy_restart": _tool_request_proxy_restart,
         "check_inbox": _tool_check_inbox,
+        "report_status": _tool_report_status,
         "get_logs": _tool_get_logs,
         "get_sessions": _tool_get_sessions,
         "get_speech_history": _tool_get_speech_history,
@@ -1255,7 +1272,7 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
     # Tools that are just metadata/status queries — don't clutter the activity log
     _QUIET_TOOLS = {"check_inbox", "get_logs", "get_sessions",
                     "get_speech_history", "get_current_choices", "get_tui_state",
-                    "get_settings"}
+                    "get_settings", "report_status"}
 
     def dispatch(tool_name: str, args: dict, session_id: str) -> str:
         handler = TOOLS.get(tool_name)

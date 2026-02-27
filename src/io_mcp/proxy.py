@@ -715,6 +715,26 @@ def create_proxy_server(
         return await _fwd("check_inbox", {}, ctx)
 
     @server.tool()
+    async def report_status(status: str, ctx: Context = None) -> str:
+        """Report a lightweight status update to the activity feed.
+
+        Use this to push progress updates that appear in the TUI activity
+        log without speaking aloud. Good for tracking what you're doing
+        between speech calls — "reading config", "running tests", etc.
+
+        Parameters
+        ----------
+        status:
+            Short status text (1-2 sentences max). Appears in the activity feed.
+
+        Returns
+        -------
+        str
+            Confirmation message.
+        """
+        return await _fwd("report_status", {"status": status}, ctx)
+
+    @server.tool()
     async def get_logs(lines: int = 50, ctx: Context = None) -> str:
         """Get recent io-mcp logs for debugging.
 
