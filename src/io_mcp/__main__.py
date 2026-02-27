@@ -1312,6 +1312,15 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
                         kind = "settings"
                     session.log_activity(tool_name, detail, kind)
 
+                    # Check for achievements
+                    new_achievements = session.check_achievements()
+                    for ach in new_achievements:
+                        try:
+                            frontend.tts.play_chime("achievement")
+                            frontend.tts.speak_async(f"Achievement unlocked: {ach}")
+                        except Exception:
+                            pass
+
                     # Update TUI waiting view to reflect new activity
                     try:
                         frontend.update_tab_bar()

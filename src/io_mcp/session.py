@@ -118,6 +118,9 @@ class Session:
     activity_log: list[dict] = field(default_factory=list)
     _activity_log_max: int = 50  # cap to prevent unbounded growth
 
+    # ── Achievements ──────────────────────────────────────────────
+    achievements_unlocked: set = field(default_factory=set)
+
     # ── Selection history ─────────────────────────────────────────
     history: list[HistoryEntry] = field(default_factory=list)
 
@@ -191,6 +194,57 @@ class Session:
         elif recent >= 1:
             return "flowing"
         return "idle"
+
+    def check_achievements(self) -> list[str]:
+        """Check for newly unlocked achievements. Returns list of new ones.
+
+        Called after each tool call. Each achievement fires only once.
+        """
+        new = []
+        now = time.time()
+
+        checks = [
+            ("first_blood", self.tool_call_count >= 1,
+             "🏆 First Blood — first tool call!"),
+            ("getting_started", self.tool_call_count >= 10,
+             "🎯 Getting Started — 10 tool calls"),
+            ("centurion", self.tool_call_count >= 100,
+             "💯 Centurion — 100 tool calls!"),
+            ("five_hundred", self.tool_call_count >= 500,
+             "🔥 Unstoppable — 500 tool calls!"),
+            ("chatterbox", len(self.speech_log) >= 20,
+             "💬 Chatterbox — 20 speech events"),
+            ("decisive", len(self.history) >= 5,
+             "⚡ Decisive — 5 selections made"),
+            ("veteran", len(self.history) >= 20,
+             "🎖️ Veteran — 20 selections made"),
+        ]
+
+        # Time-based achievements
+        if self.history:
+            first = min(h.timestamp for h in self.history)
+            session_mins = (now - first) / 60
+            checks.append(("marathon", session_mins >= 30,
+                          "🏃 Marathon — 30 minutes of work"))
+            checks.append(("ultra", session_mins >= 60,
+                          "🦾 Ultra — 1 hour session!"))
+
+        # Night owl: any activity between midnight and 5am
+        hour = time.localtime(now).tm_hour
+        checks.append(("night_owl", hour < 5,
+                       "🦉 Night Owl — coding past midnight"))
+
+        # Speed demon: 5+ tool calls in last 5 seconds
+        recent_5s = sum(1 for e in self.activity_log if now - e["timestamp"] < 5)
+        checks.append(("speed_demon", recent_5s >= 5,
+                       "⚡ Speed Demon — 5 actions in 5 seconds"))
+
+        for key, condition, message in checks:
+            if condition and key not in self.achievements_unlocked:
+                self.achievements_unlocked.add(key)
+                new.append(message)
+
+        return new
 
     def log_activity(self, tool: str, detail: str = "", kind: str = "tool") -> None:
         """Append a timestamped entry to the activity log.
