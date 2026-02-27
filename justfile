@@ -18,7 +18,7 @@ tmux-new *FLAGS:
 clio-local *FLAGS:
     export IO_MCP_URL=http://localhost:8444/mcp
     export PULSE_SERVER=samsung-sm-s928b.miku-owl.ts.net
-    claude --agent io-mcp:io-mcp {{ FLAGS }}
+    claude --agent io-mcp:io-mcp {{ FLAGS }} "Register with io-mcp"
 
 tmux-clio *FLAGS:
     tmux split-window -v -t io-mcp-tui:1.1 "just loop clio-local {{ FLAGS }}"
