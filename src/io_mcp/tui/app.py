@@ -1732,6 +1732,16 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         # Show UI immediately if this is the focused session
         if is_fg:
             self._safe_call(self._show_choices)
+        else:
+            # Non-focused session got choices — auto-switch if the focused
+            # session is idle (not actively showing choices). This gives
+            # immediate attention to incoming choices without manual tab switching.
+            focused = self._focused()
+            if focused and not focused.active:
+                import time as _time2
+                _time2.sleep(0.3)  # Brief delay so inbox chime plays first
+                self._safe_call(lambda: self._switch_to_session(session))
+                self._safe_call(self._show_choices)
 
         # Update tab bar (session now has active choices indicator)
         self._safe_call(self._update_tab_bar)
