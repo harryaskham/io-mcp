@@ -2053,6 +2053,22 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
             di = 0  # display_index counter
 
+            # ── Mood ring (color based on agent activity) ─────
+            mood = session.mood
+            _mood_colors = {
+                "idle":      s.get("blue", "#81a1c1"),
+                "flowing":   s.get("success", "#a3be8c"),
+                "busy":      s.get("warning", "#ebcb8b"),
+                "thrashing": s.get("error", "#bf616a"),
+                "speaking":  s.get("purple", "#b48ead"),
+            }
+            _mood_icons = {
+                "idle": "◯", "flowing": "●", "busy": "◉",
+                "thrashing": "⊛", "speaking": "♫",
+            }
+            mood_color = _mood_colors.get(mood, s['fg_dim'])
+            mood_icon = _mood_icons.get(mood, "·")
+
             # ── Status line ──────────────────────────────────
             if session.tool_call_count > 0:
                 import time as _time
@@ -2063,9 +2079,9 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                     ago = f"{int(elapsed) // 60}m ago"
                 else:
                     ago = f"{int(elapsed) // 3600}h ago"
-                status_text = f"[{s['fg_dim']}]Agent working... last activity {ago}[/{s['fg_dim']}]"
+                status_text = f"[{mood_color}]{mood_icon}[/{mood_color}] [{s['fg_dim']}]{mood} · last activity {ago}[/{s['fg_dim']}]"
             else:
-                status_text = f"[{s['fg_dim']}]Waiting for agent...[/{s['fg_dim']}]"
+                status_text = f"[{mood_color}]{mood_icon}[/{mood_color}] [{s['fg_dim']}]Waiting for agent...[/{s['fg_dim']}]"
             list_view.append(ChoiceItem(
                 status_text, "",
                 index=-999, display_index=di,

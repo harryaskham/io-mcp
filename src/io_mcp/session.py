@@ -156,6 +156,42 @@ class Session:
         """Update the last_activity timestamp."""
         self.last_activity = time.time()
 
+    @property
+    def mood(self) -> str:
+        """Compute agent mood from recent activity.
+
+        Returns a mood string used to tint the TUI preamble:
+        - "idle"      — no activity in last 30s (calm blue)
+        - "flowing"   — steady tool calls, 1-3 per 10s (green)
+        - "busy"      — rapid tool calls, 4-8 per 10s (yellow)
+        - "thrashing" — very rapid, 9+ per 10s (red)
+        - "speaking"  — last action was speech (purple)
+        """
+        if not self.activity_log:
+            return "idle"
+
+        now = time.time()
+        last = self.activity_log[-1]
+
+        # If last activity was speech in last 10s → speaking
+        if last["kind"] == "speech" and (now - last["timestamp"]) < 10:
+            return "speaking"
+
+        # Count activities in last 10 seconds
+        recent = sum(1 for e in self.activity_log if now - e["timestamp"] < 10)
+
+        # Check if idle (nothing in 30s)
+        if now - last["timestamp"] > 30:
+            return "idle"
+
+        if recent >= 9:
+            return "thrashing"
+        elif recent >= 4:
+            return "busy"
+        elif recent >= 1:
+            return "flowing"
+        return "idle"
+
     def log_activity(self, tool: str, detail: str = "", kind: str = "tool") -> None:
         """Append a timestamped entry to the activity log.
 
