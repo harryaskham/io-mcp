@@ -4627,16 +4627,30 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         if not session.active or self._in_settings:
             return
 
-        # Multi-select mode: toggle checkbox instead of selecting
+        # Multi-select mode: toggle checkbox or trigger action buttons
         if self._multi_select_mode:
+            num_choices = len(self._multi_select_checked)
             # n is 1-based choice number
             choice_idx = n - 1
-            if 0 <= choice_idx < len(self._multi_select_checked):
+            if 0 <= choice_idx < num_choices:
+                # Toggle choice checkbox
                 self._multi_select_checked[choice_idx] = not self._multi_select_checked[choice_idx]
                 label = session.choices[choice_idx].get("label", "")
                 state = "selected" if self._multi_select_checked[choice_idx] else "unselected"
                 self._tts.speak_async(f"{label} {state}")
                 self._refresh_multi_select()
+            elif choice_idx == num_choices:
+                # Confirm (first button after choices)
+                self._confirm_multi_select(team=False)
+            elif choice_idx == num_choices + 1:
+                # Team mode
+                self._confirm_multi_select(team=True)
+            elif choice_idx == num_choices + 2:
+                # Cancel
+                self._multi_select_mode = False
+                self._multi_select_checked = []
+                self._speak_ui("Multi-select cancelled.")
+                self._show_choices()
             return
 
         # Calculate the actual number of displayed extras (collapsed vs expanded)
