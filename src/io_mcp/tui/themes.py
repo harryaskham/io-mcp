@@ -139,6 +139,7 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
         padding: 1 2;
         color: {s['success']};
         background: {s['bg_alt']};
+        border-left: thick {s['success']};
         width: 1fr;
         height: auto;
         text-style: bold;
@@ -296,6 +297,7 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
 
     ChoiceItem.-highlight {{
         background: {s['highlight_bg']};
+        border-left: thick {s['accent']};
     }}
 
     ChoiceItem.-highlight > .choice-label {{
