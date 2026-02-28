@@ -218,6 +218,7 @@ class ChatViewMixin:
 
         # Show chat feed, hide all other views
         self.query_one("#main-content").display = False
+        self.query_one("#inbox-list").display = False
         self.query_one("#preamble").display = False
         self.query_one("#pane-view").display = False
         self.query_one("#status").display = False
