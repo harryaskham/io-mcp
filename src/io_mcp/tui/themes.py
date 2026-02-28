@@ -420,6 +420,39 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
         background: {s['bg']};
     }}
 
+    /* ─── Embedded choices in chat view ──────────────────────── */
+
+    #chat-choices-container {{
+        display: none;
+        height: auto;
+        max-height: 50%;
+        width: 1fr;
+        margin: 0 1;
+        border: solid {s['accent']};
+        background: {s['bg_alt']};
+    }}
+
+    #chat-choices-preamble {{
+        padding: 0 2;
+        color: {s['success']};
+        text-style: bold;
+        height: auto;
+        width: 1fr;
+    }}
+
+    #chat-choices {{
+        height: auto;
+        max-height: 20;
+        width: 1fr;
+        background: {s['bg_alt']};
+        scrollbar-background: {s['bg_alt']};
+        scrollbar-background-hover: {s['bg_alt']};
+        scrollbar-background-active: {s['bg_alt']};
+        scrollbar-color: {s['border']};
+        scrollbar-color-hover: {s['fg_dim']};
+        scrollbar-color-active: {s['accent']};
+    }}
+
     #chat-input {{
         dock: bottom;
         height: auto;

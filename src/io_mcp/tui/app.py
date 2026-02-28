@@ -512,6 +512,10 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         yield RichLog(id="pane-view", markup=False, highlight=False, auto_scroll=True, max_lines=200)
         with Vertical(id="chat-view"):
             yield ManagedListView(id="chat-feed")
+            # Choices pane embedded in chat view — shown when choices are active
+            with Vertical(id="chat-choices-container"):
+                yield Label("", id="chat-choices-preamble")
+                yield ManagedListView(id="chat-choices")
             yield SubmitTextArea(id="chat-input")
         yield Input(placeholder="Filter choices...", id="filter-input")
         yield Static("", id="footer-status")
@@ -527,6 +531,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         self.query_one("#speech-log").display = False
         self.query_one("#pane-view").display = False
         self.query_one("#chat-view").display = False
+        self.query_one("#chat-choices-container").display = False
         self.query_one("#main-content").display = False
         self.query_one("#inbox-list").display = False
 
@@ -2013,19 +2018,13 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         if session is None:
             return
 
-        # Chat view active: refresh the feed and show choices below for selection
+        # Chat view active: show choices in embedded pane + refresh feed
         if self._chat_view_active:
+            self._chat_content_hash = ""  # Force rebuild
             self._refresh_chat_feed()
             if session.active and session.choices:
-                # Show choices pane below chat feed (without inbox sidebar)
-                self.query_one("#main-content").display = True
-                self.query_one("#inbox-list").display = False
-                # Don't return — fall through to populate choices normally
-            else:
-                # No active choices — hide main-content, show only feed
-                self.query_one("#main-content").display = False
-                self.query_one("#preamble").display = False
-                return
+                self._populate_chat_choices(session)
+            return
 
         # Don't overwrite the UI if user is composing a message or typing
         if self._message_mode or (session and session.input_mode):
@@ -2126,6 +2125,8 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
             self.query_one("#main-content").display = False
             self.query_one("#preamble").display = False
             self.query_one("#dwell-bar").display = False
+            self._hide_chat_choices()
+            self._chat_content_hash = ""  # Force rebuild
             self._refresh_chat_feed()
             self._update_footer_status()
             return
@@ -4363,6 +4364,15 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
     @on(ListView.Selected)
     def on_list_selected(self, event: ListView.Selected) -> None:
         """Handle Enter/click on a list item."""
+        # Check if this is a chat-embedded choices selection
+        try:
+            chat_choices = self.query_one("#chat-choices", ListView)
+            if event.list_view is chat_choices and isinstance(event.item, ChoiceItem):
+                self._handle_chat_choice_select(event.item)
+                return
+        except Exception:
+            pass
+
         # Check if this is an inbox list selection (left pane)
         try:
             inbox_list = self.query_one("#inbox-list", ListView)
@@ -4874,6 +4884,9 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
             ui_speed = self._config.tts_speed_for("ui") if self._config else None
             self._tts.speak_fragments(["selected", message], speed_override=ui_speed)
             self._resolve_selection(session, {"selected": message, "summary": "(freeform input)"})
+            self._hide_chat_choices()
+            self._chat_content_hash = ""  # Force rebuild
+            self._refresh_chat_feed()
         else:
             # Queue as message
             self._handle_chat_message_input(message)
@@ -4968,6 +4981,8 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
             ui_speed = self._config.tts_speed_for("ui") if self._config else None
             self._tts.speak_fragments(["selected", label], speed_override=ui_speed)
             self._resolve_selection(session, {"selected": label, "summary": summary})
+            self._hide_chat_choices()
+            self._chat_content_hash = ""  # Force rebuild
             self._refresh_chat_feed()
             return
 

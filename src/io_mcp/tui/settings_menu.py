@@ -138,6 +138,10 @@ class SettingsMixin:
                 self.query_one("#chat-view").display = False
             except Exception:
                 pass
+            try:
+                self.query_one("#chat-choices-container").display = False
+            except Exception:
+                pass
 
     def _exit_settings(self) -> None:
         """Leave settings and restore choices."""

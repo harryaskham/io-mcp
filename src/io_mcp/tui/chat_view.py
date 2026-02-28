@@ -175,6 +175,7 @@ class ChatViewMixin:
         if chat_view.display:
             chat_view.display = False
             self._chat_view_active = False
+            self._hide_chat_choices()
             if hasattr(self, '_chat_refresh_timer') and self._chat_refresh_timer:
                 self._chat_refresh_timer.stop()
                 self._chat_refresh_timer = None
@@ -385,3 +386,84 @@ class ChatViewMixin:
         session.pending_messages.append(message.strip())
         self._speak_ui("Message queued")
         self._refresh_chat_feed()
+
+    def _populate_chat_choices(self: "IoMcpApp", session: "Session") -> None:
+        """Populate the embedded choices pane in chat view.
+
+        Shows the same interactive choice list as the normal inbox view,
+        but styled as a bordered panel within the chat feed. Users can
+        scroll (j/k) and select (Enter) just like normal.
+        """
+        from .widgets import ChoiceItem, EXTRA_OPTIONS, PRIMARY_EXTRAS, SECONDARY_EXTRAS, MORE_OPTIONS_ITEM
+
+        try:
+            container = self.query_one("#chat-choices-container")
+            preamble_label = self.query_one("#chat-choices-preamble", Label)
+            list_view = self.query_one("#chat-choices", ListView)
+        except Exception:
+            return
+
+        # Update preamble
+        preamble_label.update(session.preamble[:200] if session.preamble else "")
+
+        # Populate choices
+        list_view.clear()
+        choices = session.choices or []
+        for i, c in enumerate(choices):
+            label = c.get('label', '')
+            summary = c.get('summary', '')
+            list_view.append(ChoiceItem(label, summary, index=i+1, display_index=i))
+
+        # Add primary extras
+        di = len(choices)
+        for e in PRIMARY_EXTRAS:
+            list_view.append(ChoiceItem(
+                e.get('label', ''), e.get('summary', ''),
+                index=0, display_index=di,
+            ))
+            di += 1
+
+        container.display = True
+        list_view.index = 0
+        list_view.focus()
+
+    def _hide_chat_choices(self: "IoMcpApp") -> None:
+        """Hide the embedded choices pane in chat view."""
+        try:
+            self.query_one("#chat-choices-container").display = False
+        except Exception:
+            pass
+
+    def _handle_chat_choice_select(self: "IoMcpApp", item) -> None:
+        """Handle selection from the embedded chat choices list.
+
+        Dispatches to the same resolution logic as the normal inbox view.
+        After selection, hides the choices pane and refreshes the feed.
+        """
+        session = self._focused()
+        if not session or not session.active:
+            return
+
+        logical = item.choice_index
+        if logical > 0:
+            # Regular choice
+            ci = logical - 1
+            if ci >= len(session.choices):
+                return
+            c = session.choices[ci]
+            label = c.get("label", "")
+            summary = c.get("summary", "")
+            self._tts.stop()
+            self._vibrate(100)
+            ui_speed = self._config.tts_speed_for("ui") if self._config else None
+            self._tts.speak_fragments(["selected", label], speed_override=ui_speed)
+            self._resolve_selection(session, {"selected": label, "summary": summary})
+
+            # Hide choices and refresh feed
+            self._hide_chat_choices()
+            self._chat_content_hash = ""  # Force rebuild
+            self._refresh_chat_feed()
+        else:
+            # Extra option (index 0) — use existing extras handler
+            label = item.choice_label
+            self._handle_extra_select(label)
