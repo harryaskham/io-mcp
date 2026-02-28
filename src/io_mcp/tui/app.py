@@ -36,6 +36,15 @@ from ..notifications import (
 
 _log = get_logger("io-mcp.tui", TUI_ERROR_LOG)
 
+import re as _re
+
+# Strip Rich markup tags like [bold], [#616e88], [/bold], etc.
+_RICH_TAG_RE = _re.compile(r'\[[^\]]*\]')
+
+def _strip_rich_markup(text: str) -> str:
+    """Remove Rich markup tags from text for TTS readout."""
+    return _RICH_TAG_RE.sub('', text).strip()
+
 from .themes import COLOR_SCHEMES, DEFAULT_SCHEME, get_scheme, build_css
 from .widgets import ChoiceItem, InboxListItem, DwellBar, ManagedListView, TextInputModal, SubmitTextArea, VOICE_REQUESTED, EXTRA_OPTIONS, PRIMARY_EXTRAS, SECONDARY_EXTRAS, MORE_OPTIONS_ITEM, _safe_action
 from .views import ViewsMixin
@@ -4316,12 +4325,19 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
                 # Full text for dedup key and fallback
                 text = f"{logical}. {label}. {s}" if s else f"{logical}. {label}"
             else:
-                # Extra option — use the widget's label directly
+                # Extra option or separator — use the widget's label directly
+                # Strip Rich markup tags (e.g. [#616e88]...[/#616e88]) for TTS
                 fragments = []
-                text = event.item.choice_label
-                if event.item.choice_summary:
-                    fragments = [event.item.choice_label, event.item.choice_summary]
-                    text = f"{text}. {event.item.choice_summary}"
+                raw_label = _strip_rich_markup(event.item.choice_label)
+                # Skip separator items (like "─── Recent ───", "─── Activity ───")
+                # that are purely decorative and contain only box-drawing chars
+                if not raw_label or all(c in '─ \t' for c in raw_label):
+                    return
+                text = raw_label
+                raw_summary = _strip_rich_markup(event.item.choice_summary) if event.item.choice_summary else ""
+                if raw_summary:
+                    fragments = [raw_label, raw_summary]
+                    text = f"{text}. {raw_summary}"
             if text:
                 # Deduplicate with cooldown — skip if same text was spoken very recently
                 # but allow re-reading after a brief pause (e.g. scrolling away and back)
