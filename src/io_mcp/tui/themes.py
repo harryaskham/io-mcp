@@ -419,7 +419,9 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
 
     #chat-input {{
         dock: bottom;
-        height: 3;
+        height: auto;
+        min-height: 3;
+        max-height: 8;
         border: tall {s['border']};
         background: {s['bg_alt']};
         margin: 0 1;

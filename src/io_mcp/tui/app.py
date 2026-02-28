@@ -37,7 +37,7 @@ from ..notifications import (
 _log = get_logger("io-mcp.tui", TUI_ERROR_LOG)
 
 from .themes import COLOR_SCHEMES, DEFAULT_SCHEME, get_scheme, build_css
-from .widgets import ChoiceItem, InboxListItem, DwellBar, ManagedListView, TextInputModal, VOICE_REQUESTED, EXTRA_OPTIONS, PRIMARY_EXTRAS, SECONDARY_EXTRAS, MORE_OPTIONS_ITEM, _safe_action
+from .widgets import ChoiceItem, InboxListItem, DwellBar, ManagedListView, TextInputModal, SubmitTextArea, VOICE_REQUESTED, EXTRA_OPTIONS, PRIMARY_EXTRAS, SECONDARY_EXTRAS, MORE_OPTIONS_ITEM, _safe_action
 from .views import ViewsMixin
 from .voice import VoiceMixin
 from .settings_menu import SettingsMixin
@@ -503,7 +503,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         yield RichLog(id="pane-view", markup=False, highlight=False, auto_scroll=True, max_lines=200)
         with Vertical(id="chat-view"):
             yield ManagedListView(id="chat-feed")
-            yield Input(placeholder="Type a message to queue...", id="chat-input")
+            yield SubmitTextArea(id="chat-input")
         yield Input(placeholder="Filter choices...", id="filter-input")
         yield Static("", id="footer-status")
 
@@ -4837,22 +4837,40 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         list_view = self.query_one("#choices", ListView)
         list_view.focus()
 
-    @on(Input.Submitted, "#chat-input")
-    def on_chat_input_submitted(self, event: Input.Submitted) -> None:
-        """Handle message submitted from the chat view input box."""
+    @on(SubmitTextArea.Submitted, "#chat-input")
+    def on_chat_input_submitted(self, event: SubmitTextArea.Submitted) -> None:
+        """Handle message submitted from the chat view input box.
+
+        If choices are active, submits the text as a freeform selection.
+        Otherwise, queues the text as a message for the agent.
+        """
         if not self._chat_view_active:
             return
-        message = event.value.strip()
-        if message:
-            self._handle_chat_message_input(message)
-            try:
-                chat_input = self.query_one("#chat-input", Input)
-                chat_input.value = ""
-            except Exception:
-                pass
+        try:
+            chat_input = self.query_one("#chat-input", SubmitTextArea)
+            message = chat_input.text.strip()
+        except Exception:
+            return
+        if not message:
+            return
 
-        count = sum(1 for c in list_view.children if isinstance(c, ChoiceItem) and c.choice_index > 0)
-        self._speak_ui(f"{count} matches")
+        session = self._focused()
+
+        # If choices are active, submit as freeform selection
+        if session and session.active and session.choices:
+            self._tts.stop()
+            self._vibrate(100)
+            ui_speed = self._config.tts_speed_for("ui") if self._config else None
+            self._tts.speak_fragments(["selected", message], speed_override=ui_speed)
+            self._resolve_selection(session, {"selected": message, "summary": "(freeform input)"})
+        else:
+            # Queue as message
+            self._handle_chat_message_input(message)
+
+        try:
+            chat_input.clear()
+        except Exception:
+            pass
 
     # NOTE: Old on_freeform_changed, on_freeform_submitted, _submit_freeform,
     # and _cancel_freeform have been removed. Text input now uses TextInputModal
