@@ -72,7 +72,11 @@ class ChatBubbleItem(ListItem):
         return self.bubble_text
 
     def compose(self) -> ComposeResult:
-        s = get_scheme(DEFAULT_SCHEME)
+        # Get color scheme from the app if available, otherwise use default
+        try:
+            s = get_scheme(self.app._color_scheme)
+        except Exception:
+            s = get_scheme(DEFAULT_SCHEME)
 
         if self.bubble_kind == "speech":
             # Agent speech bubble

@@ -425,7 +425,7 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
         max-height: 8;
         border: tall {s['border']};
         background: {s['bg_alt']};
-        margin: 0 1;
+        margin: 1 1 0 1;
     }}
 
     #chat-input .text-area--cursor-line {{
@@ -437,7 +437,8 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
         height: auto;
         width: 1fr;
         background: {s['bg']};
-        border-bottom: dashed {s['border']};
+        border: solid {s['border']};
+        margin: 0 1 1 1;
     }}
 
     ChatBubbleItem > .chat-bubble-text {{
@@ -478,8 +479,7 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
 
     ChatBubbleItem.-highlight {{
         background: {s['highlight_bg']};
-        border-left: thick {s['accent']};
-        border-bottom: dashed {s['border']};
+        border: solid {s['accent']};
     }}
 
     TextArea {{

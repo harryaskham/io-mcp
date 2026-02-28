@@ -2004,16 +2004,19 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         if session is None:
             return
 
-        # Chat view active: refresh the feed instead of showing inbox/choices pane.
-        # The feed will include pending choices as inline bubbles.
+        # Chat view active: refresh the feed and show choices below for selection
         if self._chat_view_active:
             self._refresh_chat_feed()
-            # Play chime and speak preamble for new choices
-            if session.active and session.preamble:
-                self._tts.play_chime("choices")
-                preamble_speed = self._config.tts_speed_for("preamble") if self._config else None
-                self._tts.speak(session.preamble, speed_override=preamble_speed)
-            return
+            if session.active and session.choices:
+                # Show choices pane below chat feed (without inbox sidebar)
+                self.query_one("#main-content").display = True
+                self.query_one("#inbox-list").display = False
+                # Don't return — fall through to populate choices normally
+            else:
+                # No active choices — hide main-content, show only feed
+                self.query_one("#main-content").display = False
+                self.query_one("#preamble").display = False
+                return
 
         # Don't overwrite the UI if user is composing a message or typing
         if self._message_mode or (session and session.input_mode):
@@ -2109,6 +2112,15 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         If there are more pending items, the next one will auto-present
         via the inbox drain loop.
         """
+        # Chat view: hide choices pane and refresh feed
+        if self._chat_view_active:
+            self.query_one("#main-content").display = False
+            self.query_one("#preamble").display = False
+            self.query_one("#dwell-bar").display = False
+            self._refresh_chat_feed()
+            self._update_footer_status()
+            return
+
         self.query_one("#preamble").display = False
         self.query_one("#dwell-bar").display = False
         status = self.query_one("#status", Label)
