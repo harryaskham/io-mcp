@@ -299,6 +299,7 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
     ChoiceItem.-highlight {{
         background: {s['highlight_bg']};
         border-left: thick {s['accent']};
+        border-bottom: dashed {s['border']};
     }}
 
     ChoiceItem.-highlight > .choice-label {{
@@ -374,6 +375,14 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
         max-height: 10;
         border: tall {s['border']};
         background: {s['bg']};
+    }}
+
+    TextInputModal > Vertical > #modal-text-input .text-area--cursor-line {{
+        background: {s['bg']};
+    }}
+
+    TextInputModal > Vertical > #modal-text-input .text-area--selection {{
+        background: {s['border']};
     }}
 
     /* ─── Hide Textual Header (replaced by tab-bar) ───────── */

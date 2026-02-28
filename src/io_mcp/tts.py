@@ -147,6 +147,16 @@ class TTSEngine:
         # overlapping with newer requests.
         self._scroll_gen = 0
 
+        # Pregeneration generation counter — incremented on each pregenerate()
+        # call. Workers check this before starting a new API call and skip
+        # if a newer generation has been requested (stale choices).
+        self._pregen_gen = 0
+
+        # Separate UI pregeneration counter — UI texts (settings, extra
+        # options) are pregenerated in their own queue so they don't
+        # compete with agent choice pregeneration for API bandwidth.
+        self._pregen_ui_gen = 0
+
         mode = "espeak-ng (local)" if self._local else "tts CLI (API)"
         if not self._local and self._config:
             mode = f"{self._config.tts_voice_preset} ({self._config.tts_model_name})"
@@ -382,6 +392,209 @@ class TTSEngine:
                         self._record_api_gen_failure()
                     return None
 
+    # ─── Fragment-based TTS ─────────────────────────────────────
+
+    # Number word lookup for fragment-based scroll readout
+    _NUMBER_WORDS = {
+        1: "one", 2: "two", 3: "three", 4: "four", 5: "five",
+        6: "six", 7: "seven", 8: "eight", 9: "nine",
+    }
+
+    def _concat_wavs(self, paths: list[str]) -> Optional[str]:
+        """Concatenate multiple WAV files into one. Returns path to combined file.
+
+        All WAVs from the tts CLI are 24kHz mono 16-bit PCM, so we can
+        simply concatenate the raw PCM data and write a new header.
+        Skips files that don't exist or are too small (< 44 bytes).
+        """
+        import struct as _struct
+
+        pcm_chunks: list[bytes] = []
+        sample_rate = 24000
+        bits_per_sample = 16
+        channels = 1
+
+        for p in paths:
+            try:
+                with open(p, "rb") as f:
+                    header = f.read(44)
+                    if len(header) < 44:
+                        continue
+                    # Validate RIFF/WAVE header
+                    if header[:4] != b"RIFF" or header[8:12] != b"WAVE":
+                        continue
+                    # Read format from this file (use first file's params)
+                    fmt_audio, fmt_channels, fmt_rate = _struct.unpack("<HHI", header[20:28])
+                    _, _, fmt_bits = _struct.unpack("<IHH", header[28:36])
+                    if len(pcm_chunks) == 0:
+                        sample_rate = fmt_rate
+                        channels = fmt_channels
+                        bits_per_sample = fmt_bits
+                    pcm_data = f.read()
+                    if pcm_data:
+                        pcm_chunks.append(pcm_data)
+            except (OSError, _struct.error):
+                continue
+
+        if not pcm_chunks:
+            return None
+
+        # Build combined WAV
+        total_pcm = b"".join(pcm_chunks)
+        byte_rate = sample_rate * channels * (bits_per_sample // 8)
+        block_align = channels * (bits_per_sample // 8)
+
+        # WAV header (44 bytes)
+        header = _struct.pack(
+            "<4sI4s4sIHHIIHH4sI",
+            b"RIFF",
+            36 + len(total_pcm),
+            b"WAVE",
+            b"fmt ",
+            16,  # PCM fmt chunk size
+            1,   # PCM format
+            channels,
+            sample_rate,
+            byte_rate,
+            block_align,
+            bits_per_sample,
+            b"data",
+            len(total_pcm),
+        )
+
+        combined_key = hashlib.md5(b"".join(
+            p.encode() for p in paths
+        )).hexdigest()
+        out_path = os.path.join(CACHE_DIR, f"concat_{combined_key}.wav")
+        try:
+            with open(out_path, "wb") as f:
+                f.write(header)
+                f.write(total_pcm)
+        except OSError:
+            return None
+        return out_path
+
+    def speak_fragments(self, fragments: list[str],
+                        voice_override: Optional[str] = None,
+                        emotion_override: Optional[str] = None) -> None:
+        """Play a sequence of text fragments as concatenated audio.
+
+        Each fragment is generated/cached individually, then all WAVs
+        are concatenated into a single file for gapless playback.
+        Falls back to speak_async() of the full text if any fragment
+        is missing or concatenation fails.
+
+        Designed for selection confirmation: fragments like ["selected",
+        "Fix a bug"] are cached individually. The word "selected" is
+        reused across all choices, drastically reducing API calls.
+
+        Runs asynchronously in a background thread, queuing behind
+        current speech via the speech lock.
+        """
+        def _do():
+            try:
+                with self._speech_lock:
+                    if self._muted or not self._paplay:
+                        return
+
+                    # Collect cached paths for each fragment
+                    paths: list[str] = []
+                    for frag in fragments:
+                        key = self._cache_key(frag, voice_override, emotion_override)
+                        path = self._cache.get(key)
+                        if path and os.path.isfile(path):
+                            paths.append(path)
+                        else:
+                            # Fragment not cached — fall back to full text
+                            full_text = " ".join(fragments)
+                            # Use streaming for uncached (generates + plays)
+                            if not self._local and self._tts_bin and self._config:
+                                self.speak_streaming(full_text,
+                                                     voice_override=voice_override,
+                                                     emotion_override=emotion_override,
+                                                     block=True)
+                            else:
+                                self.play_cached(full_text, block=True,
+                                                 voice_override=voice_override,
+                                                 emotion_override=emotion_override)
+                            return
+
+                    # All fragments cached — concatenate and play
+                    combined = self._concat_wavs(paths)
+                    if combined:
+                        _time_mod.sleep(0.05)  # Brief pause for PulseAudio
+                        self._start_playback(combined, max_attempts=self._max_retries)
+                        self._wait_for_playback()
+                    else:
+                        # Concatenation failed — fall back
+                        full_text = " ".join(fragments)
+                        if not self._local and self._tts_bin and self._config:
+                            self.speak_streaming(full_text,
+                                                 voice_override=voice_override,
+                                                 emotion_override=emotion_override,
+                                                 block=True)
+                        else:
+                            self.play_cached(full_text, block=True,
+                                             voice_override=voice_override,
+                                             emotion_override=emotion_override)
+            except Exception as e:
+                _log.error("speak_fragments error", exc_info=True)
+        threading.Thread(target=_do, daemon=True).start()
+
+    def speak_fragments_scroll(self, fragments: list[str],
+                               voice_override: Optional[str] = None,
+                               emotion_override: Optional[str] = None) -> None:
+        """Scroll-aware fragment playback. Stops current audio first.
+
+        Like speak_with_local_fallback but uses fragment concatenation
+        when all fragments are cached. Respects scroll generation counter.
+
+        If any fragment is not cached, falls back to speak_with_local_fallback
+        with the full concatenated text.
+        """
+        if self._muted:
+            return
+
+        self._scroll_gen += 1
+        my_gen = self._scroll_gen
+
+        # Check if all fragments are cached
+        paths: list[str] = []
+        all_cached = True
+        for frag in fragments:
+            key = self._cache_key(frag, voice_override, emotion_override)
+            path = self._cache.get(key)
+            if path and os.path.isfile(path):
+                paths.append(path)
+            else:
+                all_cached = False
+                break
+
+        if all_cached and paths:
+            # All cached — concatenate and play in background
+            def _play():
+                if self._scroll_gen != my_gen:
+                    return
+                combined = self._concat_wavs(paths)
+                if not combined:
+                    return
+                if self._scroll_gen != my_gen:
+                    return
+                self.stop_sync()
+                if self._scroll_gen != my_gen:
+                    return
+                self._start_playback(combined)
+            threading.Thread(target=_play, daemon=True).start()
+        else:
+            # Not all cached — fall back to full text via speak_with_local_fallback
+            full_text = " ".join(fragments)
+            # speak_with_local_fallback manages its own scroll_gen
+            # so decrement ours to avoid double-increment
+            self._scroll_gen -= 1
+            self.speak_with_local_fallback(
+                full_text, voice_override=voice_override,
+                emotion_override=emotion_override)
+
     def pregenerate(self, texts: list[str],
                     max_workers: int = 0) -> None:
         """Generate audio clips for texts in parallel using a thread pool.
@@ -390,11 +603,19 @@ class TTSEngine:
         Skips API generation when the API is known-broken to avoid
         spawning processes that timeout after 30s.
 
+        Each call increments a generation counter. Workers check this
+        before starting each API call and skip if a newer pregenerate()
+        has been called (e.g. new choices arrived, making old ones stale).
+
         Args:
             texts: List of text strings to pregenerate audio for.
             max_workers: Maximum concurrent tts CLI processes. 0 = use config
                          value (config.tts.pregenerateWorkers, default 3).
         """
+        # Increment generation — previous workers will detect this and stop
+        self._pregen_gen += 1
+        my_gen = self._pregen_gen
+
         # Skip entirely when API is known-broken
         if not self._local and not self._api_gen_available():
             return
@@ -412,21 +633,72 @@ class TTSEngine:
                 max_workers = 3
 
         # Generate in parallel using a thread pool.
+        # Workers check _pregen_gen before each API call.
         from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            pool.map(self._generate_to_file_unlocked, to_generate)
+            pool.map(lambda t: self._generate_to_file_unlocked(t, _pregen_gen=my_gen),
+                     to_generate)
+
+    def pregenerate_ui(self, texts: list[str],
+                       voice_override: Optional[str] = None,
+                       max_workers: int = 1) -> None:
+        """Pregenerate UI texts (settings, extra options) in a separate queue.
+
+        Uses its own generation counter so UI pregeneration doesn't interfere
+        with agent choice pregeneration. Lower default worker count (1) to
+        avoid competing for API bandwidth with agent pregenerations.
+
+        Args:
+            texts: UI texts to pregenerate (extra option labels, etc.)
+            voice_override: Optional voice override (e.g. uiVoice).
+            max_workers: Concurrent workers (default 1 for low priority).
+        """
+        self._pregen_ui_gen += 1
+        my_gen = self._pregen_ui_gen
+
+        if not self._local and not self._api_gen_available():
+            return
+
+        to_generate = [t for t in texts
+                       if self._cache_key(t, voice_override) not in self._cache]
+        if not to_generate:
+            return
+
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            pool.map(
+                lambda t: self._generate_to_file_unlocked(
+                    t, voice_override=voice_override,
+                    _pregen_gen=my_gen,
+                    _pregen_counter="_pregen_ui_gen"),
+                to_generate)
 
     def _generate_to_file_unlocked(self, text: str,
                                    voice_override: Optional[str] = None,
                                    emotion_override: Optional[str] = None,
-                                   model_override: Optional[str] = None) -> Optional[str]:
+                                   model_override: Optional[str] = None,
+                                   _pregen_gen: int = 0,
+                                   _pregen_counter: str = "_pregen_gen") -> Optional[str]:
         """Generate audio for text and save to WAV. No locks acquired.
 
         Used by pregenerate() for parallel generation. Does NOT acquire
         _speech_lock or _api_lock — callers handle concurrency themselves.
         For sequential generation that serializes with playback, use
         _generate_to_file() instead.
+
+        Args:
+            _pregen_gen: Generation counter from the pregenerate() call.
+                If non-zero, the worker skips generation when a newer
+                pregenerate() has been called, avoiding wasted API calls
+                for stale choices.
+            _pregen_counter: Name of the generation counter attribute to
+                check against. Default "_pregen_gen" for agent pregeneration,
+                "_pregen_ui_gen" for UI pregeneration.
         """
+        # Check staleness — skip if a newer pregenerate() has been called
+        if _pregen_gen and getattr(self, _pregen_counter, 0) > _pregen_gen:
+            return None
+
         key = self._cache_key(text, voice_override, emotion_override,
                               model_override=model_override)
 
@@ -458,6 +730,10 @@ class TTSEngine:
                     return None
 
                 if not self._api_gen_available():
+                    return None
+
+                # Re-check staleness before expensive API call
+                if _pregen_gen and getattr(self, _pregen_counter, 0) > _pregen_gen:
                     return None
 
                 if self._config:

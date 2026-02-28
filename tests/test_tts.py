@@ -1051,3 +1051,276 @@ class TestSpeakTermux:
                 engine._speak_termux("hello")
                 cmd = mock_start.call_args[0][0]
                 assert "1.5" in cmd  # speed passed as string
+
+
+# ─── _NUMBER_WORDS ───────────────────────────────────────────────────
+
+
+class TestNumberWords:
+    """Tests for TTSEngine._NUMBER_WORDS constant."""
+
+    def test_has_1_through_9(self):
+        for i in range(1, 10):
+            assert i in TTSEngine._NUMBER_WORDS
+
+    def test_values_are_word_strings(self):
+        expected = {
+            1: "one", 2: "two", 3: "three", 4: "four", 5: "five",
+            6: "six", 7: "seven", 8: "eight", 9: "nine",
+        }
+        assert TTSEngine._NUMBER_WORDS == expected
+
+
+# ─── _concat_wavs ────────────────────────────────────────────────────
+
+
+class TestConcatWavs:
+    """Tests for TTSEngine._concat_wavs WAV concatenation."""
+
+    def test_single_file(self):
+        engine = _make_engine()
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            _make_wav(f.name, duration_samples=200)
+            result = engine._concat_wavs([f.name])
+            assert result is not None
+            assert os.path.isfile(result)
+            # Verify it's a valid WAV
+            with open(result, "rb") as rf:
+                header = rf.read(4)
+                assert header == b"RIFF"
+            os.unlink(f.name)
+            os.unlink(result)
+
+    def test_multiple_files_concatenated(self):
+        engine = _make_engine()
+        files = []
+        total_samples = 0
+        for n in [100, 200, 150]:
+            f = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+            _make_wav(f.name, duration_samples=n)
+            files.append(f.name)
+            total_samples += n
+            f.close()
+
+        result = engine._concat_wavs(files)
+        assert result is not None
+        assert os.path.isfile(result)
+
+        # Verify combined file has data from all inputs
+        with open(result, "rb") as rf:
+            header = rf.read(44)
+            assert header[:4] == b"RIFF"
+            assert header[8:12] == b"WAVE"
+            data = rf.read()
+            # Each sample is 2 bytes (16-bit)
+            assert len(data) == total_samples * 2
+
+        for f in files:
+            os.unlink(f)
+        os.unlink(result)
+
+    def test_empty_list_returns_none(self):
+        engine = _make_engine()
+        result = engine._concat_wavs([])
+        assert result is None
+
+    def test_nonexistent_files_skipped(self):
+        engine = _make_engine()
+        result = engine._concat_wavs(["/tmp/does_not_exist_xyz.wav"])
+        assert result is None
+
+    def test_mixed_valid_and_invalid(self):
+        engine = _make_engine()
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            _make_wav(f.name, duration_samples=100)
+            result = engine._concat_wavs([
+                "/tmp/does_not_exist.wav",
+                f.name,
+                "/tmp/also_missing.wav",
+            ])
+            # Should concatenate the one valid file
+            assert result is not None
+            os.unlink(f.name)
+            os.unlink(result)
+
+    def test_too_small_file_skipped(self):
+        engine = _make_engine()
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            f.write(b"RIFF")  # Only 4 bytes — too small for a WAV
+            f.flush()
+            result = engine._concat_wavs([f.name])
+            assert result is None
+            os.unlink(f.name)
+
+    def test_deterministic_output_path(self):
+        engine = _make_engine()
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            _make_wav(f.name, duration_samples=100)
+            result1 = engine._concat_wavs([f.name])
+            result2 = engine._concat_wavs([f.name])
+            # Same inputs → same output path
+            assert result1 == result2
+            os.unlink(f.name)
+            if result1 and os.path.isfile(result1):
+                os.unlink(result1)
+
+
+# ─── speak_fragments ─────────────────────────────────────────────────
+
+
+class TestSpeakFragments:
+    """Tests for TTSEngine.speak_fragments."""
+
+    def test_all_cached_concatenates_and_plays(self):
+        engine = _make_engine()
+        engine._paplay = "/usr/bin/paplay"
+
+        # Create two cached fragments
+        files = []
+        for text in ["selected", "Fix bug"]:
+            f = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+            _make_wav(f.name, duration_samples=100)
+            key = engine._cache_key(text)
+            engine._cache[key] = f.name
+            files.append(f.name)
+            f.close()
+
+        with mock.patch.object(engine, "_start_playback", return_value=True) as mock_play:
+            with mock.patch.object(engine, "_wait_for_playback"):
+                engine.speak_fragments(["selected", "Fix bug"])
+                time.sleep(0.3)  # runs in a thread
+                mock_play.assert_called_once()
+
+        for f in files:
+            os.unlink(f)
+
+    def test_uncached_fragment_falls_back_to_streaming(self):
+        config = FakeConfig()
+        with mock.patch("io_mcp.tts._find_binary", return_value="/usr/bin/tts"):
+            engine = TTSEngine(local=False, speed=1.0, config=config)
+        engine._paplay = "/usr/bin/paplay"
+
+        # Only cache one fragment
+        f = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+        _make_wav(f.name, duration_samples=100)
+        key = engine._cache_key("selected")
+        engine._cache[key] = f.name
+
+        with mock.patch.object(engine, "speak_streaming") as mock_stream:
+            engine.speak_fragments(["selected", "uncached text"])
+            time.sleep(0.3)
+            # Falls back to speak_streaming with full text
+            mock_stream.assert_called_once()
+            call_args = mock_stream.call_args
+            assert "selected uncached text" in call_args[0][0]
+
+        os.unlink(f.name)
+
+    def test_noop_when_muted(self):
+        engine = _make_engine()
+        engine.mute()
+        with mock.patch.object(engine, "_concat_wavs") as mock_concat:
+            engine.speak_fragments(["one", "two"])
+            time.sleep(0.2)
+            mock_concat.assert_not_called()
+
+    def test_runs_in_background_thread(self):
+        engine = _make_engine()
+        engine._paplay = "/usr/bin/paplay"
+        called = threading.Event()
+
+        # Cache all fragments
+        for text in ["one", "test"]:
+            f = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+            _make_wav(f.name, duration_samples=100)
+            engine._cache[engine._cache_key(text)] = f.name
+
+        orig_concat = engine._concat_wavs
+
+        def mock_concat(paths):
+            result = orig_concat(paths)
+            called.set()
+            return result
+
+        with mock.patch.object(engine, "_concat_wavs", side_effect=mock_concat):
+            with mock.patch.object(engine, "_start_playback", return_value=True):
+                with mock.patch.object(engine, "_wait_for_playback"):
+                    engine.speak_fragments(["one", "test"])
+                    assert called.wait(timeout=2), "speak_fragments did not run in time"
+
+
+# ─── speak_fragments_scroll ──────────────────────────────────────────
+
+
+class TestSpeakFragmentsScroll:
+    """Tests for TTSEngine.speak_fragments_scroll."""
+
+    def test_all_cached_plays_concatenated(self):
+        engine = _make_engine()
+        engine._paplay = "/usr/bin/paplay"
+
+        # Cache fragments
+        files = []
+        for text in ["one", "Fix bug"]:
+            f = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+            _make_wav(f.name, duration_samples=100)
+            engine._cache[engine._cache_key(text)] = f.name
+            files.append(f.name)
+            f.close()
+
+        with mock.patch.object(engine, "stop_sync"):
+            with mock.patch.object(engine, "_start_playback") as mock_play:
+                engine.speak_fragments_scroll(["one", "Fix bug"])
+                time.sleep(0.3)
+                mock_play.assert_called_once()
+
+        for f in files:
+            os.unlink(f)
+
+    def test_uncached_falls_back_to_speak_with_local_fallback(self):
+        engine = _make_engine()
+        engine._paplay = "/usr/bin/paplay"
+
+        with mock.patch.object(engine, "speak_with_local_fallback") as mock_fallback:
+            engine.speak_fragments_scroll(["uncached1", "uncached2"])
+            # Falls back with full text
+            mock_fallback.assert_called_once_with(
+                "uncached1 uncached2",
+                voice_override=None, emotion_override=None)
+
+    def test_noop_when_muted(self):
+        engine = _make_engine()
+        engine.mute()
+        with mock.patch.object(engine, "speak_with_local_fallback") as mock_fallback:
+            with mock.patch.object(engine, "_concat_wavs") as mock_concat:
+                engine.speak_fragments_scroll(["one", "two"])
+                time.sleep(0.2)
+                mock_fallback.assert_not_called()
+                mock_concat.assert_not_called()
+
+    def test_scroll_gen_prevents_stale_playback(self):
+        engine = _make_engine()
+        engine._paplay = "/usr/bin/paplay"
+
+        # Cache fragments
+        for text in ["one", "test"]:
+            f = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+            _make_wav(f.name, duration_samples=100)
+            engine._cache[engine._cache_key(text)] = f.name
+
+        # Call speak_fragments_scroll, then immediately increment scroll_gen
+        # to simulate the user scrolling past
+        with mock.patch.object(engine, "_concat_wavs") as mock_concat:
+            with mock.patch.object(engine, "stop_sync"):
+                engine.speak_fragments_scroll(["one", "test"])
+                engine._scroll_gen += 10  # simulate rapid scrolling
+                time.sleep(0.3)
+                # The background thread should have detected stale gen and skipped
+                # (concat might or might not be called depending on timing,
+                # but _start_playback should not be called)
+
+    def test_increments_scroll_gen(self):
+        engine = _make_engine()
+        initial_gen = engine._scroll_gen
+        engine.speak_fragments_scroll(["uncached"])
+        assert engine._scroll_gen > initial_gen

@@ -337,6 +337,11 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         Uses tts.uiVoice from config if set, otherwise falls back to the
         regular voice. This keeps UI narration distinct from agent speech.
+
+        UI speech self-interrupts: stops any current playback (including
+        previous UI speech) and plays immediately. This makes menus,
+        settings, and dialogs feel responsive — newest UI text wins.
+        Uses speak_with_local_fallback for instant cached playback.
         """
         voice_ov = None
         if self._config:
@@ -344,12 +349,27 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             # Only override if uiVoice is explicitly set and different from default
             if ui_preset and ui_preset != self._config.tts_voice_preset:
                 voice_ov = ui_preset
-        self._tts.speak_async(text, voice_override=voice_ov)
+        self._tts.speak_with_local_fallback(text, voice_override=voice_ov)
 
     @work(thread=True, exit_on_error=False, group="pregenerate")
     def _pregenerate_worker(self, texts: list[str]) -> None:
         """Worker: pregenerate TTS clips in background thread."""
         self._tts.pregenerate(texts)
+
+    @work(thread=True, exit_on_error=False, group="pregenerate-ui")
+    def _pregenerate_ui_worker(self, texts: list[str]) -> None:
+        """Worker: pregenerate UI TTS clips in separate background queue.
+
+        UI texts (extra options, settings, common messages) use their
+        own pregeneration queue so they don't compete with agent choice
+        pregeneration for API bandwidth.
+        """
+        voice_ov = None
+        if self._config:
+            ui_preset = self._config.tts_ui_voice_preset
+            if ui_preset and ui_preset != self._config.tts_voice_preset:
+                voice_ov = ui_preset
+        self._tts.pregenerate_ui(texts, voice_override=voice_ov)
 
     def _ensure_main_content_visible(self, show_inbox: bool = False) -> None:
         """Ensure the #main-content container is visible.
@@ -1746,13 +1766,41 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         # Update tab bar (session now has active choices indicator)
         self._safe_call(self._update_tab_bar)
 
-        # Pregenerate per-option clips in background
-        bg_texts = (
-            numbered_full_all
-            + [f"Selected: {c.get('label', '')}" for c in choices]
-            + [f"{e['label']}. {e['summary']}" for e in EXTRA_OPTIONS if e.get('summary')]
-        )
-        self._pregenerate_worker(bg_texts)
+        # Pregenerate TTS fragments in background.
+        # Instead of pregenerating full strings like "1. Fix a bug. Debug and fix",
+        # we pregenerate individual fragments: number words ("one", "two"),
+        # the word "selected", and each label/summary separately.
+        # This drastically reduces API calls since number words and "selected"
+        # are reused across all choices.
+        from io_mcp.tts import TTSEngine
+        _num_words = TTSEngine._NUMBER_WORDS
+        fragment_texts = set()
+        for i, c in enumerate(choices):
+            n = i + 1
+            if n in _num_words:
+                fragment_texts.add(_num_words[n])
+            label = c.get('label', '')
+            summary = c.get('summary', '')
+            if label:
+                fragment_texts.add(label)
+            if summary:
+                fragment_texts.add(summary)
+        fragment_texts.add("selected")
+        self._pregenerate_worker(list(fragment_texts))
+
+        # Pregenerate extra option labels in separate UI queue
+        # so they don't compete with agent choice pregeneration.
+        from .widgets import PRIMARY_EXTRAS
+        ui_texts = set()
+        for e in PRIMARY_EXTRAS:
+            label = e.get('label', '')
+            summary = e.get('summary', '')
+            if label:
+                ui_texts.add(label)
+            if summary:
+                ui_texts.add(summary)
+        if ui_texts:
+            self._pregenerate_ui_worker(list(ui_texts))
 
         if is_fg:
             # Audio + haptic cue for new choices
@@ -4174,11 +4222,25 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                     return
                 c = session.choices[ci]
                 s = c.get('summary', '')
-                text = f"{logical}. {c.get('label', '')}. {s}" if s else f"{logical}. {c.get('label', '')}"
+                # Build fragments for concatenated playback
+                from io_mcp.tts import TTSEngine
+                _num_words = TTSEngine._NUMBER_WORDS
+                fragments = []
+                if logical in _num_words:
+                    fragments.append(_num_words[logical])
+                label = c.get('label', '')
+                if label:
+                    fragments.append(label)
+                if s:
+                    fragments.append(s)
+                # Full text for dedup key and fallback
+                text = f"{logical}. {label}. {s}" if s else f"{logical}. {label}"
             else:
                 # Extra option — use the widget's label directly
+                fragments = []
                 text = event.item.choice_label
                 if event.item.choice_summary:
+                    fragments = [event.item.choice_label, event.item.choice_summary]
                     text = f"{text}. {event.item.choice_summary}"
             if text:
                 # Deduplicate with cooldown — skip if same text was spoken very recently
@@ -4188,8 +4250,12 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 if text != self._last_spoken_text or (now - last_time) > 0.5:
                     self._last_spoken_text = text
                     self._last_spoken_time = now
-                    # Use espeak fallback for instant readout when scrolling options
-                    self._tts.speak_with_local_fallback(text)
+                    # Use fragment-based playback for cached fragments,
+                    # falling back to speak_with_local_fallback for uncached
+                    if fragments and len(fragments) > 1:
+                        self._tts.speak_fragments_scroll(fragments)
+                    else:
+                        self._tts.speak_with_local_fallback(text)
 
             if self._dwell_time > 0:
                 self._start_dwell()
@@ -4454,7 +4520,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 self._freeform_tts.stop()
                 self._tts.stop()
                 self._vibrate(100)
-                self._tts.speak_async(f"Selected: {result}")
+                self._tts.speak_fragments(["selected", result])
                 self._resolve_selection(session, {"selected": result, "summary": "(freeform input)"})
                 self._show_waiting(result)
 
@@ -5054,7 +5120,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         self._tts.play_chime("select")
 
         self._tts.stop()
-        self._tts.speak_async(f"Selected: {label}")
+        # Use fragment playback: "selected" + label are cached individually
+        self._tts.speak_fragments(["selected", label])
 
         # Record in history
         try:

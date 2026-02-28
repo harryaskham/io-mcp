@@ -18,6 +18,11 @@ from io_mcp.session import Session
 class MockTTS:
     """Minimal TTS mock that does nothing."""
 
+    _NUMBER_WORDS = {
+        1: "one", 2: "two", 3: "three", 4: "four", 5: "five",
+        6: "six", 7: "seven", 8: "eight", 9: "nine",
+    }
+
     def __init__(self):
         self._muted = False
         self._speed = 1.0
@@ -29,9 +34,12 @@ class MockTTS:
     def speak_async(self, text, **kwargs): pass
     def speak_streaming(self, text, **kwargs): pass
     def speak_with_local_fallback(self, text, **kwargs): pass
+    def speak_fragments(self, fragments, **kwargs): pass
+    def speak_fragments_scroll(self, fragments, **kwargs): pass
     def stop(self): pass
     def play_chime(self, name): pass
     def pregenerate(self, texts): pass
+    def pregenerate_ui(self, texts, **kwargs): pass
     def clear_cache(self): pass
     def is_cached(self, text, **kwargs): return False
     def mute(self): self._muted = True
