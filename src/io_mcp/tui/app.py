@@ -4413,6 +4413,14 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
     @on(ListView.Selected)
     def on_list_selected(self, event: ListView.Selected) -> None:
         """Handle Enter/click on a list item."""
+        # Ignore selections from the chat feed — bubbles are read-only history
+        try:
+            chat_feed = self.query_one("#chat-feed", ListView)
+            if event.list_view is chat_feed:
+                return
+        except Exception:
+            pass
+
         # Check if this is an inbox list selection (left pane)
         try:
             inbox_list = self.query_one("#inbox-list", ListView)

@@ -216,8 +216,9 @@ class ChatViewMixin:
             self._chat_unified = False
             self._speak_ui(f"Chat view for {session.name}. Press g to close.")
 
-        # Show chat feed, hide conflicting views (but not #main-content —
-        # choices still render there, just with limited height)
+        # Show chat feed, hide all other views
+        self.query_one("#main-content").display = False
+        self.query_one("#preamble").display = False
         self.query_one("#pane-view").display = False
         self.query_one("#status").display = False
         self.query_one("#speech-log").display = False
@@ -231,9 +232,9 @@ class ChatViewMixin:
         else:
             self._build_chat_feed(session)
 
-        # If session has active choices, show them normally (below feed)
+        # If session has active choices, show them below the feed
         if session.active and session.choices:
-            self._show_choices()
+            self._show_choices()  # This will show #main-content with auto height
 
         # Auto-refresh every 3 seconds
         self._chat_refresh_timer = self.set_interval(
