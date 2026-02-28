@@ -413,6 +413,17 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
         background: {s['bg']};
     }}
 
+    #chat-choices {{
+        display: none;
+        width: 1fr;
+        height: auto;
+        max-height: 50%;
+        background: {s['bg_alt']};
+        scrollbar-background: {s['bg_alt']};
+        scrollbar-color: {s['border']};
+        scrollbar-color-hover: {s['fg_dim']};
+    }}
+
     ChatBubbleItem {{
         padding: 0 2;
         height: auto;

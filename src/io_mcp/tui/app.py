@@ -526,6 +526,8 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         yield RichLog(id="pane-view", markup=False, highlight=False, auto_scroll=True, max_lines=200)
         # Chat feed — chronological view of all agent interactions
         yield ManagedListView(id="chat-feed")
+        # Standalone choices list for chat view — scrollable, no inbox
+        yield ManagedListView(id="chat-choices")
         yield Input(placeholder="Filter choices...", id="filter-input")
         yield Static("", id="footer-status")
 
@@ -540,6 +542,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         self.query_one("#speech-log").display = False
         self.query_one("#pane-view").display = False
         self.query_one("#chat-feed").display = False
+        self.query_one("#chat-choices").display = False
         self.query_one("#main-content").display = False
         self.query_one("#inbox-list").display = False
 
@@ -2030,8 +2033,14 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         if self._chat_view_active:
             self._chat_content_hash = ""  # Force rebuild
             self._refresh_chat_feed()
-            # In chat view, choices appear as a bubble in the feed.
-            # Don't show #main-content, #preamble, or any other panel.
+            # Show scrollable choices list at the bottom for j/k/scroll navigation
+            if session.active and session.choices:
+                self._populate_chat_choices_list(session)
+            else:
+                try:
+                    self.query_one("#chat-choices").display = False
+                except Exception:
+                    pass
             self._update_footer_status()
             return
 
@@ -2120,6 +2129,34 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         # Update speech log
         self._update_speech_log()
 
+    def _populate_chat_choices_list(self, session) -> None:
+        """Populate the standalone #chat-choices ListView for chat view.
+
+        Shows choices in a scrollable list at the bottom of the screen,
+        separate from the chat feed. Supports j/k scroll and Enter to select.
+        """
+        try:
+            list_view = self.query_one("#chat-choices", ListView)
+        except Exception:
+            return
+        list_view.clear()
+        choices = session.choices or []
+        for i, c in enumerate(choices):
+            label = c.get('label', '')
+            summary = c.get('summary', '')
+            list_view.append(ChoiceItem(label, summary, index=i+1, display_index=i))
+        # Add primary extras
+        di = len(choices)
+        for e in PRIMARY_EXTRAS:
+            list_view.append(ChoiceItem(
+                e.get('label', ''), e.get('summary', ''),
+                index=0, display_index=di,
+            ))
+            di += 1
+        list_view.display = True
+        list_view.index = 0
+        list_view.focus()
+
     def _show_waiting(self, label: str) -> None:
         """Show waiting state after selection, returning to unified inbox.
 
@@ -2135,6 +2172,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
             self._refresh_chat_feed()
             try:
                 self.query_one("#main-content").display = False
+                self.query_one("#chat-choices").display = False
                 self.query_one("#preamble").display = False
                 self.query_one("#dwell-bar").display = False
                 self.query_one("#status").display = False
@@ -4410,6 +4448,37 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         except Exception:
             pass
 
+        # Check if this is a chat-choices selection (chat view scrollable choices)
+        try:
+            chat_choices = self.query_one("#chat-choices", ListView)
+            if event.list_view is chat_choices and isinstance(event.item, ChoiceItem):
+                # Handle just like normal choice selection
+                session = self._focused()
+                if not session or not session.active:
+                    return
+                logical = event.item.choice_index
+                if logical > 0:
+                    ci = logical - 1
+                    if ci >= len(session.choices):
+                        return
+                    c = session.choices[ci]
+                    label = c.get("label", "")
+                    summary = c.get("summary", "")
+                    self._tts.stop()
+                    self._vibrate(100)
+                    ui_speed = self._config.tts_speed_for("ui") if self._config else None
+                    self._tts.speak_fragments(["selected", label], speed_override=ui_speed)
+                    self._resolve_selection(session, {"selected": label, "summary": summary})
+                    self.query_one("#chat-choices").display = False
+                    self._chat_content_hash = ""
+                    self._refresh_chat_feed()
+                else:
+                    # Extra option
+                    self._handle_extra_select(event.item.choice_label)
+                return
+        except Exception:
+            pass
+
         # Check if this is an inbox list selection (left pane)
         try:
             inbox_list = self.query_one("#inbox-list", ListView)
@@ -4532,13 +4601,13 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         Checks actual widget focus first to handle Tab key / click focus
         changes, then falls back to the logical _inbox_pane_focused state.
         """
-        # Chat view: prefer #choices if visible (choices are shown normally),
+        # Chat view: prefer #chat-choices if visible (scrollable selection),
         # otherwise fall through to chat-feed for scrolling the timeline
         if self._chat_view_active:
             try:
-                choices_list = self.query_one("#choices", ListView)
-                if choices_list.display:
-                    return choices_list
+                chat_choices = self.query_one("#chat-choices", ListView)
+                if chat_choices.display:
+                    return chat_choices
             except Exception:
                 pass
             try:
