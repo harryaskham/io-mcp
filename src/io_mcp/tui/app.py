@@ -505,7 +505,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
             yield ManagedListView(id="chat-feed")
             yield Input(placeholder="Type a message to queue...", id="chat-input")
         yield Input(placeholder="Filter choices...", id="filter-input")
-        yield Static("[dim]↕[/dim] Scroll  [dim]⏎[/dim] Select  [dim]x[/dim] Multi  [dim]u[/dim] Undo  [dim]i[/dim] Type  [dim]m[/dim] Msg  [dim]␣[/dim] Voice  [dim]/[/dim] Filter  [dim]v[/dim] Pane  [dim]s[/dim] Settings  [dim]q[/dim] Back/Quit", id="footer-help")
+        yield Static("", id="footer-status")
 
     def on_mount(self) -> None:
         self.title = "io-mcp"
@@ -1446,6 +1446,49 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
             label = Label(f"[dim]  |[/dim] {entry.text}", classes="speech-entry")
             log_widget.mount(label)
         log_widget.display = True
+
+        # Update footer status line
+        self._update_footer_status()
+
+    def _update_footer_status(self) -> None:
+        """Update the bottom status line with session context."""
+        try:
+            footer = self.query_one("#footer-status", Static)
+        except Exception:
+            return
+
+        session = self._focused()
+        s = self._cs
+
+        if session is None:
+            footer.update(f"[{s['fg_dim']}]? help[/{s['fg_dim']}]")
+            return
+
+        parts = []
+
+        # Session name
+        parts.append(f"[{s['accent']}]{session.name}[/{s['accent']}]")
+
+        # Tool call count
+        if session.tool_call_count > 0:
+            parts.append(f"[{s['fg_dim']}]{session.tool_call_count} calls[/{s['fg_dim']}]")
+
+        # Pending inbox items
+        pending = sum(1 for item in session.inbox if not item.done)
+        if pending > 0:
+            parts.append(f"[{s['warning']}]{pending} pending[/{s['warning']}]")
+
+        # Pending messages
+        if session.pending_messages:
+            parts.append(f"[{s['purple']}]{len(session.pending_messages)} msg[/{s['purple']}]")
+
+        # Chat view hint
+        if self._chat_view_active:
+            parts.append(f"[{s['fg_dim']}]g=close[/{s['fg_dim']}]")
+        else:
+            parts.append(f"[{s['fg_dim']}]g=feed[/{s['fg_dim']}]")
+
+        footer.update("  ".join(parts))
 
     # ─── Choice resolution helper ─────────────────────────────────────
 

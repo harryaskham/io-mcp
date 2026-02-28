@@ -319,14 +319,15 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
         height: 1;
     }}
 
-    /* ─── Bottom help bar ─────────────────────────────────── */
+    /* ─── Bottom status line ─────────────────────────────────── */
 
-    #footer-help {{
+    #footer-status {{
         dock: bottom;
         height: 1;
         background: {s['bg_alt']};
         color: {s['fg_dim']};
         padding: 0 1;
+        margin-top: 1;
     }}
 
     /* ─── Input fields ────────────────────────────────────── */

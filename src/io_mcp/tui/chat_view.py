@@ -176,11 +176,13 @@ class ChatViewMixin:
         self._tts.stop()
         self._speak_ui(f"Chat view for {session.name}. Press g to close.")
 
-        # Show chat view, hide main content
+        # Show chat view, hide main content and speech log
         self.query_one("#main-content").display = False
         self.query_one("#preamble").display = False
         self.query_one("#pane-view").display = False
         self.query_one("#status").display = False
+        self.query_one("#speech-log").display = False
+        self.query_one("#agent-activity").display = False
         chat_view.display = True
         self._chat_view_active = True
 
