@@ -4027,8 +4027,26 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         # Auto-activate chat view on first session connection.
         if not self._chat_view_active:
+            def _activate_chat():
+                if self._chat_view_active:
+                    return
+                self._chat_view_active = True
+                try:
+                    self.query_one("#chat-feed").display = True
+                    self.query_one("#main-content").display = False
+                    self.query_one("#inbox-list").display = False
+                    self.query_one("#preamble").display = False
+                    self.query_one("#status").display = False
+                    self.query_one("#speech-log").display = False
+                    self.query_one("#agent-activity").display = False
+                    self.query_one("#pane-view").display = False
+                except Exception:
+                    pass
+                # Start auto-refresh
+                self._chat_refresh_timer = self.set_interval(
+                    3.0, lambda: self._refresh_chat_feed())
             try:
-                self.call_from_thread(self.action_chat_view)
+                self.call_from_thread(_activate_chat)
             except Exception:
                 pass
 
