@@ -313,20 +313,12 @@ class ChatViewMixin:
                     ))
 
             # 3. Pending inbox items (choices waiting for selection)
-            for item in sess.inbox:
-                if item.kind == "choices" and not item.done:
-                    raw_items.append((
-                        item.timestamp,
-                        "choices",
-                        ChatBubbleItem(
-                            kind="choices",
-                            text=item.preamble[:200],
-                            timestamp=item.timestamp,
-                            resolved=False,
-                            choices=item.choices[:9],
-                            agent_name=name,
-                        ),
-                    ))
+            # Skip these in the feed — they're shown in the embedded choices pane
+            # which provides interactive selection. Showing them in the feed too
+            # creates confusing duplicate non-interactive choices.
+            # Only show pending choices if not in chat view (shouldn't happen,
+            # but be defensive).
+            pass
 
             # 4. User messages (pending = queued, flushed = delivered)
             now = _time.time()
