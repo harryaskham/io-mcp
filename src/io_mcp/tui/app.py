@@ -2004,6 +2004,17 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         if session is None:
             return
 
+        # Chat view active: refresh the feed instead of showing inbox/choices pane.
+        # The feed will include pending choices as inline bubbles.
+        if self._chat_view_active:
+            self._refresh_chat_feed()
+            # Play chime and speak preamble for new choices
+            if session.active and session.preamble:
+                self._tts.play_chime("choices")
+                preamble_speed = self._config.tts_speed_for("preamble") if self._config else None
+                self._tts.speak(session.preamble, speed_override=preamble_speed)
+            return
+
         # Don't overwrite the UI if user is composing a message or typing
         if self._message_mode or (session and session.input_mode):
             # Choices are stored on the session; they'll be shown after input is done
@@ -4110,6 +4121,20 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         # Haptic feedback on scroll (short buzz)
         self._vibrate(30)
+
+        # Chat bubble item: read clean TTS text (no markup/timestamps)
+        if isinstance(event.item, ChatBubbleItem):
+            text = getattr(event.item, 'tts_text', '')
+            if text:
+                now = time.time()
+                last_time = getattr(self, '_last_spoken_time', 0.0)
+                if text != self._last_spoken_text or (now - last_time) > 0.5:
+                    self._last_spoken_text = text
+                    self._last_spoken_time = now
+                    ui_speed = self._config.tts_speed_for("ui") if self._config else None
+                    self._tts.speak_with_local_fallback(text,
+                                                        speed_override=ui_speed)
+            return
 
         # Inbox list highlight: read preamble preview of highlighted item
         if isinstance(event.item, InboxListItem):

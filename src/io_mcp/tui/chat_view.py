@@ -52,6 +52,24 @@ class ChatBubbleItem(ListItem):
         self.bubble_result = result
         self.bubble_choices = choices or []
         self.bubble_flushed = flushed
+        # Plain text for TTS readout (no markup, no timestamps)
+        self.tts_text = self._make_tts_text()
+
+    def _make_tts_text(self) -> str:
+        """Build clean plain text for TTS readout."""
+        if self.bubble_kind == "speech":
+            return self.bubble_text
+        elif self.bubble_kind == "choices":
+            if self.bubble_resolved and self.bubble_result:
+                return f"selected {self.bubble_result}"
+            labels = ", ".join(c.get("label", "") for c in self.bubble_choices[:5])
+            return f"{self.bubble_text}. {labels}"
+        elif self.bubble_kind == "user_msg":
+            status = "sent" if self.bubble_flushed else "queued"
+            return f"you, {status}: {self.bubble_text}"
+        elif self.bubble_kind == "system":
+            return self.bubble_text
+        return self.bubble_text
 
     def compose(self) -> ComposeResult:
         s = get_scheme(DEFAULT_SCHEME)
