@@ -790,10 +790,9 @@ class TTSEngine:
                         env=self._env, timeout=15,
                     )
                 if proc.returncode != 0:
-                    # Signal kill = intentional cancellation, not an error
+                    # Signal kill = intentional cancellation — expected, don't log
                     if proc.returncode < 0:
-                        _log.debug("Pregenerate cancelled by signal %d: %s",
-                                   -proc.returncode, text[:60])
+                        pass
                     else:
                         stderr_out = (proc.stderr or b"").decode("utf-8", errors="replace").strip()
                         self._log_tts_error(
@@ -1346,21 +1345,16 @@ class TTSEngine:
 
             if len(header) < 44 or header[:4] != b"RIFF":
                 # Check if the process was killed by a signal (intentional cancellation)
-                # e.g. cancel_all() from stop()/stop_sync() during scroll or new speech
+                # e.g. cancel_all() from stop()/stop_sync() during scroll or new speech.
+                # These are expected during normal operation — no need to log.
                 tts_rc = tts_proc.poll()
                 if tts_rc is not None and tts_rc < 0:
-                    # Killed by signal — intentional interruption, not an error
-                    _log.debug("TTS streaming cancelled by signal %d: %s",
-                               -tts_rc, text[:60])
                     return None
                 # Also check if the process is no longer tracked by the manager
                 # (cancel_all() removes it from tracking before killing)
                 if not tts_tracked.alive and tts_rc is not None:
-                    # Process was killed/died — check if it was a signal
                     # rc < 0: Unix signal, 137: SIGKILL (128+9), 143: SIGTERM (128+15)
                     if tts_rc < 0 or tts_rc in (137, 143):
-                        _log.debug("TTS streaming cancelled (rc=%d): %s",
-                                   tts_rc, text[:60])
                         return None
 
                 # TTS failed to produce valid WAV — get diagnostics
@@ -1372,10 +1366,10 @@ class TTSEngine:
                     pass
 
                 # 0 bytes + empty stderr = most likely killed/cancelled
-                # (the process never had a chance to produce output or error)
+                # (the process never had a chance to produce output or error).
+                # This is normal during rapid speech sequences — don't log it
+                # as it generates significant noise in the error log.
                 if len(header) == 0 and not tts_stderr:
-                    _log.debug("TTS streaming likely cancelled (0 bytes, no stderr): %s",
-                               text[:60])
                     return None
 
                 self._log_tts_error(
@@ -1466,8 +1460,7 @@ class TTSEngine:
                     if tts_retcode != 0:
                         # Negative return code = killed by signal (intentional cancel)
                         if tts_retcode < 0:
-                            _log.debug("TTS streaming tts_proc cancelled by signal %d: %s",
-                                       -tts_retcode, text[:60])
+                            pass  # Expected during scroll/speech interruption
                         else:
                             tts_stderr = ""
                             try:
@@ -1528,8 +1521,7 @@ class TTSEngine:
                         if tts_retcode != 0:
                             # Negative return code = killed by signal (intentional cancel)
                             if tts_retcode < 0:
-                                _log.debug("TTS streaming async tts_proc cancelled by signal %d: %s",
-                                           -tts_retcode, text[:60])
+                                pass  # Expected during speech interruption
                             else:
                                 tts_stderr = ""
                                 try:

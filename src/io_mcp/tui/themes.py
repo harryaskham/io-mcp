@@ -189,6 +189,7 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
         layout: horizontal;
         height: 1fr;
         width: 1fr;
+        background: {s['bg']};
     }}
 
     #inbox-list {{
@@ -416,6 +417,7 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
         width: 1fr;
         height: 1fr;
         scrollbar-size: 0 0;
+        background: {s['bg']};
     }}
 
     #chat-input {{

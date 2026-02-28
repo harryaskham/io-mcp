@@ -160,6 +160,7 @@ class ChatViewMixin:
 
     _chat_view_active: bool = False
     _chat_view_generation: int = 0
+    _chat_content_hash: str = ""  # Track content to avoid redundant rebuilds
 
     @_safe_action
     def action_chat_view(self: "IoMcpApp") -> None:
@@ -221,6 +222,9 @@ class ChatViewMixin:
             feed = self.query_one("#chat-feed", ListView)
         except Exception:
             return
+
+        # Update content hash so periodic refresh skips redundant rebuilds
+        self._chat_content_hash = self._chat_content_fingerprint(session)
 
         feed.clear()
         items = self._collect_chat_items(session)
@@ -330,14 +334,47 @@ class ChatViewMixin:
 
         return [item for _, _, item in raw_items]
 
+    def _chat_content_fingerprint(self: "IoMcpApp", session: "Session") -> str:
+        """Compute a lightweight fingerprint of chat-relevant session data.
+
+        Used by _refresh_chat_feed to skip rebuilding when nothing changed.
+        Tracks counts and last timestamps of all data sources.
+        """
+        parts = [
+            str(len(session.speech_log)),
+            str(len(session.inbox_done)),
+            str(len(session.inbox)),
+            str(len(session.pending_messages)),
+            str(len(session.activity_log)),
+        ]
+        # Add last timestamp from each source for change detection
+        if session.speech_log:
+            parts.append(f"s{session.speech_log[-1].timestamp:.0f}")
+        if session.inbox_done:
+            parts.append(f"d{session.inbox_done[-1].timestamp:.0f}")
+        if session.inbox:
+            parts.append(f"i{session.inbox[-1].timestamp:.0f}")
+        if session.activity_log:
+            parts.append(f"a{session.activity_log[-1].get('timestamp', 0):.0f}")
+        return "|".join(parts)
+
     def _refresh_chat_feed(self: "IoMcpApp") -> None:
-        """Refresh the chat feed if the session data has changed."""
+        """Refresh the chat feed only if the session data has changed.
+
+        Compares a lightweight content fingerprint to avoid redundant
+        clear+rebuild cycles that cause flicker and scroll position loss.
+        """
         if not self._chat_view_active:
             return
         session = self._focused()
         if not session:
             return
-        # Simple refresh — rebuild the feed
+
+        # Only rebuild if content actually changed
+        fingerprint = self._chat_content_fingerprint(session)
+        if fingerprint == self._chat_content_hash:
+            return
+        self._chat_content_hash = fingerprint
         self._build_chat_feed(session)
 
     def _handle_chat_message_input(self: "IoMcpApp", message: str) -> None:
