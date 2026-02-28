@@ -2035,6 +2035,8 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
             self._refresh_chat_feed()
             # Show scrollable choices list at the bottom for j/k/scroll navigation
             if session.active and session.choices:
+                _log.info("_show_choices: populating chat-choices",
+                          extra={"context": {"n_choices": len(session.choices)}})
                 self._populate_chat_choices_list(session)
             else:
                 try:
