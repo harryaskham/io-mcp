@@ -3998,10 +3998,9 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
             pass
 
         # Auto-activate chat view on first session connection.
-        # Use a deferred timer to give the session time to register and focus.
         if not self._chat_view_active:
             try:
-                self.call_from_thread(lambda: self.set_timer(0.5, self._auto_activate_chat_view))
+                self.call_from_thread(self.action_chat_view)
             except Exception:
                 pass
 
@@ -4043,19 +4042,6 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
             frontend_api.emit_session_created(session.session_id, session.name)
         except Exception:
             pass
-
-    def _auto_activate_chat_view(self) -> None:
-        """Deferred auto-activation of chat view on first agent connection.
-
-        Called via set_timer to give the session time to register and focus.
-        Only activates if not already active and a session is available.
-        """
-        if self._chat_view_active:
-            return
-        session = self._focused()
-        if not session:
-            return
-        self.action_chat_view()
 
         # Notification webhook for session creation
         try:
