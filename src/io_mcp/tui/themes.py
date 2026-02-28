@@ -415,6 +415,7 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
     #chat-feed {{
         width: 1fr;
         height: 1fr;
+        scrollbar-size: 0 0;
     }}
 
     #chat-input {{

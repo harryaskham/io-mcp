@@ -2268,23 +2268,6 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
                         ))
                         di += 1
 
-            # ── Essential shortcuts ──────────────────────────
-            shortcuts = [
-                ("m", "Queue message"),
-                ("p", "Replay last"),
-                ("s", "Settings"),
-                ("d", "Dismiss"),
-            ]
-            if session.tmux_pane:
-                shortcuts.insert(3, ("v", "Pane view"))
-
-            shortcut_parts = [f"[{s['fg_dim']}]{key}[/{s['fg_dim']}]={label}" for key, label in shortcuts]
-            list_view.append(ChoiceItem(
-                f"[{s['fg_dim']}]  {' · '.join(shortcut_parts)}[/{s['fg_dim']}]", "",
-                index=-998, display_index=di,
-            ))
-            di += 1
-
             # ── Activity sparkline (tool calls per minute) ──────
             if session.activity_log and len(session.activity_log) >= 3:
                 import time as _time_mod
@@ -4936,13 +4919,28 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         """Immediately select option by 1-based number.
 
         Works in all menus: regular choices, activity feed, quick settings,
-        dashboard, settings, dialogs, spawn menu, tab picker, and setting
-        edit mode. Blocked only during text input and voice recording.
+        dashboard, settings, dialogs, spawn menu, tab picker, chat view,
+        and setting edit mode. Blocked only during text input and voice recording.
         """
         session = self._focused()
         if not session:
             return
         if session.input_mode or session.voice_recording:
+            return
+
+        # Chat view: select choice directly without the choices ListView
+        if self._chat_view_active and session.active and session.choices:
+            if n < 1 or n > len(session.choices):
+                return
+            c = session.choices[n - 1]
+            label = c.get("label", "")
+            summary = c.get("summary", "")
+            self._tts.stop()
+            self._vibrate(100)
+            ui_speed = self._config.tts_speed_for("ui") if self._config else None
+            self._tts.speak_fragments(["selected", label], speed_override=ui_speed)
+            self._resolve_selection(session, {"selected": label, "summary": summary})
+            self._refresh_chat_feed()
             return
 
         # Quick settings submenu — dispatch by number
