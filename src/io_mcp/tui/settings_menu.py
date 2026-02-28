@@ -135,11 +135,7 @@ class SettingsMixin:
                 self._chat_refresh_timer.stop()
                 self._chat_refresh_timer = None
             try:
-                self.query_one("#chat-view").display = False
-            except Exception:
-                pass
-            try:
-                self.query_one("#chat-choices-container").display = False
+                self.query_one("#chat-feed").display = False
             except Exception:
                 pass
 

@@ -406,84 +406,12 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
 
     /* ─── Chat bubble view ─────────────────────────────────── */
 
-    #chat-view {{
-        display: none;
-        width: 1fr;
-        height: 1fr;
-        background: {s['bg']};
-    }}
-
     #chat-feed {{
+        display: none;
         width: 1fr;
         height: 1fr;
         scrollbar-size: 0 0;
         background: {s['bg']};
-    }}
-
-    /* ─── Embedded choices in chat view ──────────────────────── */
-
-    #chat-choices-container {{
-        display: none;
-        height: auto;
-        max-height: 50%;
-        width: 1fr;
-        margin: 0 1;
-        border: solid {s['accent']};
-        background: {s['bg_alt']};
-    }}
-
-    #chat-choices-preamble {{
-        padding: 0 2;
-        color: {s['success']};
-        text-style: bold;
-        height: auto;
-        width: 1fr;
-    }}
-
-    #chat-choices {{
-        height: auto;
-        max-height: 20;
-        width: 1fr;
-        background: {s['bg_alt']};
-        scrollbar-background: {s['bg_alt']};
-        scrollbar-background-hover: {s['bg_alt']};
-        scrollbar-background-active: {s['bg_alt']};
-        scrollbar-color: {s['border']};
-        scrollbar-color-hover: {s['fg_dim']};
-        scrollbar-color-active: {s['accent']};
-    }}
-
-    #chat-input-bar {{
-        dock: bottom;
-        height: auto;
-        min-height: 3;
-        max-height: 8;
-        layout: horizontal;
-        width: 1fr;
-        margin: 1 1 0 1;
-    }}
-
-    #chat-input {{
-        width: 1fr;
-        height: auto;
-        min-height: 3;
-        max-height: 8;
-        border: tall {s['border']};
-        background: {s['bg_alt']};
-    }}
-
-    #chat-voice-btn {{
-        width: 4;
-        height: auto;
-        min-height: 3;
-        content-align: center middle;
-        border: tall {s['border']};
-        background: {s['bg_alt']};
-        color: {s['accent']};
-    }}
-
-    #chat-input .text-area--cursor-line {{
-        background: {s['bg_alt']};
     }}
 
     ChatBubbleItem {{

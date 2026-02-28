@@ -6,7 +6,8 @@ A vertical feed showing all agent interactions chronologically:
 - User messages with status indicators (queued/flushed)
 - System events (tool calls, settings changes)
 
-Toggled with 'g' key. Replaces the inbox/choices pane when active.
+Toggled with 'g' key. Shows #chat-feed above the normal #preamble/#choices.
+When active, #main-content is hidden but choices still render normally.
 """
 
 from __future__ import annotations
@@ -14,13 +15,11 @@ from __future__ import annotations
 import time as _time
 from typing import TYPE_CHECKING
 
-from textual import work
 from textual.app import ComposeResult
-from textual.containers import Vertical
-from textual.widgets import Label, ListItem, ListView, Static, Input
+from textual.widgets import Label, ListItem, ListView
 
 from .themes import DEFAULT_SCHEME, get_scheme
-from .widgets import ManagedListView, _safe_action
+from .widgets import _safe_action
 
 if TYPE_CHECKING:
     from .app import IoMcpApp
@@ -158,29 +157,36 @@ class ChatBubbleItem(ListItem):
 # ─── Chat View Mixin ─────────────────────────────────────────────────
 
 class ChatViewMixin:
-    """Mixin providing the chat bubble view for IoMcpApp."""
+    """Mixin providing the chat bubble view for IoMcpApp.
+
+    The chat feed (#chat-feed) is a top-level sibling of #main-content.
+    When active, #main-content is hidden and #chat-feed is shown.
+    The normal #preamble + #choices widgets are reused for selection —
+    no duplicate choice widgets needed.
+    """
 
     _chat_view_active: bool = False
-    _chat_view_generation: int = 0
     _chat_content_hash: str = ""  # Track content to avoid redundant rebuilds
 
     @_safe_action
     def action_chat_view(self: "IoMcpApp") -> None:
-        """Toggle the chat bubble view.
-
-        Shows a chronological feed of all agent interactions for the
-        focused session. Press g or Escape to close.
-        """
-        chat_view = self.query_one("#chat-view")
+        """Toggle the chat bubble view."""
+        chat_feed = self.query_one("#chat-feed")
 
         # Toggle off
-        if chat_view.display:
-            chat_view.display = False
+        if self._chat_view_active:
+            chat_feed.display = False
             self._chat_view_active = False
-            self._hide_chat_choices()
             if hasattr(self, '_chat_refresh_timer') and self._chat_refresh_timer:
                 self._chat_refresh_timer.stop()
                 self._chat_refresh_timer = None
+            # Restore main-content height from auto back to 1fr
+            try:
+                mc = self.query_one("#main-content")
+                mc.styles.height = "1fr"
+                mc.styles.max_height = None
+            except Exception:
+                pass
             self._speak_ui("Chat view closed.")
             session = self._focused()
             if session and session.active:
@@ -205,19 +211,18 @@ class ChatViewMixin:
         all_sessions = list(self.manager.all_sessions()) if hasattr(self, 'manager') else []
         if len(all_sessions) > 1:
             self._chat_unified = True
-            self._speak_ui(f"Chat view for all agents. Press g to close.")
+            self._speak_ui("Chat view. Press g to close.")
         else:
             self._chat_unified = False
             self._speak_ui(f"Chat view for {session.name}. Press g to close.")
 
-        # Show chat view, hide main content and speech log
-        self.query_one("#main-content").display = False
-        self.query_one("#preamble").display = False
+        # Show chat feed, hide conflicting views (but not #main-content —
+        # choices still render there, just with limited height)
         self.query_one("#pane-view").display = False
         self.query_one("#status").display = False
         self.query_one("#speech-log").display = False
         self.query_one("#agent-activity").display = False
-        chat_view.display = True
+        chat_feed.display = True
         self._chat_view_active = True
 
         # Build feed — unified or single-session
@@ -225,6 +230,10 @@ class ChatViewMixin:
             self._build_chat_feed(session, sessions=all_sessions)
         else:
             self._build_chat_feed(session)
+
+        # If session has active choices, show them normally (below feed)
+        if session.active and session.choices:
+            self._show_choices()
 
         # Auto-refresh every 3 seconds
         self._chat_refresh_timer = self.set_interval(
@@ -240,7 +249,6 @@ class ChatViewMixin:
 
         # Update content hash so periodic refresh skips redundant rebuilds
         if sessions:
-            # Unified view: build fingerprint from all sessions
             parts = []
             for s in sessions:
                 parts.append(self._chat_content_fingerprint(s))
@@ -266,13 +274,7 @@ class ChatViewMixin:
 
     def _collect_chat_items(self: "IoMcpApp", session: "Session",
                             sessions: list["Session"] | None = None) -> list[ChatBubbleItem]:
-        """Merge session data into a chronological list of ChatBubbleItems.
-
-        Args:
-            session: Primary session (used for single-session view).
-            sessions: If provided, collect from ALL sessions (unified view).
-                     Each bubble will be tagged with the agent name.
-        """
+        """Merge session data into a chronological list of ChatBubbleItems."""
         all_sessions = sessions if sessions else [session]
         raw_items: list[tuple[float, str, ChatBubbleItem]] = []
 
@@ -312,13 +314,7 @@ class ChatViewMixin:
                         ),
                     ))
 
-            # 3. Pending inbox items (choices waiting for selection)
-            # Skip these in the feed — they're shown in the embedded choices pane
-            # which provides interactive selection. Showing them in the feed too
-            # creates confusing duplicate non-interactive choices.
-            # Only show pending choices if not in chat view (shouldn't happen,
-            # but be defensive).
-            pass
+            # 3. Pending choices — skip, they're shown via the normal #choices widget
 
             # 4. User messages (pending = queued, flushed = delivered)
             now = _time.time()
@@ -364,11 +360,7 @@ class ChatViewMixin:
         return [item for _, _, item in raw_items]
 
     def _chat_content_fingerprint(self: "IoMcpApp", session: "Session") -> str:
-        """Compute a lightweight fingerprint of chat-relevant session data.
-
-        Used by _refresh_chat_feed to skip rebuilding when nothing changed.
-        Tracks counts and last timestamps of all data sources.
-        """
+        """Compute a lightweight fingerprint of chat-relevant session data."""
         parts = [
             str(len(session.speech_log)),
             str(len(session.inbox_done)),
@@ -376,7 +368,6 @@ class ChatViewMixin:
             str(len(session.pending_messages)),
             str(len(session.activity_log)),
         ]
-        # Add last timestamp from each source for change detection
         if session.speech_log:
             parts.append(f"s{session.speech_log[-1].timestamp:.0f}")
         if session.inbox_done:
@@ -388,11 +379,7 @@ class ChatViewMixin:
         return "|".join(parts)
 
     def _refresh_chat_feed(self: "IoMcpApp") -> None:
-        """Refresh the chat feed only if the session data has changed.
-
-        Compares a lightweight content fingerprint to avoid redundant
-        clear+rebuild cycles that cause flicker and scroll position loss.
-        """
+        """Refresh the chat feed only if the session data has changed."""
         if not self._chat_view_active:
             return
         session = self._focused()
@@ -413,93 +400,3 @@ class ChatViewMixin:
                 return
             self._chat_content_hash = fingerprint
             self._build_chat_feed(session)
-
-    def _handle_chat_message_input(self: "IoMcpApp", message: str) -> None:
-        """Handle a message submitted from the chat input box."""
-        session = self._focused()
-        if not session or not message.strip():
-            return
-        session.pending_messages.append(message.strip())
-        self._speak_ui("Message queued")
-        self._refresh_chat_feed()
-
-    def _populate_chat_choices(self: "IoMcpApp", session: "Session") -> None:
-        """Populate the embedded choices pane in chat view.
-
-        Shows the same interactive choice list as the normal inbox view,
-        but styled as a bordered panel within the chat feed. Users can
-        scroll (j/k) and select (Enter) just like normal.
-        """
-        from .widgets import ChoiceItem, EXTRA_OPTIONS, PRIMARY_EXTRAS, SECONDARY_EXTRAS, MORE_OPTIONS_ITEM
-
-        try:
-            container = self.query_one("#chat-choices-container")
-            preamble_label = self.query_one("#chat-choices-preamble", Label)
-            list_view = self.query_one("#chat-choices", ListView)
-        except Exception:
-            return
-
-        # Update preamble
-        preamble_label.update(session.preamble[:200] if session.preamble else "")
-
-        # Populate choices
-        list_view.clear()
-        choices = session.choices or []
-        for i, c in enumerate(choices):
-            label = c.get('label', '')
-            summary = c.get('summary', '')
-            list_view.append(ChoiceItem(label, summary, index=i+1, display_index=i))
-
-        # Add primary extras
-        di = len(choices)
-        for e in PRIMARY_EXTRAS:
-            list_view.append(ChoiceItem(
-                e.get('label', ''), e.get('summary', ''),
-                index=0, display_index=di,
-            ))
-            di += 1
-
-        container.display = True
-        list_view.index = 0
-        list_view.focus()
-
-    def _hide_chat_choices(self: "IoMcpApp") -> None:
-        """Hide the embedded choices pane in chat view."""
-        try:
-            self.query_one("#chat-choices-container").display = False
-        except Exception:
-            pass
-
-    def _handle_chat_choice_select(self: "IoMcpApp", item) -> None:
-        """Handle selection from the embedded chat choices list.
-
-        Dispatches to the same resolution logic as the normal inbox view.
-        After selection, hides the choices pane and refreshes the feed.
-        """
-        session = self._focused()
-        if not session or not session.active:
-            return
-
-        logical = item.choice_index
-        if logical > 0:
-            # Regular choice
-            ci = logical - 1
-            if ci >= len(session.choices):
-                return
-            c = session.choices[ci]
-            label = c.get("label", "")
-            summary = c.get("summary", "")
-            self._tts.stop()
-            self._vibrate(100)
-            ui_speed = self._config.tts_speed_for("ui") if self._config else None
-            self._tts.speak_fragments(["selected", label], speed_override=ui_speed)
-            self._resolve_selection(session, {"selected": label, "summary": summary})
-
-            # Hide choices and refresh feed
-            self._hide_chat_choices()
-            self._chat_content_hash = ""  # Force rebuild
-            self._refresh_chat_feed()
-        else:
-            # Extra option (index 0) — use existing extras handler
-            label = item.choice_label
-            self._handle_extra_select(label)

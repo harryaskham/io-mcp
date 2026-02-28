@@ -391,26 +391,31 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         """Ensure the #main-content container is visible.
 
         Called before showing the #choices list in any context (settings,
-        etc.) since #choices is now nested inside #main-content > #choices-panel.
+        etc.) since #choices is nested inside #main-content > #choices-panel.
 
-        When the chat view is active, this is a no-op — the chat view manages
-        its own choices pane (#chat-choices) and shouldn't show #main-content.
+        In chat view mode, main-content is shown but with inbox hidden and
+        a height limit so choices don't overwhelm the chat feed.
 
         Args:
             show_inbox: If True, also update and show the inbox list
                        (unless user has collapsed it). If False, hide
                        the inbox list (for modal views).
         """
-        # Don't show main-content when chat view is active
-        if self._chat_view_active:
-            return
-
         try:
-            self.query_one("#main-content").display = True
-            if show_inbox and not self._inbox_collapsed:
-                self._update_inbox_list()
-            else:
+            mc = self.query_one("#main-content")
+            mc.display = True
+            # In chat view, limit main-content height and always hide inbox
+            if self._chat_view_active:
+                mc.styles.height = "auto"
+                mc.styles.max_height = "50%"
                 self.query_one("#inbox-list").display = False
+            else:
+                mc.styles.height = "1fr"
+                mc.styles.max_height = None
+                if show_inbox and not self._inbox_collapsed:
+                    self._update_inbox_list()
+                else:
+                    self.query_one("#inbox-list").display = False
         except Exception:
             pass
 
@@ -510,6 +515,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         yield Label(status_text, id="status")
         yield Label("", id="agent-activity")
         yield Vertical(id="speech-log")
+        # Inbox list — left sidebar for browsing pending/completed items
         with Horizontal(id="main-content"):
             yield ManagedListView(id="inbox-list")
             with Vertical(id="choices-panel"):
@@ -517,15 +523,8 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
                 yield ManagedListView(id="choices")
                 yield DwellBar(id="dwell-bar")
         yield RichLog(id="pane-view", markup=False, highlight=False, auto_scroll=True, max_lines=200)
-        with Vertical(id="chat-view"):
-            yield ManagedListView(id="chat-feed")
-            # Choices pane embedded in chat view — shown when choices are active
-            with Vertical(id="chat-choices-container"):
-                yield Label("", id="chat-choices-preamble")
-                yield ManagedListView(id="chat-choices")
-            with Horizontal(id="chat-input-bar"):
-                yield SubmitTextArea(id="chat-input")
-                yield Static("🎤", id="chat-voice-btn")
+        # Chat feed — chronological view of all agent interactions
+        yield ManagedListView(id="chat-feed")
         yield Input(placeholder="Filter choices...", id="filter-input")
         yield Static("", id="footer-status")
 
@@ -539,8 +538,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         self.query_one("#dwell-bar").display = False
         self.query_one("#speech-log").display = False
         self.query_one("#pane-view").display = False
-        self.query_one("#chat-view").display = False
-        self.query_one("#chat-choices-container").display = False
+        self.query_one("#chat-feed").display = False
         self.query_one("#main-content").display = False
         self.query_one("#inbox-list").display = False
 
@@ -2027,16 +2025,10 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         if session is None:
             return
 
-        # Chat view active: show choices in embedded pane + refresh feed
+        # Refresh chat feed if active (so new choices appear in the timeline)
         if self._chat_view_active:
-            _log.info("_show_choices: chat view active, populating embedded choices",
-                      extra={"context": {"active": session.active,
-                                         "n_choices": len(session.choices) if session.choices else 0}})
             self._chat_content_hash = ""  # Force rebuild
             self._refresh_chat_feed()
-            if session.active and session.choices:
-                self._populate_chat_choices(session)
-            return
 
         # Don't overwrite the UI if user is composing a message or typing
         if self._message_mode or (session and session.input_mode):
@@ -2132,16 +2124,10 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         If there are more pending items, the next one will auto-present
         via the inbox drain loop.
         """
-        # Chat view: hide choices pane and refresh feed
+        # Refresh chat feed if active
         if self._chat_view_active:
-            self.query_one("#main-content").display = False
-            self.query_one("#preamble").display = False
-            self.query_one("#dwell-bar").display = False
-            self._hide_chat_choices()
             self._chat_content_hash = ""  # Force rebuild
             self._refresh_chat_feed()
-            self._update_footer_status()
-            return
 
         self.query_one("#preamble").display = False
         self.query_one("#dwell-bar").display = False
@@ -4399,15 +4385,6 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
     @on(ListView.Selected)
     def on_list_selected(self, event: ListView.Selected) -> None:
         """Handle Enter/click on a list item."""
-        # Check if this is a chat-embedded choices selection
-        try:
-            chat_choices = self.query_one("#chat-choices", ListView)
-            if event.list_view is chat_choices and isinstance(event.item, ChoiceItem):
-                self._handle_chat_choice_select(event.item)
-                return
-        except Exception:
-            pass
-
         # Check if this is an inbox list selection (left pane)
         try:
             inbox_list = self.query_one("#inbox-list", ListView)
@@ -4525,18 +4502,18 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
             pass
 
     def _active_list_view(self) -> ListView:
-        """Get the currently focused list view (inbox, choices, or chat-choices).
+        """Get the currently focused list view (inbox, choices, or chat-feed).
 
         Checks actual widget focus first to handle Tab key / click focus
         changes, then falls back to the logical _inbox_pane_focused state.
         """
-        # Chat view: use the embedded chat-choices if visible, otherwise chat-feed
+        # Chat view: prefer #choices if visible (choices are shown normally),
+        # otherwise fall through to chat-feed for scrolling the timeline
         if self._chat_view_active:
             try:
-                chat_choices = self.query_one("#chat-choices", ListView)
-                container = self.query_one("#chat-choices-container")
-                if container.display:
-                    return chat_choices
+                choices_list = self.query_one("#choices", ListView)
+                if choices_list.display:
+                    return choices_list
             except Exception:
                 pass
             try:
@@ -4912,53 +4889,6 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         list_view = self.query_one("#choices", ListView)
         list_view.focus()
 
-    @on(SubmitTextArea.Submitted, "#chat-input")
-    def on_chat_input_submitted(self, event: SubmitTextArea.Submitted) -> None:
-        """Handle message submitted from the chat view input box.
-
-        If choices are active, submits the text as a freeform selection.
-        Otherwise, queues the text as a message for the agent.
-        """
-        if not self._chat_view_active:
-            return
-        try:
-            chat_input = self.query_one("#chat-input", SubmitTextArea)
-            message = chat_input.text.strip()
-        except Exception:
-            return
-        if not message:
-            return
-
-        session = self._focused()
-
-        # If choices are active, submit as freeform selection
-        if session and session.active and session.choices:
-            self._tts.stop()
-            self._vibrate(100)
-            ui_speed = self._config.tts_speed_for("ui") if self._config else None
-            self._tts.speak_fragments(["selected", message], speed_override=ui_speed)
-            self._resolve_selection(session, {"selected": message, "summary": "(freeform input)"})
-            self._hide_chat_choices()
-            self._chat_content_hash = ""  # Force rebuild
-            self._refresh_chat_feed()
-        else:
-            # Queue as message
-            self._handle_chat_message_input(message)
-
-        try:
-            chat_input.clear()
-        except Exception:
-            pass
-
-    def on_click(self, event) -> None:
-        """Handle clicks — check if the voice button was clicked."""
-        # Check if the click target is the voice button
-        try:
-            if self._chat_view_active and event.widget and event.widget.id == "chat-voice-btn":
-                self.action_voice_input()
-        except Exception:
-            pass
-
     # NOTE: Old on_freeform_changed, on_freeform_submitted, _submit_freeform,
     # and _cancel_freeform have been removed. Text input now uses TextInputModal
     # (a Textual ModalScreen) which handles its own submit/cancel/change events.
@@ -5030,23 +4960,6 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         if not session:
             return
         if session.input_mode or session.voice_recording:
-            return
-
-        # Chat view: select choice directly without the choices ListView
-        if self._chat_view_active and session.active and session.choices:
-            if n < 1 or n > len(session.choices):
-                return
-            c = session.choices[n - 1]
-            label = c.get("label", "")
-            summary = c.get("summary", "")
-            self._tts.stop()
-            self._vibrate(100)
-            ui_speed = self._config.tts_speed_for("ui") if self._config else None
-            self._tts.speak_fragments(["selected", label], speed_override=ui_speed)
-            self._resolve_selection(session, {"selected": label, "summary": summary})
-            self._hide_chat_choices()
-            self._chat_content_hash = ""  # Force rebuild
-            self._refresh_chat_feed()
             return
 
         # Quick settings submenu — dispatch by number

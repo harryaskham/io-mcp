@@ -84,6 +84,12 @@ class TTSEngine:
         # Uses RLock so _generate_to_file can re-acquire from within speak().
         self._speech_lock = threading.RLock()
 
+        # Speech generation counter — incremented by stop_all() to cancel
+        # queued speak_async threads. Each speak_async thread captures the
+        # counter at enqueue time and checks it after acquiring the lock.
+        # If it's changed, the speech is stale and gets dropped.
+        self._speech_gen = 0
+
         # API concurrency lock — ensures only one tts CLI process runs
         # at a time. Acquired by both speech (speak/speak_streaming) and
         # pregeneration (_generate_to_file) to prevent API rate limiting.
@@ -514,9 +520,12 @@ class TTSEngine:
         Runs asynchronously in a background thread, queuing behind
         current speech via the speech lock.
         """
+        my_gen = self._speech_gen
         def _do():
             try:
                 with self._speech_lock:
+                    if self._speech_gen != my_gen:
+                        return
                     if self._muted or not self._paplay:
                         return
 
@@ -1059,10 +1068,17 @@ class TTSEngine:
         Acquires the speech lock in a background thread to ensure
         sequential playback — speech queues up naturally without
         interrupting what's currently playing.
+
+        Checks the speech generation counter after acquiring the lock.
+        If stop() was called while this was queued, the speech is dropped.
         """
+        my_gen = self._speech_gen
         def _do():
             try:
                 with self._speech_lock:
+                    # Check if stop() was called while we were queued
+                    if self._speech_gen != my_gen:
+                        return
                     if self._local and self._local_backend == "termux" and self._termux_exec:
                         self._speak_termux(text)
                         return
@@ -1560,7 +1576,11 @@ class TTSEngine:
         Runs cancel_all() in a background thread to avoid blocking
         the caller (important on proot where syscalls take 10-50ms each).
         The subprocess manager handles process group killing internally.
+
+        Also bumps the speech generation counter to cancel any queued
+        speak_async threads that haven't acquired the lock yet.
         """
+        self._speech_gen += 1
         def _do_stop():
             self._mgr.cancel_all()
         threading.Thread(target=_do_stop, daemon=True).start()
@@ -1572,6 +1592,7 @@ class TTSEngine:
         proceeding (e.g., before starting blocking speech in a background
         thread). Prefer stop() for UI/event-loop contexts.
         """
+        self._speech_gen += 1
         self._mgr.cancel_all()
 
     def wait_for_speech(self, timeout: float = 5.0) -> None:
