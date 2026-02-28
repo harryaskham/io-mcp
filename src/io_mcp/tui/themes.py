@@ -402,6 +402,82 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
         scrollbar-color-active: {s['accent']};
     }}
 
+    /* ─── Chat bubble view ─────────────────────────────────── */
+
+    #chat-view {{
+        display: none;
+        width: 1fr;
+        height: 1fr;
+        background: {s['bg']};
+    }}
+
+    #chat-feed {{
+        width: 1fr;
+        height: 1fr;
+    }}
+
+    #chat-input {{
+        dock: bottom;
+        height: 3;
+        border: tall {s['border']};
+        background: {s['bg_alt']};
+        margin: 0 1;
+    }}
+
+    #chat-input .text-area--cursor-line {{
+        background: {s['bg_alt']};
+    }}
+
+    ChatBubbleItem {{
+        padding: 0 2;
+        height: auto;
+        width: 1fr;
+        background: {s['bg']};
+        border-bottom: dashed {s['border']};
+    }}
+
+    ChatBubbleItem > .chat-bubble-text {{
+        width: 1fr;
+        height: auto;
+        color: {s['fg']};
+    }}
+
+    ChatBubbleItem > .chat-bubble-choice {{
+        width: 1fr;
+        height: auto;
+        color: {s['fg']};
+    }}
+
+    ChatBubbleItem > .chat-bubble-choice-selected {{
+        width: 1fr;
+        height: auto;
+        color: {s['success']};
+    }}
+
+    ChatBubbleItem > .chat-bubble-choice-dim {{
+        width: 1fr;
+        height: auto;
+        color: {s['fg_dim']};
+    }}
+
+    ChatBubbleItem > .chat-bubble-pending {{
+        width: 1fr;
+        height: auto;
+        color: {s['warning']};
+    }}
+
+    ChatBubbleItem > .chat-bubble-system {{
+        width: 1fr;
+        height: auto;
+        color: {s['fg_dim']};
+    }}
+
+    ChatBubbleItem.-highlight {{
+        background: {s['highlight_bg']};
+        border-left: thick {s['accent']};
+        border-bottom: dashed {s['border']};
+    }}
+
     TextArea {{
         scrollbar-background: {s['bg']};
         scrollbar-background-hover: {s['bg']};

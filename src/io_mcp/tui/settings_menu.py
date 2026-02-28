@@ -128,6 +128,17 @@ class SettingsMixin:
             except Exception:
                 pass
 
+        # Clean up chat view if active
+        if getattr(self, '_chat_view_active', False):
+            self._chat_view_active = False
+            if hasattr(self, '_chat_refresh_timer') and self._chat_refresh_timer:
+                self._chat_refresh_timer.stop()
+                self._chat_refresh_timer = None
+            try:
+                self.query_one("#chat-view").display = False
+            except Exception:
+                pass
+
     def _exit_settings(self) -> None:
         """Leave settings and restore choices."""
         session = self._focused()

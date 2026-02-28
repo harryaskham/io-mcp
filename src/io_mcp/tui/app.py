@@ -41,6 +41,7 @@ from .widgets import ChoiceItem, InboxListItem, DwellBar, ManagedListView, TextI
 from .views import ViewsMixin
 from .voice import VoiceMixin
 from .settings_menu import SettingsMixin
+from .chat_view import ChatViewMixin, ChatBubbleItem
 
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
@@ -53,7 +54,7 @@ _build_css = build_css
 
 # ─── Main TUI App ───────────────────────────────────────────────────────────
 
-class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
+class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
     """Textual app for io-mcp choice presentation with multi-session support."""
 
     CSS = _build_css(DEFAULT_SCHEME)
@@ -78,6 +79,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         Binding("x", "multi_select_toggle", "Multi", show=False),
         Binding("c", "toggle_conversation", "Chat", show=False),
         Binding("v", "pane_view", "Pane", show=False),
+        Binding("g", "chat_view", "Chat Feed", show=False),
         Binding("b", "toggle_sidebar", "Sidebar", show=False),
         Binding("d", "dismiss_item", "Dismiss", show=False),
         Binding("question_mark", "show_help", "Help", show=False),
@@ -499,6 +501,9 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 yield ManagedListView(id="choices")
                 yield DwellBar(id="dwell-bar")
         yield RichLog(id="pane-view", markup=False, highlight=False, auto_scroll=True, max_lines=200)
+        with Vertical(id="chat-view"):
+            yield ManagedListView(id="chat-feed")
+            yield Input(placeholder="Type a message to queue...", id="chat-input")
         yield Input(placeholder="Filter choices...", id="filter-input")
         yield Static("[dim]↕[/dim] Scroll  [dim]⏎[/dim] Select  [dim]x[/dim] Multi  [dim]u[/dim] Undo  [dim]i[/dim] Type  [dim]m[/dim] Msg  [dim]␣[/dim] Voice  [dim]/[/dim] Filter  [dim]v[/dim] Pane  [dim]s[/dim] Settings  [dim]q[/dim] Back/Quit", id="footer-help")
 
@@ -512,6 +517,7 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         self.query_one("#dwell-bar").display = False
         self.query_one("#speech-log").display = False
         self.query_one("#pane-view").display = False
+        self.query_one("#chat-view").display = False
         self.query_one("#main-content").display = False
         self.query_one("#inbox-list").display = False
 
@@ -4762,6 +4768,20 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         # Keep the filtered list, just move focus to it
         list_view = self.query_one("#choices", ListView)
         list_view.focus()
+
+    @on(Input.Submitted, "#chat-input")
+    def on_chat_input_submitted(self, event: Input.Submitted) -> None:
+        """Handle message submitted from the chat view input box."""
+        if not self._chat_view_active:
+            return
+        message = event.value.strip()
+        if message:
+            self._handle_chat_message_input(message)
+            try:
+                chat_input = self.query_one("#chat-input", Input)
+                chat_input.value = ""
+            except Exception:
+                pass
 
         count = sum(1 for c in list_view.children if isinstance(c, ChoiceItem) and c.choice_index > 0)
         self._speak_ui(f"{count} matches")
