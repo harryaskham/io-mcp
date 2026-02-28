@@ -113,7 +113,24 @@ class TTSEngine:
 
         self._env = os.environ.copy()
         self._env["PULSE_SERVER"] = os.environ.get("PULSE_SERVER", "127.0.0.1")
-        self._env["LD_LIBRARY_PATH"] = PORTAUDIO_LIB
+        # Prepend the portaudio lib path, preserving any existing LD_LIBRARY_PATH
+        # (e.g. Nix-provided paths that include the correct portaudio store path).
+        # CRITICAL: Remove empty path segments (::) from LD_LIBRARY_PATH.
+        # On Nix-on-Droid, multiple wrapper scripts layer their paths using
+        # bash string manipulation that can create empty segments (:::).
+        # Python's ctypes.util.find_library breaks when LD_LIBRARY_PATH
+        # contains empty segments — it returns None even when the library
+        # exists in one of the valid paths. This causes sounddevice to fail
+        # with "PortAudio library not found" in the tts CLI.
+        existing_ldpath = os.environ.get("LD_LIBRARY_PATH", "")
+        if existing_ldpath:
+            combined = f"{PORTAUDIO_LIB}:{existing_ldpath}"
+        else:
+            combined = PORTAUDIO_LIB
+        # Clean up empty segments that break ctypes.util.find_library
+        self._env["LD_LIBRARY_PATH"] = ":".join(
+            p for p in combined.split(":") if p
+        )
 
         self._paplay = _find_binary("paplay")
         self._espeak = _find_binary("espeak-ng")
