@@ -523,7 +523,9 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
             with Vertical(id="chat-choices-container"):
                 yield Label("", id="chat-choices-preamble")
                 yield ManagedListView(id="chat-choices")
-            yield SubmitTextArea(id="chat-input")
+            with Horizontal(id="chat-input-bar"):
+                yield SubmitTextArea(id="chat-input")
+                yield Static("🎤", id="chat-voice-btn")
         yield Input(placeholder="Filter choices...", id="filter-input")
         yield Static("", id="footer-status")
 
@@ -4919,6 +4921,15 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         try:
             chat_input.clear()
+        except Exception:
+            pass
+
+    def on_click(self, event) -> None:
+        """Handle clicks — check if the voice button was clicked."""
+        # Check if the click target is the voice button
+        try:
+            if self._chat_view_active and event.widget and event.widget.id == "chat-voice-btn":
+                self.action_voice_input()
         except Exception:
             pass
 

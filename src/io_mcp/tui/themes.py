@@ -453,14 +453,33 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
         scrollbar-color-active: {s['accent']};
     }}
 
-    #chat-input {{
+    #chat-input-bar {{
         dock: bottom;
+        height: auto;
+        min-height: 3;
+        max-height: 8;
+        layout: horizontal;
+        width: 1fr;
+        margin: 1 1 0 1;
+    }}
+
+    #chat-input {{
+        width: 1fr;
         height: auto;
         min-height: 3;
         max-height: 8;
         border: tall {s['border']};
         background: {s['bg_alt']};
-        margin: 1 1 0 1;
+    }}
+
+    #chat-voice-btn {{
+        width: 4;
+        height: auto;
+        min-height: 3;
+        content-align: center middle;
+        border: tall {s['border']};
+        background: {s['bg_alt']};
+        color: {s['accent']};
     }}
 
     #chat-input .text-area--cursor-line {{
