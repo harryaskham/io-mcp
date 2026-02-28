@@ -300,7 +300,6 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
     ChoiceItem.-highlight {{
         background: {s['highlight_bg']};
         border-left: thick {s['accent']};
-        border-bottom: dashed {s['border']};
     }}
 
     ChoiceItem.-highlight > .choice-label {{
