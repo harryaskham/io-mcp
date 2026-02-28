@@ -3967,11 +3967,20 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         except Exception:
             pass
 
+        # Auto-activate chat view on first session connection
+        if not self._chat_view_active:
+            try:
+                self.call_from_thread(self.action_chat_view)
+            except Exception:
+                pass
+
         # Update UI to show agent connected (replaces "Waiting for agent...")
-        try:
-            self.call_from_thread(self._show_idle)
-        except Exception:
-            pass
+        # Skip _show_idle if chat view is now active — it would show #main-content
+        if not self._chat_view_active:
+            try:
+                self.call_from_thread(self._show_idle)
+            except Exception:
+                pass
 
         # Speak the connection + fortune cookie
         try:
