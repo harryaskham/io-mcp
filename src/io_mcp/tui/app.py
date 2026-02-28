@@ -2136,15 +2136,19 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         If there are more pending items, the next one will auto-present
         via the inbox drain loop.
         """
-        # Refresh chat feed if active
+        # Chat view: just refresh the feed and hide choices panel
         if self._chat_view_active:
             self._chat_content_hash = ""  # Force rebuild
             self._refresh_chat_feed()
-            # Hide main-content in chat view — no choices to display
             try:
                 self.query_one("#main-content").display = False
+                self.query_one("#preamble").display = False
+                self.query_one("#dwell-bar").display = False
+                self.query_one("#status").display = False
             except Exception:
                 pass
+            self._update_footer_status()
+            return
 
         self.query_one("#preamble").display = False
         self.query_one("#dwell-bar").display = False
@@ -2153,8 +2157,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         session_name = session.name if session else ""
         after_text = f"Selected: {label}" if self._demo else f"[{self._cs['success']}]*[/{self._cs['success']}] [{session_name}] {label} [dim](u=undo)[/dim]"
         status.update(after_text)
-        # In chat view, don't show the status bar — it's redundant with the chat feed
-        status.display = not self._chat_view_active
+        status.display = True
 
         # Show waiting state with metadata in the right pane
         self._show_waiting_with_shortcuts(session)
@@ -2216,7 +2219,10 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         Replaces the old activity feed. Shows the inbox view (left pane)
         with a minimal right pane containing status and shortcut hints.
+        In chat view, this is a no-op — the chat feed provides context.
         """
+        if self._chat_view_active:
+            return
         try:
             s = self._cs
 
