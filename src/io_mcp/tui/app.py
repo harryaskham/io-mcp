@@ -393,11 +393,18 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         Called before showing the #choices list in any context (settings,
         etc.) since #choices is now nested inside #main-content > #choices-panel.
 
+        When the chat view is active, this is a no-op — the chat view manages
+        its own choices pane (#chat-choices) and shouldn't show #main-content.
+
         Args:
             show_inbox: If True, also update and show the inbox list
                        (unless user has collapsed it). If False, hide
                        the inbox list (for modal views).
         """
+        # Don't show main-content when chat view is active
+        if self._chat_view_active:
+            return
+
         try:
             self.query_one("#main-content").display = True
             if show_inbox and not self._inbox_collapsed:
@@ -4490,11 +4497,25 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
             pass
 
     def _active_list_view(self) -> ListView:
-        """Get the currently focused list view (inbox or choices).
+        """Get the currently focused list view (inbox, choices, or chat-choices).
 
         Checks actual widget focus first to handle Tab key / click focus
         changes, then falls back to the logical _inbox_pane_focused state.
         """
+        # Chat view: use the embedded chat-choices if visible, otherwise chat-feed
+        if self._chat_view_active:
+            try:
+                chat_choices = self.query_one("#chat-choices", ListView)
+                container = self.query_one("#chat-choices-container")
+                if container.display:
+                    return chat_choices
+            except Exception:
+                pass
+            try:
+                return self.query_one("#chat-feed", ListView)
+            except Exception:
+                pass
+
         if self._inbox_pane_visible():
             try:
                 inbox_list = self.query_one("#inbox-list", ListView)
@@ -4726,6 +4747,11 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
                 else:
                     self._ensure_main_content_visible(show_inbox=inbox_was_visible)
                     self._show_session_waiting(target)
+
+                # Refresh chat feed to show the queued message
+                if self._chat_view_active:
+                    self._chat_content_hash = ""  # Force rebuild
+                    self._refresh_chat_feed()
 
         self.push_screen(
             TextInputModal(
