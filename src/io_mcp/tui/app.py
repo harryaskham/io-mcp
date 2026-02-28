@@ -2047,12 +2047,15 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         # Show the main content container
         if self._chat_view_active:
             # In chat view: show #main-content with limited height for choices
+            # but NEVER show the inbox sidebar
             try:
                 mc = self.query_one("#main-content")
                 mc.display = True
                 mc.styles.height = "auto"
                 mc.styles.max_height = "50%"
-                self.query_one("#inbox-list").display = False
+                inbox = self.query_one("#inbox-list")
+                inbox.display = False
+                inbox.styles.width = 0
             except Exception:
                 pass
         else:

@@ -180,11 +180,13 @@ class ChatViewMixin:
             if hasattr(self, '_chat_refresh_timer') and self._chat_refresh_timer:
                 self._chat_refresh_timer.stop()
                 self._chat_refresh_timer = None
-            # Restore main-content height from auto back to 1fr
+            # Restore main-content height and inbox width from chat view overrides
             try:
                 mc = self.query_one("#main-content")
                 mc.styles.height = "1fr"
                 mc.styles.max_height = None
+                inbox = self.query_one("#inbox-list")
+                inbox.styles.width = 30  # Restore default width
             except Exception:
                 pass
             self._speak_ui("Chat view closed.")
