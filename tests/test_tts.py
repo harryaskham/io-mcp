@@ -56,14 +56,19 @@ class FakeConfig:
         self.tts_ui_voice = ""
         self.tts_ui_voice_preset = ""
 
+    def tts_speed_for(self, context: str) -> float:
+        """Return the base speed for any context (no sub-speeds in tests)."""
+        return self.tts_speed
+
     def tts_cli_args(self, text: str, voice_override=None, emotion_override=None,
-                     model_override=None):
+                     model_override=None, speed_override=None):
         voice = voice_override or self.tts_voice
+        speed = speed_override if speed_override is not None else self.tts_speed
         return [
             text,
             "--model", self.tts_model_name,
             "--voice", voice,
-            "--speed", str(self.tts_speed),
+            "--speed", str(speed),
             "--stdout",
             "--response-format", "wav",
         ]
@@ -391,7 +396,7 @@ class TestSpeak:
             mock_play.assert_called_once_with(
                 "hello", block=True,
                 voice_override="coral", emotion_override=None,
-                model_override=None,
+                model_override=None, speed_override=None,
             )
 
     def test_speak_async_runs_in_thread(self):
@@ -507,7 +512,8 @@ class TestSpeakWithLocalFallback:
             engine.speak_with_local_fallback("uncached text")
             # Cache miss in API mode → falls back to speak_async (not espeak)
             mock_async.assert_called_once_with(
-                "uncached text", voice_override=None, emotion_override=None)
+                "uncached text", voice_override=None, emotion_override=None,
+                speed_override=None)
 
     def test_termux_backend_calls_speak_termux(self):
         config = FakeConfig(local_backend="termux")
@@ -1286,7 +1292,8 @@ class TestSpeakFragmentsScroll:
             # Falls back with full text
             mock_fallback.assert_called_once_with(
                 "uncached1 uncached2",
-                voice_override=None, emotion_override=None)
+                voice_override=None, emotion_override=None,
+                speed_override=None)
 
     def test_noop_when_muted(self):
         engine = _make_engine()

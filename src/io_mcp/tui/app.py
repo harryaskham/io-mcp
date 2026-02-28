@@ -344,17 +344,20 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         Uses speak_with_local_fallback for instant cached playback.
         """
         voice_ov = None
+        speed_ov = self._config.tts_speed_for("ui") if self._config else None
         if self._config:
             ui_preset = self._config.tts_ui_voice_preset
             # Only override if uiVoice is explicitly set and different from default
             if ui_preset and ui_preset != self._config.tts_voice_preset:
                 voice_ov = ui_preset
-        self._tts.speak_with_local_fallback(text, voice_override=voice_ov)
+        self._tts.speak_with_local_fallback(text, voice_override=voice_ov,
+                                            speed_override=speed_ov)
 
     @work(thread=True, exit_on_error=False, group="pregenerate")
-    def _pregenerate_worker(self, texts: list[str]) -> None:
+    def _pregenerate_worker(self, texts: list[str],
+                            speed_override: Optional[float] = None) -> None:
         """Worker: pregenerate TTS clips in background thread."""
-        self._tts.pregenerate(texts)
+        self._tts.pregenerate(texts, speed_override=speed_override)
 
     @work(thread=True, exit_on_error=False, group="pregenerate-ui")
     def _pregenerate_ui_worker(self, texts: list[str]) -> None:
@@ -365,11 +368,13 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
         pregeneration for API bandwidth.
         """
         voice_ov = None
+        speed_ov = self._config.tts_speed_for("ui") if self._config else None
         if self._config:
             ui_preset = self._config.tts_ui_voice_preset
             if ui_preset and ui_preset != self._config.tts_voice_preset:
                 voice_ov = ui_preset
-        self._tts.pregenerate_ui(texts, voice_override=voice_ov)
+        self._tts.pregenerate_ui(texts, voice_override=voice_ov,
+                                 speed_override=speed_ov)
 
     def _ensure_main_content_visible(self, show_inbox: bool = False) -> None:
         """Ensure the #main-content container is visible.
@@ -1786,7 +1791,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             if summary:
                 fragment_texts.add(summary)
         fragment_texts.add("selected")
-        self._pregenerate_worker(list(fragment_texts))
+        ui_speed = self._config.tts_speed_for("ui") if self._config else None
+        self._pregenerate_worker(list(fragment_texts), speed_override=ui_speed)
 
         # Pregenerate extra option labels in separate UI queue
         # so they don't compete with agent choice pregeneration.
@@ -1810,7 +1816,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             # Speak the full intro (preamble + option titles) sequentially.
             # The speech lock in TTSEngine ensures this queues behind any
             # in-progress speech without interrupting it.
-            self._tts.speak(full_intro)
+            preamble_speed = self._config.tts_speed_for("preamble") if self._config else None
+            self._tts.speak(full_intro, speed_override=preamble_speed)
 
             session.intro_speaking = False
             # Read each option with full summary — breaks if user scrolls
@@ -2687,13 +2694,17 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
             # TTSEngine speech lock. Urgent items queue at front of
             # the inbox but don't kill current playback.
             if block:
+                speak_speed = self._config.tts_speed_for("speak") if self._config else None
                 self._tts.speak(text, voice_override=voice_ov,
                                 emotion_override=emotion_ov,
-                                model_override=model_ov)
+                                model_override=model_ov,
+                                speed_override=speak_speed)
             else:
+                async_speed = self._config.tts_speed_for("speakAsync") if self._config else None
                 self._tts.speak_async(text, voice_override=voice_ov,
                                      emotion_override=emotion_ov,
-                                     model_override=model_ov)
+                                     model_override=model_ov,
+                                     speed_override=async_speed)
         else:
             # Background: queue (urgent goes to front)
             entry.played = False
@@ -4251,11 +4262,15 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                     self._last_spoken_text = text
                     self._last_spoken_time = now
                     # Use fragment-based playback for cached fragments,
-                    # falling back to speak_with_local_fallback for uncached
+                    # falling back to speak_with_local_fallback for uncached.
+                    # Use UI speed for scroll readout (numbers, labels, summaries).
+                    ui_speed = self._config.tts_speed_for("ui") if self._config else None
                     if fragments and len(fragments) > 1:
-                        self._tts.speak_fragments_scroll(fragments)
+                        self._tts.speak_fragments_scroll(fragments,
+                                                         speed_override=ui_speed)
                     else:
-                        self._tts.speak_with_local_fallback(text)
+                        self._tts.speak_with_local_fallback(text,
+                                                            speed_override=ui_speed)
 
             if self._dwell_time > 0:
                 self._start_dwell()
@@ -4520,7 +4535,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
                 self._freeform_tts.stop()
                 self._tts.stop()
                 self._vibrate(100)
-                self._tts.speak_fragments(["selected", result])
+                ui_speed = self._config.tts_speed_for("ui") if self._config else None
+                self._tts.speak_fragments(["selected", result], speed_override=ui_speed)
                 self._resolve_selection(session, {"selected": result, "summary": "(freeform input)"})
                 self._show_waiting(result)
 
@@ -5121,7 +5137,8 @@ class IoMcpApp(ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         self._tts.stop()
         # Use fragment playback: "selected" + label are cached individually
-        self._tts.speak_fragments(["selected", label])
+        ui_speed = self._config.tts_speed_for("ui") if self._config else None
+        self._tts.speak_fragments(["selected", label], speed_override=ui_speed)
 
         # Record in history
         try:

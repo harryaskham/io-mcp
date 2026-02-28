@@ -122,6 +122,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "voice": "noa",
             "uiVoice": "teo",
             "speed": 1.0,
+            "speeds": {
+                "speak": 1.5,          # blocking agent speech (speak())
+                "speakAsync": 2.0,     # non-blocking agent speech (speak_async())
+                "preamble": 1.0,       # preamble readout when choices arrive
+                "choiceLabel": 1.5,    # choice option labels during readout
+                "choiceSummary": 2.0,  # choice option summaries during readout
+                "ui": 1.5,            # UI narration (settings, menus, numbers, "selected")
+            },
             "style": "whispering",
             "styleDegree": 2,
             "localBackend": "espeak",  # "termux", "espeak", or "none"
@@ -624,6 +632,20 @@ class IoMcpConfig:
     @property
     def tts_speed(self) -> float:
         return float(self.runtime.get("tts", {}).get("speed", 1.0))
+
+    def tts_speed_for(self, context: str) -> float:
+        """Get TTS speed for a specific context.
+
+        Returns the per-context speed from config.tts.speeds if set,
+        otherwise falls back to the base speed (config.tts.speed).
+
+        Contexts: speak, speakAsync, preamble, choiceLabel, choiceSummary, ui
+        """
+        speeds = self.runtime.get("tts", {}).get("speeds", {})
+        val = speeds.get(context)
+        if val is not None:
+            return float(val)
+        return self.tts_speed
 
     @property
     def tts_emotion(self) -> str:
@@ -1154,14 +1176,17 @@ class IoMcpConfig:
 
     def tts_cli_args(self, text: str, voice_override: Optional[str] = None,
                      emotion_override: Optional[str] = None,
-                     model_override: Optional[str] = None) -> list[str]:
+                     model_override: Optional[str] = None,
+                     speed_override: Optional[float] = None) -> list[str]:
         """Build CLI args for the tts tool based on current config.
 
         Returns the full argument list (excluding the 'tts' binary itself).
-        Optional overrides for voice/emotion/model (used for per-session rotation).
+        Optional overrides for voice/emotion/model/speed (used for per-session
+        rotation and per-context speed).
 
         voice_override can be a preset name or a raw voice string.
         model_override overrides the model from the voice preset.
+        speed_override overrides the base speed (e.g. per-context speeds).
 
         Style handling: always passes ``--style <name>`` for both providers.
         The tts CLI handles OpenAI instructions and Azure SSML internally.
@@ -1190,7 +1215,7 @@ class IoMcpConfig:
             args.extend(["--model", model_name])
             args.extend(["--voice", voice])
 
-        args.extend(["--speed", str(self.tts_speed)])
+        args.extend(["--speed", str(speed_override if speed_override is not None else self.tts_speed)])
 
         # Style: just pass --style for both providers
         style = emotion_override or self.tts_style
