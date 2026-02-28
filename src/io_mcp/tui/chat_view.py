@@ -318,7 +318,21 @@ class ChatViewMixin:
                         ),
                     ))
 
-            # 3. Pending choices — skip, they're shown via the normal #choices widget
+            # 3. Pending choices — show as interactive bubble with numbered options
+            #    User selects via number keys (1-9) or freeform input (i)
+            if sess.active and sess.choices:
+                raw_items.append((
+                    _time.time(),
+                    "choices",
+                    ChatBubbleItem(
+                        kind="choices",
+                        text=sess.preamble[:200] if sess.preamble else "",
+                        timestamp=_time.time(),
+                        resolved=False,
+                        choices=sess.choices[:9],
+                        agent_name=name,
+                    ),
+                ))
 
             # 4. User messages (pending = queued, flushed = delivered)
             now = _time.time()

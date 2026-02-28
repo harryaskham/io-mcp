@@ -2030,6 +2030,10 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         if self._chat_view_active:
             self._chat_content_hash = ""  # Force rebuild
             self._refresh_chat_feed()
+            # In chat view, choices appear as a bubble in the feed.
+            # Don't show #main-content, #preamble, or any other panel.
+            self._update_footer_status()
+            return
 
         # Don't overwrite the UI if user is composing a message or typing
         if self._message_mode or (session and session.input_mode):
@@ -2045,21 +2049,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         self.query_one("#status").display = False
 
         # Show the main content container
-        if self._chat_view_active:
-            # In chat view: show #main-content with limited height for choices
-            # but NEVER show the inbox sidebar
-            try:
-                mc = self.query_one("#main-content")
-                mc.display = True
-                mc.styles.height = "auto"
-                mc.styles.max_height = "50%"
-                inbox = self.query_one("#inbox-list")
-                inbox.display = False
-                inbox.styles.width = 0
-            except Exception:
-                pass
-        else:
-            self._ensure_main_content_visible(show_inbox=True)
+        self._ensure_main_content_visible(show_inbox=True)
 
         list_view = self.query_one("#choices", ListView)
 
@@ -4995,6 +4985,22 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         if not session:
             return
         if session.input_mode or session.voice_recording:
+            return
+
+        # Chat view: select choice directly by number
+        if self._chat_view_active and session.active and session.choices:
+            if n < 1 or n > len(session.choices):
+                return
+            c = session.choices[n - 1]
+            label = c.get("label", "")
+            summary = c.get("summary", "")
+            self._tts.stop()
+            self._vibrate(100)
+            ui_speed = self._config.tts_speed_for("ui") if self._config else None
+            self._tts.speak_fragments(["selected", label], speed_override=ui_speed)
+            self._resolve_selection(session, {"selected": label, "summary": summary})
+            self._chat_content_hash = ""
+            self._refresh_chat_feed()
             return
 
         # Quick settings submenu — dispatch by number
