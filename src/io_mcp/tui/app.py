@@ -2490,7 +2490,11 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         Uses a combined generation counter to skip no-op rebuilds.
         Skips UI updates when user is composing freeform input or a message.
+        In chat view, the inbox is never shown — skip entirely.
         """
+        # Chat view: inbox is hidden, skip all work
+        if self._chat_view_active:
+            return
         # Don't rebuild inbox while user is typing — it can steal focus
         if self._message_mode or self._filter_mode:
             return
