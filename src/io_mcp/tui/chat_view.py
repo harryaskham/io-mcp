@@ -42,7 +42,8 @@ class ChatBubbleItem(ListItem):
     def __init__(self, kind: str, text: str, timestamp: float,
                  detail: str = "", resolved: bool = False,
                  result: str = "", choices: list[dict] | None = None,
-                 flushed: bool = False, **kwargs) -> None:
+                 flushed: bool = False, agent_name: str = "agent",
+                 **kwargs) -> None:
         super().__init__(**kwargs)
         self.bubble_kind = kind
         self.bubble_text = text
@@ -52,6 +53,7 @@ class ChatBubbleItem(ListItem):
         self.bubble_result = result
         self.bubble_choices = choices or []
         self.bubble_flushed = flushed
+        self.agent_name = agent_name
         # Plain text for TTS readout (no markup, no timestamps)
         self.tts_text = self._make_tts_text()
 
@@ -83,7 +85,7 @@ class ChatBubbleItem(ListItem):
             ts = _time.strftime("%H:%M", _time.localtime(self.bubble_timestamp))
             yield Label(
                 f"[{s['fg_dim']}]{ts}[/{s['fg_dim']}]  "
-                f"[{s['accent']}]agent[/{s['accent']}]  "
+                f"[{s['accent']}]{self.agent_name}[/{s['accent']}]  "
                 f"{self.bubble_text}",
                 classes="chat-bubble-text",
             )
@@ -198,7 +200,15 @@ class ChatViewMixin:
             return
 
         self._tts.stop()
-        self._speak_ui(f"Chat view for {session.name}. Press g to close.")
+
+        # Determine if unified mode (all agents) or single-session mode
+        all_sessions = list(self.manager.all_sessions()) if hasattr(self, 'manager') else []
+        if len(all_sessions) > 1:
+            self._chat_unified = True
+            self._speak_ui(f"Chat view for all agents. Press g to close.")
+        else:
+            self._chat_unified = False
+            self._speak_ui(f"Chat view for {session.name}. Press g to close.")
 
         # Show chat view, hide main content and speech log
         self.query_one("#main-content").display = False
@@ -210,14 +220,18 @@ class ChatViewMixin:
         chat_view.display = True
         self._chat_view_active = True
 
-        # Build feed
-        self._build_chat_feed(session)
+        # Build feed — unified or single-session
+        if self._chat_unified:
+            self._build_chat_feed(session, sessions=all_sessions)
+        else:
+            self._build_chat_feed(session)
 
         # Auto-refresh every 3 seconds
         self._chat_refresh_timer = self.set_interval(
             3.0, lambda: self._refresh_chat_feed())
 
-    def _build_chat_feed(self: "IoMcpApp", session: "Session") -> None:
+    def _build_chat_feed(self: "IoMcpApp", session: "Session",
+                         sessions: list["Session"] | None = None) -> None:
         """Build the chronological chat feed from session data."""
         try:
             feed = self.query_one("#chat-feed", ListView)
@@ -225,10 +239,17 @@ class ChatViewMixin:
             return
 
         # Update content hash so periodic refresh skips redundant rebuilds
-        self._chat_content_hash = self._chat_content_fingerprint(session)
+        if sessions:
+            # Unified view: build fingerprint from all sessions
+            parts = []
+            for s in sessions:
+                parts.append(self._chat_content_fingerprint(s))
+            self._chat_content_hash = "||".join(parts)
+        else:
+            self._chat_content_hash = self._chat_content_fingerprint(session)
 
         feed.clear()
-        items = self._collect_chat_items(session)
+        items = self._collect_chat_items(session, sessions=sessions)
 
         for item in items:
             try:
@@ -243,88 +264,103 @@ class ChatViewMixin:
         except Exception:
             pass
 
-    def _collect_chat_items(self: "IoMcpApp", session: "Session") -> list[ChatBubbleItem]:
-        """Merge all session data into a chronological list of ChatBubbleItems."""
+    def _collect_chat_items(self: "IoMcpApp", session: "Session",
+                            sessions: list["Session"] | None = None) -> list[ChatBubbleItem]:
+        """Merge session data into a chronological list of ChatBubbleItems.
+
+        Args:
+            session: Primary session (used for single-session view).
+            sessions: If provided, collect from ALL sessions (unified view).
+                     Each bubble will be tagged with the agent name.
+        """
+        all_sessions = sessions if sessions else [session]
         raw_items: list[tuple[float, str, ChatBubbleItem]] = []
 
-        # 1. Speech log entries
-        for entry in session.speech_log:
-            raw_items.append((
-                entry.timestamp,
-                "speech",
-                ChatBubbleItem(
-                    kind="speech",
-                    text=entry.text[:200],
-                    timestamp=entry.timestamp,
-                ),
-            ))
+        for sess in all_sessions:
+            name = sess.name or "agent"
 
-        # 2. Resolved inbox items (choices that were answered)
-        for item in session.inbox_done:
-            if item.kind == "choices":
-                result_label = ""
-                if item.result:
-                    result_label = item.result.get("selected", "")
+            # 1. Speech log entries
+            for entry in sess.speech_log:
                 raw_items.append((
-                    item.timestamp,
-                    "choices",
+                    entry.timestamp,
+                    "speech",
                     ChatBubbleItem(
-                        kind="choices",
-                        text=item.preamble[:200],
-                        timestamp=item.timestamp,
-                        resolved=True,
-                        result=result_label,
-                        choices=item.choices[:9],  # cap at 9
+                        kind="speech",
+                        text=entry.text[:200],
+                        timestamp=entry.timestamp,
+                        agent_name=name,
                     ),
                 ))
 
-        # 3. Pending inbox items (choices waiting for selection)
-        for item in session.inbox:
-            if item.kind == "choices" and not item.done:
+            # 2. Resolved inbox items (choices that were answered)
+            for item in sess.inbox_done:
+                if item.kind == "choices":
+                    result_label = ""
+                    if item.result:
+                        result_label = item.result.get("selected", "")
+                    raw_items.append((
+                        item.timestamp,
+                        "choices",
+                        ChatBubbleItem(
+                            kind="choices",
+                            text=item.preamble[:200],
+                            timestamp=item.timestamp,
+                            resolved=True,
+                            result=result_label,
+                            choices=item.choices[:9],
+                            agent_name=name,
+                        ),
+                    ))
+
+            # 3. Pending inbox items (choices waiting for selection)
+            for item in sess.inbox:
+                if item.kind == "choices" and not item.done:
+                    raw_items.append((
+                        item.timestamp,
+                        "choices",
+                        ChatBubbleItem(
+                            kind="choices",
+                            text=item.preamble[:200],
+                            timestamp=item.timestamp,
+                            resolved=False,
+                            choices=item.choices[:9],
+                            agent_name=name,
+                        ),
+                    ))
+
+            # 4. User messages (pending = queued, flushed = delivered)
+            now = _time.time()
+            for msg in sess.pending_messages:
                 raw_items.append((
-                    item.timestamp,
-                    "choices",
+                    now,
+                    "user_msg",
                     ChatBubbleItem(
-                        kind="choices",
-                        text=item.preamble[:200],
-                        timestamp=item.timestamp,
-                        resolved=False,
-                        choices=item.choices[:9],
+                        kind="user_msg",
+                        text=msg[:200],
+                        timestamp=now,
+                        flushed=False,
+                        agent_name=name,
                     ),
                 ))
 
-        # 4. User messages (pending = queued, flushed = delivered)
-        # pending_messages don't have timestamps, so use current time
-        now = _time.time()
-        for msg in session.pending_messages:
-            raw_items.append((
-                now,
-                "user_msg",
-                ChatBubbleItem(
-                    kind="user_msg",
-                    text=msg[:200],
-                    timestamp=now,
-                    flushed=False,
-                ),
-            ))
-
-        # 5. Activity log entries (tool calls, status updates)
-        for entry in session.activity_log:
-            kind = entry.get("kind", "tool")
-            if kind in ("speech", "selection"):
-                continue  # already covered by speech_log and inbox_done
-            tool = entry.get("tool", "")
-            detail = entry.get("detail", "")
-            text = f"{tool}" + (f": {detail[:60]}" if detail else "")
-            raw_items.append((
-                entry["timestamp"],
-                "system",
-                ChatBubbleItem(
-                    kind="system",
-                    text=text,
-                    timestamp=entry["timestamp"],
-                ),
-            ))
+            # 5. Activity log entries (tool calls, status updates)
+            for entry in sess.activity_log:
+                kind = entry.get("kind", "tool")
+                if kind in ("speech", "selection"):
+                    continue
+                tool = entry.get("tool", "")
+                detail = entry.get("detail", "")
+                text = f"{tool}" + (f": {detail[:60]}" if detail else "")
+                raw_items.append((
+                    entry["timestamp"],
+                    "system",
+                    ChatBubbleItem(
+                        kind="system",
+                        text=text,
+                        timestamp=entry["timestamp"],
+                        agent_name=name,
+                    ),
+                ))
 
         # Sort by timestamp and return just the ChatBubbleItems
         raw_items.sort(key=lambda x: x[0])
@@ -371,12 +407,20 @@ class ChatViewMixin:
         if not session:
             return
 
-        # Only rebuild if content actually changed
-        fingerprint = self._chat_content_fingerprint(session)
-        if fingerprint == self._chat_content_hash:
-            return
-        self._chat_content_hash = fingerprint
-        self._build_chat_feed(session)
+        # Unified mode: collect from all sessions
+        if getattr(self, '_chat_unified', False):
+            all_sessions = list(self.manager.all_sessions()) if hasattr(self, 'manager') else [session]
+            fingerprint = "||".join(self._chat_content_fingerprint(s) for s in all_sessions)
+            if fingerprint == self._chat_content_hash:
+                return
+            self._chat_content_hash = fingerprint
+            self._build_chat_feed(session, sessions=all_sessions)
+        else:
+            fingerprint = self._chat_content_fingerprint(session)
+            if fingerprint == self._chat_content_hash:
+                return
+            self._chat_content_hash = fingerprint
+            self._build_chat_feed(session)
 
     def _handle_chat_message_input(self: "IoMcpApp", message: str) -> None:
         """Handle a message submitted from the chat input box."""
