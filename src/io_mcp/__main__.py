@@ -509,6 +509,7 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
         session.last_tool_name = "present_choices"
         preamble = args.get("preamble", "")
         choices = args.get("choices", [])
+        timeout = args.get("timeout", None)  # Optional timeout in seconds
         if not choices:
             return json.dumps({"selected": "error", "summary": "No choices provided"})
 
@@ -543,7 +544,26 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
         while True:
             session.last_preamble = preamble
             session.last_choices = list(all_choices)
-            result = frontend.present_choices(session, preamble, all_choices)
+
+            if timeout is not None and timeout > 0:
+                # Non-blocking: present choices and return after timeout
+                # Choices stay visible — user can still select later
+                import threading as _threading
+                result_box = [None]
+                def _present():
+                    result_box[0] = frontend.present_choices(session, preamble, all_choices)
+                t = _threading.Thread(target=_present, daemon=True)
+                t.start()
+                t.join(timeout=float(timeout))
+                if result_box[0] is None:
+                    # Timed out — choices are still displayed for the user
+                    return _attach_messages(
+                        json.dumps({"selected": "_timeout", "summary": f"No selection within {timeout}s — choices still visible"}),
+                        session)
+                result = result_box[0]
+            else:
+                result = frontend.present_choices(session, preamble, all_choices)
+
             if result.get("selected") == "_cancelled":
                 # MCP client cancelled the tool call — return immediately
                 return json.dumps({"selected": "error", "summary": "Cancelled by client"})

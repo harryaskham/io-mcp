@@ -259,7 +259,7 @@ def create_proxy_server(
     # ─── Tool definitions (thin proxies) ──────────────────────────
 
     @server.tool()
-    async def present_choices(preamble: str, choices: list[dict], ctx: Context) -> str:
+    async def present_choices(preamble: str, choices: list[dict], ctx: Context, timeout: float = 0) -> str:
         """Present multi-choice options to the user via scroll-wheel TUI.
 
         The user navigates choices with a scroll wheel (or j/k keys) and
@@ -275,13 +275,21 @@ def create_proxy_server(
             List of choice objects, each with:
             - "label": Short 2-5 word label (read aloud on every scroll)
             - "summary": 1-2 sentence explanation (shown on screen)
+        timeout:
+            Optional timeout in seconds. If > 0, returns after timeout even
+            if no selection was made (choices stay visible for the user).
+            Default 0 = wait indefinitely for selection (normal behavior).
+            Use for debugging/testing only — normal agents should wait.
 
         Returns
         -------
         str
             JSON string: {"selected": "chosen label", "summary": "chosen summary"}
         """
-        return await _fwd("present_choices", {"preamble": preamble, "choices": choices}, ctx)
+        args = {"preamble": preamble, "choices": choices}
+        if timeout and timeout > 0:
+            args["timeout"] = timeout
+        return await _fwd("present_choices", args, ctx)
 
     @server.tool()
     async def present_multi_select(preamble: str, choices: list[dict], ctx: Context) -> str:
