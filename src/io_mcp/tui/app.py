@@ -393,29 +393,30 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         Called before showing the #choices list in any context (settings,
         etc.) since #choices is nested inside #main-content > #choices-panel.
 
-        In chat view mode, main-content is shown but with inbox hidden and
-        a height limit so choices don't overwhelm the chat feed.
+        In chat view mode, this is a no-op for most callers. Only
+        _show_choices explicitly shows #main-content in chat view (with
+        limited height) when there are active choices to display.
 
         Args:
             show_inbox: If True, also update and show the inbox list
                        (unless user has collapsed it). If False, hide
                        the inbox list (for modal views).
         """
+        # Chat view: don't show #main-content here — only _show_choices
+        # should show it when choices are active. This prevents the
+        # waiting state from appearing below the chat feed.
+        if self._chat_view_active:
+            return
+
         try:
             mc = self.query_one("#main-content")
             mc.display = True
-            # In chat view, limit main-content height and always hide inbox
-            if self._chat_view_active:
-                mc.styles.height = "auto"
-                mc.styles.max_height = "50%"
-                self.query_one("#inbox-list").display = False
+            mc.styles.height = "1fr"
+            mc.styles.max_height = None
+            if show_inbox and not self._inbox_collapsed:
+                self._update_inbox_list()
             else:
-                mc.styles.height = "1fr"
-                mc.styles.max_height = None
-                if show_inbox and not self._inbox_collapsed:
-                    self._update_inbox_list()
-                else:
-                    self.query_one("#inbox-list").display = False
+                self.query_one("#inbox-list").display = False
         except Exception:
             pass
 
@@ -2043,8 +2044,19 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         self.query_one("#status").display = False
 
-        # Show the main content container (with inbox list if applicable)
-        self._ensure_main_content_visible(show_inbox=True)
+        # Show the main content container
+        if self._chat_view_active:
+            # In chat view: show #main-content with limited height for choices
+            try:
+                mc = self.query_one("#main-content")
+                mc.display = True
+                mc.styles.height = "auto"
+                mc.styles.max_height = "50%"
+                self.query_one("#inbox-list").display = False
+            except Exception:
+                pass
+        else:
+            self._ensure_main_content_visible(show_inbox=True)
 
         list_view = self.query_one("#choices", ListView)
 
@@ -2128,6 +2140,11 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         if self._chat_view_active:
             self._chat_content_hash = ""  # Force rebuild
             self._refresh_chat_feed()
+            # Hide main-content in chat view — no choices to display
+            try:
+                self.query_one("#main-content").display = False
+            except Exception:
+                pass
 
         self.query_one("#preamble").display = False
         self.query_one("#dwell-bar").display = False
@@ -2136,7 +2153,8 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         session_name = session.name if session else ""
         after_text = f"Selected: {label}" if self._demo else f"[{self._cs['success']}]*[/{self._cs['success']}] [{session_name}] {label} [dim](u=undo)[/dim]"
         status.update(after_text)
-        status.display = True
+        # In chat view, don't show the status bar — it's redundant with the chat feed
+        status.display = not self._chat_view_active
 
         # Show waiting state with metadata in the right pane
         self._show_waiting_with_shortcuts(session)
@@ -2165,8 +2183,9 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         if session is None:
             status_text = "[dim]Ready -- demo mode[/dim]" if self._demo else "[dim]Waiting for agent...[/dim]"
             status.update(status_text)
-            status.display = True
-            self.query_one("#main-content").display = False
+            status.display = not self._chat_view_active
+            if not self._chat_view_active:
+                self.query_one("#main-content").display = False
             return
 
         if session.tool_call_count > 0:
@@ -2174,7 +2193,16 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         else:
             status_text = f"[{self._cs['accent']}]{session.name} connected[/{self._cs['accent']}]"
         status.update(status_text)
-        status.display = True
+        # In chat view, don't show status — the feed provides context
+        status.display = not self._chat_view_active
+
+        # In chat view, hide main-content (no choices to show)
+        if self._chat_view_active:
+            try:
+                self.query_one("#main-content").display = False
+            except Exception:
+                pass
+            return
 
         # Show inbox view with history
         self._ensure_main_content_visible(show_inbox=True)
