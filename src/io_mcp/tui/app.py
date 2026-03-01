@@ -135,6 +135,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         Binding("c", "toggle_conversation", "Chat", show=False),
         Binding("v", "pane_view", "Pane", show=False),
         Binding("g", "chat_view", "Chat Feed", show=False),
+        Binding("G", "chat_scroll_bottom", "Scroll bottom", show=False),
         Binding("b", "toggle_sidebar", "Sidebar", show=False),
         Binding("d", "dismiss_item", "Dismiss", show=False),
         Binding("question_mark", "show_help", "Help", show=False),

@@ -250,6 +250,7 @@ class ChatViewMixin:
         _chat_last_item_count: Previous item count for incremental logic.
         _chat_base_fingerprint: Fingerprint of stable items for delta detection.
         _chat_force_full_rebuild: Flag to skip incremental append once.
+        _chat_has_new_content: True when new content arrived while scrolled up.
     """
 
     _chat_view_active: bool = False
@@ -259,6 +260,7 @@ class ChatViewMixin:
     _chat_last_item_count: int = 0  # Track item count for incremental appends
     _chat_base_fingerprint: str = ""  # Fingerprint of "stable" data (detect modifications)
     _chat_force_full_rebuild: bool = False  # Set by external code to skip incremental
+    _chat_has_new_content: bool = False  # New content below scroll position
 
     @_safe_action
     def action_chat_view(self: "IoMcpApp") -> None:
@@ -358,8 +360,10 @@ class ChatViewMixin:
             pass
         self._chat_view_active = True
         self._chat_auto_scroll = True  # Start at bottom when opening chat view
+        self._chat_has_new_content = False  # Clear new-content indicator
         self._chat_last_item_count = 0  # Force full build on open
         self._chat_base_fingerprint = ""  # Reset incremental tracker
+        self._update_chat_new_indicator()  # Hide indicator label
 
         # Build feed — unified or single-session
         if self._chat_unified:
@@ -546,12 +550,21 @@ class ChatViewMixin:
 
         # Only scroll to bottom if user was already at the bottom
         # (respects their scroll position if they scrolled up to read history)
+        had_new_items = len(items) > old_count
         try:
             if len(feed.children) > 0 and was_at_bottom:
                 feed.scroll_end(animate=False)
                 self._chat_auto_scroll = True
+                # Clear the indicator since we're at the bottom
+                if self._chat_has_new_content:
+                    self._chat_has_new_content = False
+                    self._update_chat_new_indicator()
             elif not was_at_bottom:
                 self._chat_auto_scroll = False
+                # Show "↓ New" indicator if new items arrived while scrolled up
+                if had_new_items and not self._chat_has_new_content:
+                    self._chat_has_new_content = True
+                    self._update_chat_new_indicator()
         except Exception:
             pass
 
@@ -799,6 +812,9 @@ class ChatViewMixin:
         if not session:
             return
 
+        # Check if user scrolled back to bottom (clears indicator)
+        self._check_chat_scroll_position()
+
         # Unified mode: collect from all sessions
         if getattr(self, '_chat_unified', False):
             all_sessions = list(self.manager.all_sessions()) if hasattr(self, 'manager') else [session]
@@ -857,3 +873,66 @@ class ChatViewMixin:
         # (incremental append will still be used if base fingerprint is unchanged)
         self._chat_content_hash = ""
         self._refresh_chat_feed()
+
+    def _update_chat_new_indicator(self: "IoMcpApp") -> None:
+        """Show or hide the '↓ New' indicator below the chat feed.
+
+        When ``_chat_has_new_content`` is True and the chat view is active,
+        displays a styled label at the bottom of the ``#footer-status``
+        bar indicating that new content is available below the current
+        scroll position. Clears the label when the flag is False.
+
+        Uses the app's color scheme for accent coloring. The indicator
+        uses the ``#footer-status`` Static widget that's always docked
+        at the bottom of the screen.
+        """
+        try:
+            footer = self.query_one("#footer-status")
+            if self._chat_has_new_content and self._chat_view_active:
+                try:
+                    s = get_scheme(self._color_scheme)
+                except Exception:
+                    s = get_scheme(DEFAULT_SCHEME)
+                footer.update(
+                    f"[bold {s['accent']}]↓ New[/bold {s['accent']}]"
+                    f"  [{s['fg_dim']}]press G to scroll down[/{s['fg_dim']}]"
+                )
+            else:
+                footer.update("")
+        except Exception:
+            pass
+
+    def action_chat_scroll_bottom(self: "IoMcpApp") -> None:
+        """Scroll the chat feed to the bottom and clear the new-content indicator.
+
+        Bound to the ``G`` key. Scrolls the ``#chat-feed`` ListView to
+        the end, re-enables auto-scroll, and clears the '↓ New' indicator
+        if it was showing.
+
+        Only active when the chat view is displayed. No-op otherwise.
+        """
+        if not self._chat_view_active:
+            return
+        try:
+            feed = self.query_one("#chat-feed", ListView)
+            feed.scroll_end(animate=False)
+            self._chat_auto_scroll = True
+            if self._chat_has_new_content:
+                self._chat_has_new_content = False
+                self._update_chat_new_indicator()
+        except Exception:
+            pass
+
+    def _check_chat_scroll_position(self: "IoMcpApp") -> None:
+        """Check if the user has scrolled back to the bottom and clear the indicator.
+
+        Called from scroll event handlers or timers to detect when the user
+        manually scrolls to the bottom of the chat feed. If they're at the
+        bottom and the new-content indicator is showing, clears it.
+        """
+        if not self._chat_view_active or not self._chat_has_new_content:
+            return
+        if self._chat_feed_is_at_bottom():
+            self._chat_has_new_content = False
+            self._chat_auto_scroll = True
+            self._update_chat_new_indicator()

@@ -140,6 +140,13 @@ class TTSEngine:
         self._api_fail_threshold = _API_FAIL_THRESHOLD
         self._api_fail_cooldown = _API_FAIL_COOLDOWN
 
+        # Suppression chime rate limiting — when circuit breaker is open,
+        # play an error chime at most once per 10 seconds so the user
+        # knows speech was attempted but failed, without spamming audio.
+        self._last_suppression_chime_time: float = 0
+        _SUPPRESSION_CHIME_INTERVAL = 10  # seconds between error chimes
+        self._suppression_chime_interval = _SUPPRESSION_CHIME_INTERVAL
+
         self._env = os.environ.copy()
         self._env["PULSE_SERVER"] = os.environ.get("PULSE_SERVER", "127.0.0.1")
         # Prepend the portaudio lib path, preserving any existing LD_LIBRARY_PATH
@@ -322,6 +329,7 @@ class TTSEngine:
                             _log.info("TTS recovery probe: API recovered")
                             self._api_gen_consecutive_failures = 0
                             self._api_gen_last_error = None
+                            self._notify_tts_recovered()
                             return
                     # Probe failed
                     stderr_out = (proc.stderr or b"").decode(
@@ -379,6 +387,7 @@ class TTSEngine:
         self._api_gen_last_error = None
         self._api_gen_probe_in_progress = False
         self._consecutive_failures = 0
+        self._last_suppression_chime_time = 0
 
     @property
     def tts_health(self) -> dict:
@@ -1194,6 +1203,54 @@ class TTSEngine:
             except Exception:
                 pass
 
+    def _notify_tts_suppressed(self) -> None:
+        """Notify the user that TTS is suppressed due to circuit breaker.
+
+        Plays a short error chime so the user knows speech was attempted
+        but failed. Rate-limited to once per 10 seconds to avoid spam.
+        Also updates the TUI status line via the _on_tts_error callback.
+        """
+        now = _time_mod.time()
+        interval = now - self._last_suppression_chime_time
+        if interval >= self._suppression_chime_interval:
+            self._last_suppression_chime_time = now
+            # Play error chime in background thread (never block main thread)
+            threading.Thread(
+                target=self.play_chime, args=("error",),
+                daemon=True, name="tts-suppression-chime",
+            ).start()
+            _log.debug("TTS suppressed — played error chime (interval=%.1fs)", interval)
+        # Always update the TUI status line
+        cb = getattr(self, '_on_tts_error', None)
+        if cb:
+            try:
+                cb("TTS unavailable")
+            except Exception:
+                pass
+
+    def _notify_tts_recovered(self) -> None:
+        """Notify the user that TTS has recovered after circuit breaker opened.
+
+        Plays a success chime and speaks "Speech restored" as the first
+        utterance after recovery.
+        """
+        _log.info("TTS recovered — playing success chime and announcement")
+        # Reset suppression chime timer so a fresh failure cycle
+        # would start a new chime immediately
+        self._last_suppression_chime_time = 0
+
+        def _do_recovery_notification():
+            self.play_chime("success")
+            _time_mod.sleep(0.3)  # brief pause between chime and speech
+            # speak_async queues behind any active speech, using force=True
+            # internally to bypass the circuit breaker (which just re-opened)
+            self.speak_async("Speech restored")
+
+        threading.Thread(
+            target=_do_recovery_notification, daemon=True,
+            name="tts-recovery-notify",
+        ).start()
+
     def _local_tts_fallback(self, text: str) -> None:
         """Fall back to local TTS when API TTS fails (e.g. missing API key).
 
@@ -1530,6 +1587,11 @@ class TTSEngine:
 
         # Cache miss, API mode — use speak_async() to generate and play.
         # This uses the API TTS voice (not espeak) and caches for next time.
+        # When API is known-broken, notify the user with an error chime
+        # instead of queuing API calls that will time out.
+        if not self._api_gen_available():
+            self._notify_tts_suppressed()
+            return
         self.speak_async(text, voice_override=voice_override,
                          emotion_override=emotion_override,
                          speed_override=speed_override)
@@ -1633,7 +1695,7 @@ class TTSEngine:
         # Skip streaming when API is known-broken — report error
         # force=True bypasses this (agent speech must always attempt)
         if not force and not self._api_gen_available():
-            self._report_tts_error(f"TTS API unavailable: {text[:60]}")
+            self._notify_tts_suppressed()
             return
 
         # Build tts command
