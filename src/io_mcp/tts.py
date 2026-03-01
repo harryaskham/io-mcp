@@ -896,6 +896,67 @@ class TTSEngine:
                          t, speed_override=speed_override, _pregen_gen=my_gen),
                      to_generate)
 
+    def pregenerate_priority(self, texts: list[str],
+                             priority_count: int = 3,
+                             max_workers: int = 0,
+                             speed_override: Optional[float] = None) -> None:
+        """Pregenerate TTS clips with priority for the first N items.
+
+        The first ``priority_count`` texts are generated synchronously in
+        the calling thread so the most likely scroll targets are cached
+        immediately.  The remaining texts are dispatched to a background
+        thread via :meth:`pregenerate`.
+
+        Already-cached texts are skipped in both the priority and
+        background phases.
+
+        Args:
+            texts: All texts to pregenerate.
+            priority_count: How many leading texts to generate
+                synchronously (default 3).
+            max_workers: Passed to :meth:`pregenerate` for the
+                remaining texts.
+            speed_override: Optional speed override for generation.
+        """
+        if not texts:
+            return
+
+        # Skip entirely when API is known-broken
+        if not self._local and not self._api_gen_available():
+            return
+
+        # Increment generation — previous workers will detect this and stop
+        self._pregen_gen += 1
+        my_gen = self._pregen_gen
+
+        # Split into priority (first N) and remainder
+        priority_texts = texts[:priority_count]
+        remaining_texts = texts[priority_count:]
+
+        # Generate priority texts synchronously, skipping cached ones
+        for t in priority_texts:
+            # Check staleness
+            if self._pregen_gen > my_gen:
+                return
+            if self.is_cached(t, speed_override=speed_override):
+                continue
+            self._generate_to_file_unlocked(
+                t, speed_override=speed_override, _pregen_gen=my_gen)
+
+        # Queue the rest in background via pregenerate()
+        # (pregenerate increments _pregen_gen again, which is fine —
+        #  the priority items are already cached)
+        if remaining_texts:
+            # Filter to uncached only before spawning the background work
+            uncached_remaining = [
+                t for t in remaining_texts
+                if not self.is_cached(t, speed_override=speed_override)
+            ]
+            if uncached_remaining:
+                self.pregenerate(uncached_remaining,
+                                 max_workers=max_workers,
+                                 speed_override=speed_override)
+
     def pregenerate_ui(self, texts: list[str],
                        voice_override: Optional[str] = None,
                        speed_override: Optional[float] = None,

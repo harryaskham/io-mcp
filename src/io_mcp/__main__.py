@@ -1578,6 +1578,36 @@ def _run_status_command() -> None:
         except Exception:
             pass
 
+    # ── TTS health (via settings endpoint) ──────────────────
+    if api_healthy:
+        try:
+            url = f"http://localhost:{DEFAULT_API_PORT}/api/settings"
+            req = urllib.request.Request(url, method="GET")
+            with urllib.request.urlopen(req, timeout=2) as resp:
+                settings = json.loads(resp.read().decode())
+                api_health = settings.get("api_health", {})
+                if api_health:
+                    tts_status = api_health.get("available", True)
+                    fails = api_health.get("consecutive_failures", 0)
+                    last_err = api_health.get("last_error")
+                    if tts_status and fails == 0:
+                        print(f"\n  TTS API:  ✔ healthy")
+                    elif tts_status:
+                        print(f"\n  TTS API:  ⚠ recovering ({fails} recent failures)")
+                    else:
+                        cooldown = api_health.get("cooldown_remaining_seconds", 0)
+                        probe = api_health.get("probe_in_progress", False)
+                        parts = [f"✘ circuit open ({fails} failures)"]
+                        if cooldown > 0:
+                            parts.append(f"{cooldown:.0f}s cooldown")
+                        if probe:
+                            parts.append("probing")
+                        if last_err:
+                            parts.append(last_err[:60])
+                        print(f"\n  TTS API:  {', '.join(parts)}")
+        except Exception:
+            pass
+
     # ── Summary ────────────────────────────────────────────
     print("─" * 50)
     if proxy_alive and proxy_port_open and backend_alive and backend_healthy:

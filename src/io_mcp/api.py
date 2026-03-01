@@ -292,13 +292,20 @@ class FrontendAPIHandler(http.server.BaseHTTPRequestHandler):
             self._send_json({"error": "no config"}, 500)
             return
         cfg = frontend.config
-        self._send_json({
+        result = {
             "tts_model": cfg.tts_model_name,
             "tts_voice": cfg.tts_voice,
             "tts_speed": cfg.tts_speed,
             "tts_emotion": cfg.tts_emotion,
             "stt_model": cfg.stt_model_name,
-        })
+        }
+        # Include TTS API health if available
+        if hasattr(frontend, 'tts') and hasattr(frontend.tts, 'api_health'):
+            try:
+                result["api_health"] = frontend.tts.api_health
+            except Exception:
+                pass
+        self._send_json(result)
 
     def _handle_health(self) -> None:
         frontend = getattr(self.server, 'frontend', None)
