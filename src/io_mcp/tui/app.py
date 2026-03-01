@@ -144,6 +144,23 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         voice_message_key = kb.get("voiceMessage", "M")
 
+        # Store key labels for footer hints (human-readable versions)
+        def _key_label(k: str) -> str:
+            """Convert internal key name to display label."""
+            return {"enter": "Enter", "space": "Space", "question_mark": "?",
+                    "slash": "/"}.get(k, k)
+        self._key_labels = {
+            "down": _key_label(down_key),
+            "up": _key_label(up_key),
+            "select": _key_label(select_key),
+            "message": _key_label(message_key),
+            "settings": _key_label(settings_key),
+            "pane": _key_label(pane_key),
+            "dismiss": _key_label(dismiss_key),
+            "undo": _key_label(undo_key),
+            "help": _key_label(help_key),
+        }
+
         self._bindings = [
             Binding(f"{down_key},down", "cursor_down", "Down", show=False),
             Binding(f"{up_key},up", "cursor_up", "Up", show=False),
@@ -1504,7 +1521,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         self._update_footer_status()
 
     def _update_footer_status(self) -> None:
-        """Update the bottom status line with session context."""
+        """Update the bottom status line with session context and keyboard hints."""
         try:
             footer = self.query_one("#footer-status", Static)
         except Exception:
@@ -1512,6 +1529,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         session = self._focused()
         s = self._cs
+        kl = getattr(self, '_key_labels', {})
 
         if session is None:
             footer.update(f"[{s['fg_dim']}]? help[/{s['fg_dim']}]")
@@ -1540,11 +1558,35 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         if _typing_text:
             parts.append(f"[italic {s['fg_dim']}]{_typing_text}[/italic {s['fg_dim']}]")
 
-        # Chat view hint
-        if self._chat_view_active:
-            parts.append(f"[{s['fg_dim']}]g=close[/{s['fg_dim']}]")
+        # Context-aware keyboard shortcut hints
+        dim = s['fg_dim']
+        if self._in_settings:
+            # Settings mode hints
+            _down = kl.get("down", "j")
+            _up = kl.get("up", "k")
+            _sel = kl.get("select", "Enter")
+            _stg = kl.get("settings", "s")
+            hints = f"{_down}/{_up}=scroll  {_sel}=select  {_stg}=back"
+        elif session.active and session.choices:
+            # Choices visible — navigation and selection hints
+            _down = kl.get("down", "j")
+            _up = kl.get("up", "k")
+            _sel = kl.get("select", "Enter")
+            _dis = kl.get("dismiss", "d")
+            _undo = kl.get("undo", "u")
+            hints = f"{_down}/{_up}=scroll  {_sel}=select  1-9=pick  {_dis}=dismiss  {_undo}=undo"
+        elif self._chat_view_active:
+            # Chat/feed view — show close hint and utility shortcuts
+            _msg = kl.get("message", "m")
+            _stg = kl.get("settings", "s")
+            hints = f"g=close  {_msg}=message  {_stg}=settings"
         else:
-            parts.append(f"[{s['fg_dim']}]g=feed[/{s['fg_dim']}]")
+            # Waiting — agent is working, show utility shortcuts
+            _msg = kl.get("message", "m")
+            _stg = kl.get("settings", "s")
+            _pane = kl.get("pane", "v")
+            hints = f"{_msg}=message  {_stg}=settings  {_pane}=pane  g=feed"
+        parts.append(f"[{dim}]{hints}[/{dim}]")
 
         footer.update("  ".join(parts))
 
@@ -2088,6 +2130,26 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         except Exception:
             pass
 
+    def _choices_list_view(self) -> ListView:
+        """Get the correct choices ListView for the current view mode.
+
+        Returns ``#chat-choices`` when chat view is active, otherwise
+        ``#choices`` (the right-pane list in the two-column inbox layout).
+        """
+        if self._chat_view_active:
+            return self.query_one("#chat-choices", ListView)
+        return self.query_one("#choices", ListView)
+
+    def _choices_list_view(self) -> ListView:
+        """Get the correct choices ListView for the current view mode.
+
+        Returns ``#chat-choices`` when chat view is active, otherwise
+        ``#choices`` (the right-pane list in the two-column inbox layout).
+        """
+        if self._chat_view_active:
+            return self.query_one("#chat-choices", ListView)
+        return self.query_one("#choices", ListView)
+
     def _get_item_at_display_index(self, idx: int) -> Optional[ChoiceItem]:
         """Get ChoiceItem at a display position."""
         list_view = self.query_one("#choices", ListView)
@@ -2335,10 +2397,13 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         # In chat view, don't show status — the feed provides context
         status.display = not self._chat_view_active
 
-        # In chat view, hide main-content (no choices to show)
+        # In chat view, rebuild feed for new session and hide choices panel
         if self._chat_view_active:
+            self._chat_content_hash = ""  # Force rebuild
+            self._refresh_chat_feed()
             try:
                 self.query_one("#main-content").display = False
+                self.query_one("#chat-choices").display = False
             except Exception:
                 pass
             self._update_footer_status()
@@ -2984,6 +3049,10 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         self._safe_call(self._update_tab_bar)
         self._safe_call(self._update_inbox_list)
 
+        # Immediately refresh chat feed so new items appear without
+        # waiting for the 3-second timer
+        self._safe_call(lambda: self._notify_chat_feed_update(session))
+
         # Start a drain worker for this session if speech items need processing
         try:
             self._drain_session_inbox_worker(session)
@@ -3078,6 +3147,10 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         session.drain_kick.set()
         self._safe_call(self._update_inbox_list)
         self._safe_call(self._update_tab_bar)
+
+        # Immediately refresh chat feed so the new speech bubble appears
+        # without waiting for the 3-second timer
+        self._safe_call(lambda: self._notify_chat_feed_update(session))
 
     def _show_speech_item(self, text: str) -> None:
         """Show a speech item's text in the right pane (runs on textual thread)."""
@@ -3687,6 +3760,10 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         ListView scroll-position reset.  Falls back to a full clear+rebuild
         only on the initial call (when the list is empty or has the wrong
         number of children).
+
+        In chat view, renders into ``#chat-choices`` instead of ``#choices``
+        and uses a PreambleItem header (since ``#preamble`` is inside the
+        hidden ``#main-content``).
         """
         session = self._focused()
         if not session:
@@ -3696,18 +3773,25 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         checked_count = sum(self._multi_select_checked)
         total = len(session.choices)
 
-        preamble_widget = self.query_one("#preamble", Label)
-        preamble_widget.update(
+        preamble_text = (
             f"[bold {s['purple']}]Multi-select[/bold {s['purple']}] — "
             f"[{s['success']}]{checked_count}[/{s['success']}]/{total} selected "
             f"[dim](enter=toggle, scroll to confirm)[/dim]"
         )
-        preamble_widget.display = True
 
-        list_view = self.query_one("#choices", ListView)
+        # In chat view use #chat-choices; otherwise use #choices + #preamble
+        has_preamble_item = self._chat_view_active
+        if self._chat_view_active:
+            list_view = self.query_one("#chat-choices", ListView)
+        else:
+            preamble_widget = self.query_one("#preamble", Label)
+            preamble_widget.update(preamble_text)
+            preamble_widget.display = True
+            list_view = self.query_one("#choices", ListView)
 
         # Expected item count: 1 (select-all) + total (choices) + 3 (confirm/team/cancel)
-        expected_count = 1 + total + 3
+        # In chat view, add 1 more for the PreambleItem header
+        expected_count = (1 if has_preamble_item else 0) + 1 + total + 3
 
         # --- Build labels/summaries for every row ---
         all_selected = all(self._multi_select_checked) if self._multi_select_checked else False
@@ -3753,18 +3837,24 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         # --- In-place update path (same number of children) ---
         if len(list_view.children) == expected_count:
-            items: list[ChoiceItem] = list(list_view.children)  # type: ignore[arg-type]
+            items: list = list(list_view.children)  # ChoiceItem (+ PreambleItem)
 
-            # Row 0: select-all toggle
-            items[0].update_content(toggle_label, toggle_summary)
+            offset = 0
+            # Chat view: first child is a PreambleItem header
+            if has_preamble_item:
+                items[0].update(preamble_text)  # PreambleItem.update()
+                offset = 1
 
-            # Rows 1..total: choices
+            # Row: select-all toggle
+            items[offset].update_content(toggle_label, toggle_summary)
+
+            # Rows: choices
             for i in range(total):
-                items[i + 1].update_content(choice_labels[i], choice_summaries[i])
+                items[offset + 1 + i].update_content(choice_labels[i], choice_summaries[i])
 
             # Confirm / Team mode / Cancel
-            items[total + 1].update_content(confirm_label, selected_summary)
-            items[total + 2].update_content(team_label, team_summary)
+            items[offset + total + 1].update_content(confirm_label, selected_summary)
+            items[offset + total + 2].update_content(team_label, team_summary)
             # Cancel row text is static — no update needed
 
             list_view.display = True
@@ -3775,6 +3865,10 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         current_idx = list_view.index or 0
 
         list_view.clear()
+
+        # Chat view: prepend preamble header as a PreambleItem
+        if has_preamble_item:
+            list_view.append(PreambleItem(preamble_text))
 
         list_view.append(ChoiceItem(
             toggle_label, toggle_summary,
@@ -3802,11 +3896,12 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         ))
 
         list_view.display = True
-        # Restore position
-        if current_idx < len(list_view.children):
+        # Restore position or default to first selectable item
+        first_selectable = 1 if has_preamble_item else 0
+        if current_idx >= first_selectable and current_idx < len(list_view.children):
             list_view.index = current_idx
         else:
-            list_view.index = 0
+            list_view.index = first_selectable
         list_view.focus()
 
     def _handle_multi_select_enter(self, idx: int) -> None:
@@ -3966,19 +4061,21 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         if session and (session.input_mode or session.voice_recording):
             return
 
-        # If inbox is collapsed, expand it
-        if self._inbox_collapsed:
-            self._inbox_collapsed = False
-            self._update_inbox_list()
-            self._speak_ui("Inbox expanded")
-            return
+        # In chat view, skip inbox logic — go straight to tab switching
+        if not self._chat_view_active:
+            # If inbox is collapsed, expand it
+            if self._inbox_collapsed:
+                self._inbox_collapsed = False
+                self._update_inbox_list()
+                self._speak_ui("Inbox expanded")
+                return
 
-        # If inbox pane is visible and we're in the inbox, switch to choices pane
-        if self._inbox_pane_visible() and self._inbox_pane_focused:
-            self._inbox_pane_focused = False
-            self.query_one("#choices", ListView).focus()
-            self._speak_ui("Choices")
-            return
+            # If inbox pane is visible and we're in the inbox, switch to choices pane
+            if self._inbox_pane_visible() and self._inbox_pane_focused:
+                self._inbox_pane_focused = False
+                self.query_one("#choices", ListView).focus()
+                self._speak_ui("Choices")
+                return
 
         if self.manager.count() <= 1:
             return
@@ -3992,27 +4089,30 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         """Switch to previous tab, or toggle inbox pane.
 
         Flow: choices → inbox → collapsed → choices (via l)
+        In chat view, inbox logic is skipped — goes straight to tab switching.
         """
         session = self._focused()
         if session and (session.input_mode or session.voice_recording):
             return
 
-        # If inbox pane is visible and focused, collapse it
-        if self._inbox_pane_visible() and self._inbox_pane_focused:
-            self._inbox_collapsed = True
-            self.query_one("#inbox-list").display = False
-            self._inbox_pane_focused = False
-            self.query_one("#choices", ListView).focus()
-            self._speak_ui("Inbox collapsed")
-            return
+        # In chat view, skip inbox logic — go straight to tab switching
+        if not self._chat_view_active:
+            # If inbox pane is visible and focused, collapse it
+            if self._inbox_pane_visible() and self._inbox_pane_focused:
+                self._inbox_collapsed = True
+                self.query_one("#inbox-list").display = False
+                self._inbox_pane_focused = False
+                self.query_one("#choices", ListView).focus()
+                self._speak_ui("Inbox collapsed")
+                return
 
-        # If inbox pane is visible and we're in choices, switch to inbox pane
-        if self._inbox_pane_visible() and not self._inbox_pane_focused:
-            self._inbox_pane_focused = True
-            inbox_list = self.query_one("#inbox-list", ListView)
-            inbox_list.focus()
-            self._speak_ui("Inbox")
-            return
+            # If inbox pane is visible and we're in choices, switch to inbox pane
+            if self._inbox_pane_visible() and not self._inbox_pane_focused:
+                self._inbox_pane_focused = True
+                inbox_list = self.query_one("#inbox-list", ListView)
+                inbox_list.focus()
+                self._speak_ui("Inbox")
+                return
 
         if self.manager.count() <= 1:
             return
@@ -4599,6 +4699,10 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         try:
             chat_choices = self.query_one("#chat-choices", ListView)
             if event.list_view is chat_choices and isinstance(event.item, ChoiceItem):
+                # Multi-select mode: toggle/confirm instead of normal selection
+                if self._multi_select_mode:
+                    self._handle_multi_select_enter(event.item.display_index)
+                    return
                 # Handle just like normal choice selection
                 session = self._focused()
                 if not session or not session.active:

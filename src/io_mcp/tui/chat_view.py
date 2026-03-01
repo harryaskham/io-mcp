@@ -196,6 +196,7 @@ class ChatViewMixin:
     _chat_view_active: bool = False
     _chat_unified: bool = False  # True = show all agents' data in unified feed
     _chat_content_hash: str = ""  # Track content to avoid redundant rebuilds
+    _chat_auto_scroll: bool = True  # Auto-scroll to bottom on new content
 
     @_safe_action
     def action_chat_view(self: "IoMcpApp") -> None:
@@ -271,6 +272,7 @@ class ChatViewMixin:
         except Exception:
             pass
         self._chat_view_active = True
+        self._chat_auto_scroll = True  # Start at bottom when opening chat view
 
         # Build feed — unified or single-session
         if self._chat_unified:
@@ -288,6 +290,25 @@ class ChatViewMixin:
         self._chat_refresh_timer = self.set_interval(
             3.0, lambda: self._refresh_chat_feed())
 
+    def _chat_feed_is_at_bottom(self: "IoMcpApp") -> bool:
+        """Check if the chat feed is scrolled to the bottom (within a threshold).
+
+        Returns True if the user hasn't scrolled up, meaning auto-scroll
+        should happen when new content arrives.
+        """
+        try:
+            feed = self.query_one("#chat-feed", ListView)
+            # ListView inherits from ScrollView — check scroll position
+            # max_scroll_y is the maximum scroll offset; scroll_y is current
+            max_y = feed.max_scroll_y
+            cur_y = feed.scroll_y
+            # Consider "at bottom" if within 5 lines of the end, or if
+            # there's not enough content to scroll at all
+            threshold = 5
+            return max_y <= 0 or cur_y >= max_y - threshold
+        except Exception:
+            return True  # Default to auto-scroll if we can't determine
+
     def _build_chat_feed(self: "IoMcpApp", session: "Session",
                          sessions: list["Session"] | None = None) -> None:
         """Build the chronological chat feed from session data."""
@@ -296,12 +317,17 @@ class ChatViewMixin:
         except Exception:
             return
 
+        # Check scroll position BEFORE clearing so we know if user was at bottom
+        was_at_bottom = self._chat_feed_is_at_bottom()
+
         feed.clear()
         items = self._collect_chat_items(session, sessions=sessions)
 
         _log.info("_build_chat_feed: building", extra={"context": {
             "n_items": len(items),
             "unified": sessions is not None,
+            "was_at_bottom": was_at_bottom,
+            "auto_scroll": self._chat_auto_scroll,
         }})
 
         for item in items:
@@ -310,10 +336,14 @@ class ChatViewMixin:
             except Exception:
                 pass
 
-        # Scroll to bottom
+        # Only scroll to bottom if user was already at the bottom
+        # (respects their scroll position if they scrolled up to read history)
         try:
-            if len(feed.children) > 0:
+            if len(feed.children) > 0 and was_at_bottom:
                 feed.scroll_end(animate=False)
+                self._chat_auto_scroll = True
+            elif not was_at_bottom:
+                self._chat_auto_scroll = False
         except Exception:
             pass
 
@@ -466,3 +496,23 @@ class ChatViewMixin:
             _log.info("_refresh_chat_feed: rebuilding")
             self._chat_content_hash = fingerprint
             self._build_chat_feed(session)
+
+    def _notify_chat_feed_update(self: "IoMcpApp", session: "Session") -> None:
+        """Force an immediate chat feed refresh when new content arrives.
+
+        Called from _activate_speech_item and notify_inbox_update to push
+        new bubbles into the feed without waiting for the 3-second timer.
+        Only refreshes if the chat view is active and the session is focused.
+        """
+        if not self._chat_view_active:
+            return
+        focused = self._focused()
+        if focused is None:
+            return
+        # In unified mode, any session's update triggers refresh.
+        # In single-session mode, only refresh if the updated session is focused.
+        if not getattr(self, '_chat_unified', False) and focused.session_id != session.session_id:
+            return
+        # Force a rebuild by clearing the content hash
+        self._chat_content_hash = ""
+        self._refresh_chat_feed()
