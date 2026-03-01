@@ -466,6 +466,17 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         """Worker: pregenerate TTS clips in background thread."""
         self._tts.pregenerate(texts, speed_override=speed_override)
 
+    @work(thread=True, exit_on_error=False, group="pregenerate-priority")
+    def _pregenerate_priority_worker(self, texts: list[str],
+                                     speed_override: Optional[float] = None) -> None:
+        """Worker: pregenerate TTS clips with priority for first 3 items.
+
+        The first 3 texts are generated synchronously (in the worker
+        thread) so they're cached before the user starts scrolling.
+        Remaining texts are dispatched to a background thread pool.
+        """
+        self._tts.pregenerate_priority(texts, speed_override=speed_override)
+
     @work(thread=True, exit_on_error=False, group="pregenerate-ui")
     def _pregenerate_ui_worker(self, texts: list[str]) -> None:
         """Worker: pregenerate UI TTS clips in separate background queue.
@@ -615,6 +626,8 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
             heavy: Long-short-long (selection confirmed)
             attention: Rapid SOS-like (urgent/error)
             heartbeat: Gentle double-tap (ambient update)
+            boundary: Double-pulse at list boundary (top/bottom)
+            wrap: Triple-quick-pulse on wrap-around
         """
         if not self._haptic_enabled:
             return
@@ -624,6 +637,8 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
             "heavy": [100, 60, 40, 60, 100],       # heavy-gap-light-gap-heavy
             "attention": [50, 40, 50, 40, 50, 40, 120],  # rapid bursts + long
             "heartbeat": [20, 100, 40],             # soft double-tap
+            "boundary": [40, 60, 40],               # double-pulse at list boundary
+            "wrap": [25, 30, 25, 30, 25],           # triple-quick-pulse on wrap-around
         }
 
         durations = patterns.get(pattern, patterns["pulse"])
@@ -2121,28 +2136,49 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         # Update tab bar (session now has active choices indicator)
         self._safe_call(self._update_tab_bar)
 
-        # Pregenerate TTS fragments in background.
+        # Pregenerate TTS fragments with priority for the first 3 choices.
         # Instead of pregenerating full strings like "1. Fix a bug. Debug and fix",
         # we pregenerate individual fragments: number words ("one", "two"),
         # the word "selected", and each label/summary separately.
         # This drastically reduces API calls since number words and "selected"
         # are reused across all choices.
+        #
+        # Priority pregeneration: the first 3 choices' labels and summaries
+        # are generated synchronously (in the worker thread) so they're
+        # cached before the user starts scrolling. The rest go to a thread pool.
         from io_mcp.tts import TTSEngine
         _num_words = TTSEngine._NUMBER_WORDS
-        fragment_texts = set()
+
+        # Build ordered list: first 3 choices' fragments first, then the rest.
+        # Use a list (not set) to preserve priority ordering.
+        priority_fragments: list[str] = []
+        remaining_fragments: list[str] = []
+        seen: set[str] = set()
+
         for i, c in enumerate(choices):
             n = i + 1
+            target = priority_fragments if i < 3 else remaining_fragments
             if n in _num_words:
-                fragment_texts.add(_num_words[n])
+                word = _num_words[n]
+                if word not in seen:
+                    target.append(word)
+                    seen.add(word)
             label = c.get('label', '')
             summary = c.get('summary', '')
-            if label:
-                fragment_texts.add(label)
-            if summary:
-                fragment_texts.add(summary)
-        fragment_texts.add("selected")
+            if label and label not in seen:
+                target.append(label)
+                seen.add(label)
+            if summary and summary not in seen:
+                target.append(summary)
+                seen.add(summary)
+
+        if "selected" not in seen:
+            priority_fragments.append("selected")
+            seen.add("selected")
+
+        all_fragments = priority_fragments + remaining_fragments
         ui_speed = self._config.tts_speed_for("ui") if self._config else None
-        self._pregenerate_worker(list(fragment_texts), speed_override=ui_speed)
+        self._pregenerate_priority_worker(all_fragments, speed_override=ui_speed)
 
         # Pregenerate extra option labels in separate UI queue
         # so they don't compete with agent choice pregeneration.
@@ -4949,9 +4985,11 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
                 if logical == 1:
                     boundary = "Top. "
                     fragments.insert(0, "Top")
+                    self._vibrate_pattern("boundary")
                 elif logical == len(session.choices):
                     boundary = "Last. "
                     fragments.insert(0, "Last")
+                    self._vibrate_pattern("boundary")
                 # Full text for dedup key and fallback
                 if n_total > 2:
                     text = f"{boundary}{logical} of {n_total}. {label}. {s}" if s else f"{boundary}{logical} of {n_total}. {label}"
@@ -5275,6 +5313,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
                 if new_pos >= len(enabled):
                     # Wrap to first enabled item
                     list_view.index = enabled[0]
+                    self._vibrate_pattern("wrap")
                 else:
                     list_view.index = enabled[new_pos]
                 return
@@ -5318,6 +5357,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
                 if new_pos < 0:
                     # Wrap to last enabled item
                     list_view.index = enabled[-1]
+                    self._vibrate_pattern("wrap")
                 else:
                     list_view.index = enabled[new_pos]
                 return
