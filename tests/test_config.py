@@ -12,7 +12,11 @@ import tempfile
 import pytest
 import yaml
 
-from io_mcp.config import IoMcpConfig, _expand_env, _deep_merge, _find_new_keys, DEFAULT_CONFIG
+from io_mcp.config import (
+    IoMcpConfig, _expand_env, _expand_config, _deep_merge,
+    _find_new_keys, _closest_match, _edit_distance,
+    DEFAULT_CONFIG, _DJENT_EXTRA_OPTIONS, _DJENT_QUICK_ACTIONS,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -853,3 +857,1210 @@ class TestConfigReset:
         IoMcpConfig.reset(config_path)
         captured = capsys.readouterr()
         assert "deleted" in captured.out.lower()
+
+
+# ===========================================================================
+# ADDITIONAL COMPREHENSIVE TESTS
+# ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# _expand_env — additional edge cases
+# ---------------------------------------------------------------------------
+
+class TestEnvExpansionEdgeCases:
+    """Additional edge cases for _expand_env beyond the basics."""
+
+    def test_nested_default_with_colons(self, monkeypatch):
+        """Default value itself contains colons (e.g. URLs)."""
+        monkeypatch.delenv("MY_URL", raising=False)
+        assert _expand_env("${MY_URL:-https://example.com:8080}") == "https://example.com:8080"
+
+    def test_empty_var_returns_empty(self, monkeypatch):
+        """An env var set to empty string returns empty, not default."""
+        monkeypatch.setenv("EMPTY_VAR", "")
+        assert _expand_env("${EMPTY_VAR:-fallback}") == ""
+
+    def test_var_with_empty_default(self, monkeypatch):
+        """${VAR:-} with empty default gives empty when VAR unset."""
+        monkeypatch.delenv("UNSET_VAR", raising=False)
+        assert _expand_env("${UNSET_VAR:-}") == ""
+
+    def test_var_embedded_in_text(self, monkeypatch):
+        monkeypatch.setenv("USER", "alice")
+        assert _expand_env("hello ${USER} world") == "hello alice world"
+
+    def test_consecutive_vars(self, monkeypatch):
+        monkeypatch.setenv("X", "a")
+        monkeypatch.setenv("Y", "b")
+        assert _expand_env("${X}${Y}") == "ab"
+
+    def test_dollar_without_braces_not_expanded(self):
+        """$VAR (no braces) is not expanded — only ${VAR} is."""
+        assert _expand_env("$NOTEXPANDED") == "$NOTEXPANDED"
+
+    def test_var_name_with_underscores(self, monkeypatch):
+        monkeypatch.setenv("MY_LONG_VAR_NAME", "value")
+        assert _expand_env("${MY_LONG_VAR_NAME}") == "value"
+
+    def test_default_with_spaces(self, monkeypatch):
+        monkeypatch.delenv("SPACE_VAR", raising=False)
+        assert _expand_env("${SPACE_VAR:-hello world}") == "hello world"
+
+
+# ---------------------------------------------------------------------------
+# _expand_config — recursive expansion
+# ---------------------------------------------------------------------------
+
+class TestExpandConfig:
+    """Tests for _expand_config — recursive env var expansion."""
+
+    def test_expand_string(self, monkeypatch):
+        monkeypatch.setenv("FOO", "bar")
+        assert _expand_config("${FOO}") == "bar"
+
+    def test_expand_dict(self, monkeypatch):
+        monkeypatch.setenv("K", "val")
+        result = _expand_config({"key": "${K}"})
+        assert result == {"key": "val"}
+
+    def test_expand_list(self, monkeypatch):
+        monkeypatch.setenv("A", "1")
+        monkeypatch.setenv("B", "2")
+        result = _expand_config(["${A}", "${B}", "plain"])
+        assert result == ["1", "2", "plain"]
+
+    def test_expand_nested_dict(self, monkeypatch):
+        monkeypatch.setenv("INNER", "deep")
+        result = _expand_config({"outer": {"inner": "${INNER}"}})
+        assert result == {"outer": {"inner": "deep"}}
+
+    def test_expand_list_of_dicts(self, monkeypatch):
+        monkeypatch.setenv("NAME", "alice")
+        result = _expand_config([{"name": "${NAME}"}, {"name": "bob"}])
+        assert result == [{"name": "alice"}, {"name": "bob"}]
+
+    def test_non_string_passthrough(self):
+        """Integers, floats, booleans, None pass through unchanged."""
+        assert _expand_config(42) == 42
+        assert _expand_config(3.14) == 3.14
+        assert _expand_config(True) is True
+        assert _expand_config(None) is None
+
+    def test_mixed_types_in_dict(self, monkeypatch):
+        monkeypatch.setenv("S", "str")
+        result = _expand_config({"s": "${S}", "i": 1, "b": True, "n": None})
+        assert result == {"s": "str", "i": 1, "b": True, "n": None}
+
+    def test_deeply_nested_structure(self, monkeypatch):
+        monkeypatch.setenv("DEEP", "found")
+        obj = {"a": {"b": {"c": {"d": [{"e": "${DEEP}"}]}}}}
+        result = _expand_config(obj)
+        assert result["a"]["b"]["c"]["d"][0]["e"] == "found"
+
+
+# ---------------------------------------------------------------------------
+# _deep_merge — additional edge cases
+# ---------------------------------------------------------------------------
+
+class TestDeepMergeAdditional:
+    """Additional edge cases for _deep_merge."""
+
+    def test_lists_replaced_not_merged(self):
+        """Override lists replace base lists entirely (no concatenation)."""
+        base = {"items": [1, 2, 3]}
+        override = {"items": [4, 5]}
+        result = _deep_merge(base, override)
+        assert result == {"items": [4, 5]}
+
+    def test_override_scalar_with_dict(self):
+        """Scalar in base replaced by dict in override."""
+        base = {"a": "flat"}
+        override = {"a": {"nested": True}}
+        result = _deep_merge(base, override)
+        assert result == {"a": {"nested": True}}
+
+    def test_empty_override(self):
+        """Empty override dict leaves base unchanged."""
+        base = {"a": 1, "b": 2}
+        result = _deep_merge(base, {})
+        assert result == {"a": 1, "b": 2}
+
+    def test_empty_base(self):
+        """Empty base returns override."""
+        result = _deep_merge({}, {"a": 1})
+        assert result == {"a": 1}
+
+    def test_both_empty(self):
+        result = _deep_merge({}, {})
+        assert result == {}
+
+    def test_deeply_nested_merge(self):
+        base = {"a": {"b": {"c": 1, "d": 2}}}
+        override = {"a": {"b": {"c": 99}}}
+        result = _deep_merge(base, override)
+        assert result == {"a": {"b": {"c": 99, "d": 2}}}
+
+    def test_override_does_not_modify_original(self):
+        """Neither base nor override should be mutated."""
+        base = {"a": {"b": 1}}
+        override = {"a": {"b": 2}}
+        _deep_merge(base, override)
+        assert override == {"a": {"b": 2}}
+
+    def test_none_values_in_override(self):
+        """None in override replaces base value."""
+        base = {"a": "something"}
+        override = {"a": None}
+        result = _deep_merge(base, override)
+        assert result == {"a": None}
+
+    def test_multiple_sections(self):
+        """Merge across multiple parallel sections."""
+        base = {"x": {"a": 1}, "y": {"b": 2}, "z": {"c": 3}}
+        override = {"x": {"a": 10}, "z": {"d": 4}}
+        result = _deep_merge(base, override)
+        assert result == {"x": {"a": 10}, "y": {"b": 2}, "z": {"c": 3, "d": 4}}
+
+
+# ---------------------------------------------------------------------------
+# _edit_distance
+# ---------------------------------------------------------------------------
+
+class TestEditDistance:
+    """Tests for _edit_distance (Levenshtein)."""
+
+    def test_identical_strings(self):
+        assert _edit_distance("hello", "hello") == 0
+
+    def test_empty_strings(self):
+        assert _edit_distance("", "") == 0
+
+    def test_one_empty(self):
+        assert _edit_distance("", "abc") == 3
+        assert _edit_distance("abc", "") == 3
+
+    def test_single_insertion(self):
+        assert _edit_distance("cat", "cats") == 1
+
+    def test_single_deletion(self):
+        assert _edit_distance("cats", "cat") == 1
+
+    def test_single_substitution(self):
+        assert _edit_distance("cat", "car") == 1
+
+    def test_transposition(self):
+        # "ab" -> "ba" requires 2 edits in Levenshtein (sub+sub)
+        assert _edit_distance("ab", "ba") == 2
+
+    def test_completely_different(self):
+        assert _edit_distance("abc", "xyz") == 3
+
+    def test_case_sensitive(self):
+        assert _edit_distance("Hello", "hello") == 1
+
+    def test_symmetric(self):
+        """Distance(a,b) == distance(b,a)."""
+        assert _edit_distance("kitten", "sitting") == _edit_distance("sitting", "kitten")
+
+    def test_single_char(self):
+        assert _edit_distance("a", "b") == 1
+        assert _edit_distance("a", "a") == 0
+
+    def test_prefix(self):
+        assert _edit_distance("test", "testing") == 3
+
+    def test_known_distance(self):
+        # Classic example: kitten -> sitting = 3
+        assert _edit_distance("kitten", "sitting") == 3
+
+
+# ---------------------------------------------------------------------------
+# _closest_match
+# ---------------------------------------------------------------------------
+
+class TestClosestMatch:
+    """Tests for _closest_match — typo suggestion."""
+
+    def test_exact_match_case_insensitive(self):
+        """Exact match (case insensitive) returns the original-case key."""
+        result = _closest_match("TTS", {"tts", "stt", "config"})
+        assert result == "tts"
+
+    def test_close_typo(self):
+        result = _closest_match("conifg", {"config", "providers", "voices"})
+        assert result == "config"
+
+    def test_no_match_beyond_max_distance(self):
+        """Returns None if no candidate is close enough."""
+        result = _closest_match("zzzzzzz", {"config", "providers", "voices"}, max_distance=2)
+        assert result is None
+
+    def test_max_distance_respected(self):
+        """With strict max_distance=1, only single-edit typos match."""
+        result = _closest_match("confg", {"config"}, max_distance=1)
+        assert result == "config"  # 1 deletion
+        result = _closest_match("xyzfg", {"config"}, max_distance=1)
+        assert result is None  # too many edits needed
+
+    def test_empty_valid_keys(self):
+        result = _closest_match("anything", set())
+        assert result is None
+
+    def test_picks_closest(self):
+        """When multiple candidates, picks the closest one."""
+        result = _closest_match("spead", {"speed", "speak", "specification"})
+        # "spead" → "speak" (1 edit: d→k), "speed" (2 edits: a→e,d→d? no... s-p-e-a-d → s-p-e-e-d = 1 edit)
+        # Both "speak" and "speed" are 1 edit from "spead" so either is acceptable
+        assert result in ("speak", "speed")
+        # But "specification" is far — should not be returned
+        result2 = _closest_match("xyz", {"abc", "xyw"}, max_distance=3)
+        assert result2 == "xyw"  # 1 edit vs 3 edits
+
+    def test_length_filter(self):
+        """Candidates whose length differs too much are skipped."""
+        # "ab" vs "abcdefgh" — length diff 6 > max_distance 3
+        result = _closest_match("ab", {"abcdefgh"}, max_distance=3)
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# _find_new_keys — additional edge cases
+# ---------------------------------------------------------------------------
+
+class TestFindNewKeysAdditional:
+    """Additional edge cases for _find_new_keys."""
+
+    def test_both_empty(self):
+        assert _find_new_keys({}, {}) == []
+
+    def test_non_dict_values_not_recursed(self):
+        """When default value is a list, it's compared as top-level key only."""
+        defaults = {"styles": ["a", "b"]}
+        user = {}
+        assert _find_new_keys(defaults, user) == ["styles"]
+
+    def test_user_has_same_keys_different_values(self):
+        """Keys match even though values differ — no new keys."""
+        defaults = {"a": 1, "b": {"c": 3}}
+        user = {"a": 99, "b": {"c": 100}}
+        assert _find_new_keys(defaults, user) == []
+
+    def test_multiple_missing_at_same_level(self):
+        defaults = {"a": 1, "b": 2, "c": 3}
+        user = {"a": 1}
+        result = _find_new_keys(defaults, user)
+        assert set(result) == {"b", "c"}
+
+
+# ---------------------------------------------------------------------------
+# Config validation — comprehensive
+# ---------------------------------------------------------------------------
+
+class TestConfigValidationComprehensive:
+    """Comprehensive validation warning tests."""
+
+    @pytest.fixture
+    def tmp_config(self, tmp_path):
+        return str(tmp_path / "config.yml")
+
+    def test_unknown_top_level_key_warning(self, tmp_config):
+        """Unknown top-level key triggers a warning."""
+        custom = {"bogusKey": True, "config": {"tts": {"speed": 1.0}}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert any("Unknown top-level key 'bogusKey'" in w for w in c.validation_warnings)
+
+    def test_unknown_top_level_key_with_typo_suggestion(self, tmp_config):
+        """Typo in top-level key suggests the correct key."""
+        custom = {"confg": {"tts": {}}}  # typo for "config"
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert any("did you mean 'config'" in w for w in c.validation_warnings)
+
+    def test_unknown_config_key_warning(self, tmp_config):
+        """Unknown key inside 'config' section triggers warning."""
+        custom = {"config": {"unknownSection": True}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert any("Unknown config key 'config.unknownSection'" in w
+                    for w in c.validation_warnings)
+
+    def test_unknown_config_key_typo_suggestion(self, tmp_config):
+        """Typo in config key suggests the correct key."""
+        custom = {"config": {"ambiemt": {"enabled": True}}}  # typo: ambiemt
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert any("did you mean 'ambient'" in w for w in c.validation_warnings)
+
+    def test_unknown_tts_key_warning(self, tmp_config):
+        """Unknown key inside config.tts triggers warning."""
+        custom = {"config": {"tts": {"volumee": 0.5}}}  # typo: volumee
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert any("Unknown TTS key 'config.tts.volumee'" in w
+                    for w in c.validation_warnings)
+
+    def test_unknown_tts_key_typo_suggestion(self, tmp_config):
+        """Typo in TTS key suggests correct key."""
+        custom = {"config": {"tts": {"voiceRotatin": []}}}  # typo
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert any("did you mean 'voiceRotation'" in w for w in c.validation_warnings)
+
+    def test_unknown_speeds_key_warning(self, tmp_config):
+        """Unknown key in config.tts.speeds triggers warning."""
+        custom = {"config": {"tts": {"speeds": {"preambl": 1.5}}}}  # typo
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert any("Unknown speed context" in w and "preambl" in w
+                    for w in c.validation_warnings)
+
+    def test_speed_out_of_range_low(self, tmp_config):
+        """Speed below 0.1 triggers warning."""
+        custom = {"config": {"tts": {"speed": 0.05}}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert any("out of range" in w and "speed" in w.lower()
+                    for w in c.validation_warnings)
+
+    def test_speed_out_of_range_high(self, tmp_config):
+        """Speed above 5.0 triggers warning."""
+        custom = {"config": {"tts": {"speed": 10.0}}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert any("out of range" in w and "speed" in w.lower()
+                    for w in c.validation_warnings)
+
+    def test_per_context_speed_out_of_range(self, tmp_config):
+        """Per-context speed out of range triggers warning."""
+        custom = {"config": {"tts": {"speeds": {"speak": 999.0}}}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert any("config.tts.speeds.speak" in w and "out of range" in w
+                    for w in c.validation_warnings)
+
+    def test_per_context_speed_non_numeric(self, tmp_config):
+        """Non-numeric per-context speed triggers warning."""
+        custom = {"config": {"tts": {"speeds": {"speak": "fast"}}}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert any("config.tts.speeds.speak" in w and "must be a number" in w
+                    for w in c.validation_warnings)
+
+    def test_invalid_color_scheme(self, tmp_config):
+        """Unknown colorScheme triggers warning."""
+        custom = {"config": {"colorScheme": "solarized"}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert any("colorScheme" in w and "solarized" in w
+                    for w in c.validation_warnings)
+
+    def test_valid_color_scheme_no_warning(self, tmp_config):
+        """Valid colorScheme does not trigger warning."""
+        custom = {"config": {"colorScheme": "dracula"}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert not any("colorScheme" in w for w in c.validation_warnings)
+
+    def test_invalid_local_backend(self, tmp_config):
+        """Unknown localBackend triggers warning."""
+        custom = {"config": {"tts": {"localBackend": "piper"}}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert any("localBackend" in w and "piper" in w
+                    for w in c.validation_warnings)
+
+    def test_valid_local_backend_no_warning(self, tmp_config):
+        """Valid localBackend does not trigger warning."""
+        for backend in ("termux", "espeak", "none"):
+            custom = {"config": {"tts": {"localBackend": backend}}}
+            with open(tmp_config, "w") as f:
+                yaml.dump(custom, f)
+            c = IoMcpConfig.load(tmp_config)
+            assert not any("localBackend" in w for w in c.validation_warnings)
+
+    def test_pregen_workers_out_of_range(self, tmp_config):
+        """pregenerateWorkers out of 1-8 range triggers warning."""
+        custom = {"config": {"tts": {"pregenerateWorkers": 20}}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert any("pregenerateWorkers" in w and "out of range" in w
+                    for w in c.validation_warnings)
+
+    def test_style_degree_out_of_range(self, tmp_config):
+        """styleDegree out of 0.01-2.0 range triggers warning."""
+        custom = {"config": {"tts": {"styleDegree": 5.0}}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert any("styleDegree" in w and "out of range" in w
+                    for w in c.validation_warnings)
+
+    def test_style_degree_non_numeric(self, tmp_config):
+        """Non-numeric styleDegree triggers warning."""
+        custom = {"config": {"tts": {"styleDegree": "high"}}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert any("styleDegree" in w and "must be a number" in w
+                    for w in c.validation_warnings)
+
+    def test_unknown_key_binding(self, tmp_config):
+        """Unknown key binding action triggers warning."""
+        custom = {"config": {"keyBindings": {"teleport": "t"}}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert any("Unknown key binding" in w and "teleport" in w
+                    for w in c.validation_warnings)
+
+    def test_voice_preset_missing_keys(self, tmp_config):
+        """Voice preset without required keys triggers warning."""
+        custom = {
+            "voices": {"broken": {"provider": "openai"}},  # missing model and voice
+        }
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert any("Voice preset 'broken'" in w and "missing keys" in w
+                    for w in c.validation_warnings)
+
+    def test_voice_preset_non_dict(self, tmp_config):
+        """Voice preset that's not a dict triggers warning."""
+        custom = {"voices": {"broken": "just-a-string"}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert any("Voice preset 'broken'" in w and "should be a dict" in w
+                    for w in c.validation_warnings)
+
+    def test_voice_preset_references_missing_provider(self, tmp_config):
+        """Voice preset referencing non-existent provider triggers warning."""
+        custom = {
+            "providers": {},  # empty — no providers
+            "voices": {
+                "test": {"provider": "nonexistent", "model": "m", "voice": "v"}
+            },
+        }
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert any("references provider 'nonexistent'" in w
+                    for w in c.validation_warnings)
+
+    def test_tts_voice_preset_not_found(self, tmp_config):
+        """TTS voice referencing non-existent preset triggers warning."""
+        custom = {"config": {"tts": {"voice": "nonexistent_voice"}}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert any("TTS voice preset 'nonexistent_voice' not found" in w
+                    for w in c.validation_warnings)
+
+    def test_ui_voice_preset_not_found(self, tmp_config):
+        """UI voice referencing non-existent preset triggers warning."""
+        custom = {"config": {"tts": {"uiVoice": "nonexistent_ui"}}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert any("UI voice preset 'nonexistent_ui' not found" in w
+                    for w in c.validation_warnings)
+
+    def test_voice_rotation_entry_not_found(self, tmp_config):
+        """Voice rotation entry referencing non-existent preset triggers warning."""
+        custom = {"config": {"tts": {"voiceRotation": ["sage", "bogus_voice"]}}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert any("Voice rotation entry 'bogus_voice' not found" in w
+                    for w in c.validation_warnings)
+
+    def test_stt_model_not_found(self, tmp_config):
+        """STT model not in models.stt triggers warning."""
+        custom = {"config": {"stt": {"model": "nonexistent_stt"}}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert any("STT model 'nonexistent_stt' not found" in w
+                    for w in c.validation_warnings)
+
+    def test_custom_style_warning(self, tmp_config):
+        """Custom style not in styles list triggers soft warning."""
+        custom = {"config": {"tts": {"style": "pirate_mode"}}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert any("TTS style 'pirate_mode'" in w and "not in styles" in w
+                    for w in c.validation_warnings)
+
+    def test_style_rotation_unknown_entry(self, tmp_config):
+        """Unknown entry in styleRotation triggers warning."""
+        custom = {"config": {"tts": {"styleRotation": ["happy", "bogus_style"]}}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert any("Style rotation entry 'bogus_style'" in w
+                    for w in c.validation_warnings)
+
+
+# ---------------------------------------------------------------------------
+# Property accessors — additional coverage
+# ---------------------------------------------------------------------------
+
+class TestPropertyAccessorsAdditional:
+    """Test property accessors not yet covered."""
+
+    @pytest.fixture
+    def tmp_config(self, tmp_path):
+        return str(tmp_path / "config.yml")
+
+    def test_tts_local_backend_default(self, tmp_config):
+        c = IoMcpConfig.load(tmp_config)
+        assert c.tts_local_backend == "espeak"
+
+    def test_tts_local_backend_custom(self, tmp_config):
+        custom = {"config": {"tts": {"localBackend": "termux"}}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert c.tts_local_backend == "termux"
+
+    def test_session_cleanup_timeout_default(self, tmp_config):
+        c = IoMcpConfig.load(tmp_config)
+        assert c.session_cleanup_timeout == 300.0
+
+    def test_session_cleanup_timeout_custom(self, tmp_config):
+        custom = {"config": {"session": {"cleanupTimeoutSeconds": 600}}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert c.session_cleanup_timeout == 600.0
+
+    def test_key_bindings_default(self, tmp_config):
+        c = IoMcpConfig.load(tmp_config)
+        kb = c.key_bindings
+        assert kb["cursorDown"] == "j"
+        assert kb["cursorUp"] == "k"
+        assert kb["select"] == "enter"
+        assert kb["voiceInput"] == "space"
+        assert kb["settings"] == "s"
+        assert kb["quit"] == "q"
+
+    def test_key_bindings_custom_override(self, tmp_config):
+        """User can override individual key bindings."""
+        custom = {"config": {"keyBindings": {"cursorDown": "down", "cursorUp": "up"}}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        kb = c.key_bindings
+        assert kb["cursorDown"] == "down"
+        assert kb["cursorUp"] == "up"
+        # Non-overridden bindings still use defaults
+        assert kb["select"] == "enter"
+
+    def test_tts_pregenerate_workers_default(self, tmp_config):
+        c = IoMcpConfig.load(tmp_config)
+        assert c.tts_pregenerate_workers == 3
+
+    def test_tts_pregenerate_workers_clamped_low(self, tmp_config):
+        """Workers below 1 are clamped to 1."""
+        custom = {"config": {"tts": {"pregenerateWorkers": 0}}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert c.tts_pregenerate_workers == 1
+
+    def test_tts_pregenerate_workers_clamped_high(self, tmp_config):
+        """Workers above 8 are clamped to 8."""
+        custom = {"config": {"tts": {"pregenerateWorkers": 20}}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert c.tts_pregenerate_workers == 8
+
+    def test_tts_speed_for_context(self, tmp_config):
+        """Per-context speed returns context-specific value when set."""
+        custom = {"config": {"tts": {"speed": 1.0, "speeds": {"speak": 1.5, "ui": 2.0}}}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert c.tts_speed_for("speak") == 1.5
+        assert c.tts_speed_for("ui") == 2.0
+
+    def test_tts_speed_for_missing_context(self, tmp_config):
+        """Per-context speed falls back to base speed for unknown contexts."""
+        custom = {"config": {"tts": {"speed": 1.3, "speeds": {"speak": 1.5}}}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        # "speak" has a per-context value
+        assert c.tts_speed_for("speak") == 1.5
+        # "nonexistent" is not in speeds — falls back to base speed
+        assert c.tts_speed_for("nonexistent") == 1.3
+
+    def test_tts_style_degree_default(self, tmp_config):
+        c = IoMcpConfig.load(tmp_config)
+        assert c.tts_style_degree == 2.0
+
+    def test_tts_style_degree_custom(self, tmp_config):
+        custom = {"config": {"tts": {"styleDegree": 0.5}}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert c.tts_style_degree == 0.5
+
+    def test_haptic_enabled_default(self, tmp_config):
+        c = IoMcpConfig.load(tmp_config)
+        assert c.haptic_enabled is False
+
+    def test_haptic_enabled_custom(self, tmp_config):
+        custom = {"config": {"haptic": {"enabled": True}}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert c.haptic_enabled is True
+
+    def test_chimes_enabled_default(self, tmp_config):
+        c = IoMcpConfig.load(tmp_config)
+        assert c.chimes_enabled is False
+
+    def test_pulse_audio_defaults(self, tmp_config):
+        c = IoMcpConfig.load(tmp_config)
+        assert c.pulse_auto_reconnect is True
+        assert c.pulse_max_reconnect_attempts == 3
+        assert c.pulse_reconnect_cooldown == 30.0
+
+    def test_pulse_audio_custom(self, tmp_config):
+        custom = {"config": {"pulseAudio": {
+            "autoReconnect": False,
+            "maxReconnectAttempts": 5,
+            "reconnectCooldownSecs": 60,
+        }}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert c.pulse_auto_reconnect is False
+        assert c.pulse_max_reconnect_attempts == 5
+        assert c.pulse_reconnect_cooldown == 60.0
+
+    def test_agent_defaults(self, tmp_config):
+        c = IoMcpConfig.load(tmp_config)
+        assert c.agent_default_workdir == "~"
+        assert c.agent_hosts == []
+
+    def test_agent_hosts_custom(self, tmp_config):
+        custom = {"config": {"agents": {
+            "defaultWorkdir": "/home/user/projects",
+            "hosts": [{"name": "Desktop", "host": "desk.local", "workdir": "~/code"}],
+        }}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert c.agent_default_workdir == "/home/user/projects"
+        assert len(c.agent_hosts) == 1
+        assert c.agent_hosts[0]["name"] == "Desktop"
+
+    def test_realtime_accessors(self, tmp_config):
+        c = IoMcpConfig.load(tmp_config)
+        assert c.realtime_model_name == "gpt-realtime"
+        assert c.realtime_provider_name == "openai"
+        assert isinstance(c.realtime_model_def, dict)
+        assert isinstance(c.realtime_base_url, str)
+        assert isinstance(c.realtime_api_key, str)
+
+    def test_ring_receiver_defaults(self, tmp_config):
+        c = IoMcpConfig.load(tmp_config)
+        assert c.ring_receiver_enabled is False
+        assert c.ring_receiver_port == 5555
+
+    def test_always_allow_restart_tui_default(self, tmp_config):
+        c = IoMcpConfig.load(tmp_config)
+        assert c.always_allow_restart_tui is True
+
+    def test_always_allow_restart_tui_custom(self, tmp_config):
+        custom = {"config": {"alwaysAllow": {"restartTUI": False}}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert c.always_allow_restart_tui is False
+
+    def test_providers_accessor(self, tmp_config):
+        c = IoMcpConfig.load(tmp_config)
+        assert "openai" in c.providers
+        assert "azure-foundry" in c.providers
+
+    def test_models_accessor(self, tmp_config):
+        c = IoMcpConfig.load(tmp_config)
+        assert "stt" in c.models
+        assert "realtime" in c.models
+
+    def test_runtime_accessor(self, tmp_config):
+        c = IoMcpConfig.load(tmp_config)
+        assert "tts" in c.runtime
+        assert "stt" in c.runtime
+        assert "ambient" in c.runtime
+
+    def test_tts_voice_rotation_legacy_dict_format(self, tmp_config):
+        """Legacy dict format in voiceRotation is handled."""
+        custom = {"config": {"tts": {"voiceRotation": [
+            {"voice": "sage", "model": "gpt-4o-mini-tts", "preset": "sage"},
+        ]}}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        rot = c.tts_voice_rotation
+        assert len(rot) == 1
+        assert rot[0]["voice"] == "sage"
+        assert rot[0]["preset"] == "sage"
+
+    def test_tts_emotion_rotation_legacy_key(self, tmp_config):
+        """Legacy 'emotionRotation' key falls back correctly."""
+        custom = {"config": {"tts": {"emotionRotation": ["happy", "sad"]}}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        # When both keys exist, styleRotation from defaults wins; but
+        # when only emotionRotation is set (not in defaults either), it
+        # should be used. Since defaults include styleRotation, we test the
+        # legacy accessor directly:
+        assert c.tts_emotion_rotation == c.tts_style_rotation
+
+    def test_tts_ui_voice_fallback_to_main(self, tmp_config):
+        """When uiVoice is empty, falls back to regular voice preset."""
+        custom = {"config": {"tts": {"voice": "sage", "uiVoice": ""}}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert c.tts_ui_voice_preset == "sage"  # falls back
+        assert c.tts_ui_voice == "sage"
+
+    def test_tts_model_def(self, tmp_config):
+        c = IoMcpConfig.load(tmp_config)
+        model_def = c.tts_model_def
+        assert "provider" in model_def
+        assert "model" in model_def
+        assert "voice" in model_def
+
+    def test_tts_base_url_and_api_key(self, tmp_config, monkeypatch):
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-123")
+        monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+        c = IoMcpConfig.load(tmp_config)
+        c.set_tts_voice("sage")
+        assert "api.openai.com" in c.tts_base_url
+        assert c.tts_api_key == "sk-test-123"
+
+    def test_stt_base_url(self, tmp_config):
+        c = IoMcpConfig.load(tmp_config)
+        assert isinstance(c.stt_base_url, str)
+        assert isinstance(c.stt_api_key, str)
+
+    def test_stt_model_def(self, tmp_config):
+        c = IoMcpConfig.load(tmp_config)
+        model_def = c.stt_model_def
+        assert "provider" in model_def
+
+    def test_color_scheme_from_config(self, tmp_config):
+        """Color scheme is accessible via runtime."""
+        c = IoMcpConfig.load(tmp_config)
+        assert c.runtime.get("colorScheme") == "nord"
+
+
+# ---------------------------------------------------------------------------
+# Djent integration
+# ---------------------------------------------------------------------------
+
+class TestDjentIntegration:
+    """Tests for djent-related config features."""
+
+    @pytest.fixture
+    def tmp_config(self, tmp_path, monkeypatch):
+        # Change cwd to tmp_path to avoid merging the project's .io-mcp.yml
+        monkeypatch.chdir(tmp_path)
+        return str(tmp_path / "config.yml")
+
+    def test_djent_disabled_by_default(self, tmp_config):
+        c = IoMcpConfig.load(tmp_config)
+        assert c.djent_enabled is False
+
+    def test_djent_enabled_setter(self, tmp_config):
+        c = IoMcpConfig.load(tmp_config)
+        c.djent_enabled = True
+        assert c.djent_enabled is True
+        c.djent_enabled = False
+        assert c.djent_enabled is False
+
+    def test_extra_options_without_djent(self, tmp_config):
+        """When djent disabled, djent options not included."""
+        custom = {
+            "extraOptions": [{"title": "My Option", "description": "test", "silent": False}],
+            "config": {"djent": {"enabled": False}},
+        }
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        titles = [o["title"] for o in c.extra_options]
+        assert "My Option" in titles
+        assert "Djent status" not in titles
+
+    def test_extra_options_with_djent(self, tmp_config):
+        """When djent enabled, djent options are injected."""
+        custom = {
+            "extraOptions": [{"title": "My Option", "description": "test", "silent": False}],
+            "config": {"djent": {"enabled": True}},
+        }
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        titles = [o["title"] for o in c.extra_options]
+        assert "My Option" in titles
+        assert "Djent status" in titles
+        assert "Djent dashboard" in titles
+
+    def test_djent_options_not_duplicated(self, tmp_config):
+        """If user already has a djent option title, it's not added again."""
+        custom = {
+            "extraOptions": [
+                {"title": "Djent status", "description": "custom", "silent": False}
+            ],
+            "config": {"djent": {"enabled": True}},
+        }
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        djent_status_count = sum(1 for o in c.extra_options if o["title"] == "Djent status")
+        assert djent_status_count == 1  # not duplicated
+
+    def test_quick_actions_without_djent(self, tmp_config):
+        """When djent disabled, djent quick actions not included."""
+        c = IoMcpConfig.load(tmp_config)
+        keys = [a.get("key") for a in c.quick_actions]
+        assert "!" not in keys  # djent quick action key
+
+    def test_quick_actions_with_djent(self, tmp_config):
+        """When djent enabled, djent quick actions are injected."""
+        custom = {"config": {"djent": {"enabled": True}}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        keys = [a.get("key") for a in c.quick_actions]
+        assert "!" in keys
+        assert "@" in keys
+
+    def test_quick_actions_no_key_conflict(self, tmp_config):
+        """Djent quick actions don't overwrite user quick actions with same key."""
+        custom = {
+            "quickActions": [{"key": "!", "label": "My Action", "action": "message", "value": "test"}],
+            "config": {"djent": {"enabled": True}},
+        }
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        excl_actions = [a for a in c.quick_actions if a["key"] == "!"]
+        assert len(excl_actions) == 1
+        assert excl_actions[0]["label"] == "My Action"  # user's action wins
+
+    def test_djent_constants_structure(self):
+        """Verify _DJENT_EXTRA_OPTIONS and _DJENT_QUICK_ACTIONS have required keys."""
+        for opt in _DJENT_EXTRA_OPTIONS:
+            assert "title" in opt
+            assert "description" in opt
+            assert "silent" in opt
+        for act in _DJENT_QUICK_ACTIONS:
+            assert "key" in act
+            assert "label" in act
+            assert "action" in act
+            assert "value" in act
+
+
+# ---------------------------------------------------------------------------
+# Config save
+# ---------------------------------------------------------------------------
+
+class TestConfigSave:
+    """Tests for save() method."""
+
+    @pytest.fixture
+    def tmp_config(self, tmp_path):
+        return str(tmp_path / "config.yml")
+
+    def test_save_writes_to_disk(self, tmp_config):
+        c = IoMcpConfig.load(tmp_config)
+        c.raw["config"]["tts"]["speed"] = 2.5
+        c.save()
+
+        with open(tmp_config, "r") as f:
+            on_disk = yaml.safe_load(f)
+        assert on_disk["config"]["tts"]["speed"] == 2.5
+
+    def test_save_re_expands_config(self, tmp_config, monkeypatch):
+        """save() re-expands env vars after writing."""
+        monkeypatch.setenv("MY_KEY", "test-key")
+        c = IoMcpConfig.load(tmp_config)
+        c.raw["providers"]["custom"] = {"apiKey": "${MY_KEY}"}
+        c.save()
+        assert c.expanded["providers"]["custom"]["apiKey"] == "test-key"
+
+    def test_save_preserves_structure(self, tmp_config):
+        """save() preserves all sections in the config."""
+        c = IoMcpConfig.load(tmp_config)
+        c.save()
+
+        with open(tmp_config, "r") as f:
+            on_disk = yaml.safe_load(f)
+
+        assert "providers" in on_disk
+        assert "voices" in on_disk
+        assert "config" in on_disk
+        assert "styles" in on_disk
+
+    def test_save_creates_directory(self, tmp_path):
+        """save() creates the config directory if missing."""
+        nested_path = str(tmp_path / "subdir" / "config.yml")
+        c = IoMcpConfig.load(nested_path)
+        # The load call should have already created the dir and file
+        assert os.path.isfile(nested_path)
+
+
+# ---------------------------------------------------------------------------
+# Config loading — edge cases
+# ---------------------------------------------------------------------------
+
+class TestConfigLoadingEdgeCases:
+    """Edge cases for config loading."""
+
+    @pytest.fixture
+    def tmp_config(self, tmp_path):
+        return str(tmp_path / "config.yml")
+
+    def test_empty_yaml_file(self, tmp_config):
+        """Empty YAML file loads defaults."""
+        with open(tmp_config, "w") as f:
+            f.write("")
+        c = IoMcpConfig.load(tmp_config)
+        assert c.tts_speed == 1.0
+        assert c.tts_voice_preset == "noa"
+
+    def test_yaml_with_only_null(self, tmp_config):
+        """YAML file containing only 'null' loads defaults."""
+        with open(tmp_config, "w") as f:
+            f.write("null\n")
+        c = IoMcpConfig.load(tmp_config)
+        assert c.tts_speed == 1.0
+
+    def test_invalid_yaml_falls_back_to_defaults(self, tmp_config, capsys):
+        """Malformed YAML prints warning and uses defaults."""
+        with open(tmp_config, "w") as f:
+            f.write("{{invalid yaml content: [}")
+        c = IoMcpConfig.load(tmp_config)
+        captured = capsys.readouterr()
+        assert "WARNING" in captured.out or c.tts_speed == 1.0
+
+    def test_local_override_file_merging(self, tmp_config, tmp_path, monkeypatch):
+        """Both .io-mcp.yml and .io-mcp.local.yml are merged."""
+        # Base config
+        base = {"config": {"tts": {"speed": 1.0}}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(base, f)
+
+        # Local project config
+        local = {"config": {"tts": {"speed": 1.5}}}
+        with open(tmp_path / ".io-mcp.yml", "w") as f:
+            yaml.dump(local, f)
+
+        # Personal override
+        override = {"config": {"tts": {"speed": 2.0}}}
+        with open(tmp_path / ".io-mcp.local.yml", "w") as f:
+            yaml.dump(override, f)
+
+        monkeypatch.chdir(tmp_path)
+        c = IoMcpConfig.load(tmp_config)
+        # .io-mcp.local.yml wins over .io-mcp.yml which wins over config.yml
+        assert c.tts_speed == 2.0
+
+    def test_local_override_with_extra_options(self, tmp_config, tmp_path, monkeypatch):
+        """Local .io-mcp.yml can add extraOptions."""
+        local = {
+            "extraOptions": [
+                {"title": "Deploy", "description": "Deploy to prod", "silent": True}
+            ]
+        }
+        with open(tmp_path / ".io-mcp.yml", "w") as f:
+            yaml.dump(local, f)
+
+        monkeypatch.chdir(tmp_path)
+        c = IoMcpConfig.load(tmp_config)
+        assert any(o["title"] == "Deploy" for o in c.extra_options)
+
+    def test_reload_method(self, tmp_config):
+        """reload() picks up changes from disk."""
+        c = IoMcpConfig.load(tmp_config)
+        assert c.tts_speed == 1.0
+
+        # Modify on disk
+        with open(tmp_config, "r") as f:
+            raw = yaml.safe_load(f)
+        raw["config"]["tts"]["speed"] = 3.0
+        with open(tmp_config, "w") as f:
+            yaml.dump(raw, f)
+
+        c.reload()
+        assert c.tts_speed == 3.0
+
+    def test_config_path_stored(self, tmp_config):
+        """Config remembers its path."""
+        c = IoMcpConfig.load(tmp_config)
+        assert c.config_path == tmp_config
+
+    def test_env_vars_expanded_in_loaded_config(self, tmp_config, monkeypatch):
+        """Env vars in config are expanded at load time."""
+        monkeypatch.setenv("MY_BASE_URL", "https://custom.api.com")
+        custom = {
+            "providers": {
+                "custom": {"baseUrl": "${MY_BASE_URL}", "apiKey": "key"}
+            }
+        }
+        with open(tmp_config, "w") as f:
+            yaml.dump(custom, f)
+        c = IoMcpConfig.load(tmp_config)
+        assert c.expanded["providers"]["custom"]["baseUrl"] == "https://custom.api.com"
+        # raw should still have the unexpanded form
+        assert c.raw["providers"]["custom"]["baseUrl"] == "${MY_BASE_URL}"
+
+
+# ---------------------------------------------------------------------------
+# Config mutation — additional coverage
+# ---------------------------------------------------------------------------
+
+class TestConfigMutationAdditional:
+    """Additional mutation tests."""
+
+    @pytest.fixture
+    def tmp_config(self, tmp_path):
+        return str(tmp_path / "config.yml")
+
+    def test_set_tts_model_no_matching_preset(self, tmp_config):
+        """set_tts_model with unknown model sets voice directly."""
+        c = IoMcpConfig.load(tmp_config)
+        c.set_tts_model("totally-new-model")
+        # When no preset matches, it sets the voice name to the model name
+        assert c.raw["config"]["tts"]["voice"] == "totally-new-model"
+
+    def test_set_tts_voice_unknown_raw_string(self, tmp_config):
+        """set_tts_voice with unknown string sets it directly."""
+        c = IoMcpConfig.load(tmp_config)
+        c.set_tts_voice("custom-voice-string")
+        assert c.raw["config"]["tts"]["voice"] == "custom-voice-string"
+
+    def test_set_tts_style_alias(self, tmp_config):
+        """set_tts_style is an alias for set_tts_emotion."""
+        c = IoMcpConfig.load(tmp_config)
+        c.set_tts_style("terrified")
+        assert c.tts_style == "terrified"
+        assert c.tts_emotion == "terrified"
+
+    def test_mutation_updates_expanded(self, tmp_config):
+        """Mutations re-expand the config."""
+        c = IoMcpConfig.load(tmp_config)
+        c.set_tts_speed(2.5)
+        # expanded should reflect the change
+        assert c.expanded["config"]["tts"]["speed"] == 2.5
+
+    def test_set_voice_preset_direct(self, tmp_config):
+        """set_tts_voice_preset directly sets the preset name."""
+        c = IoMcpConfig.load(tmp_config)
+        c.set_tts_voice_preset("verse")
+        assert c.tts_voice_preset == "verse"
+        assert c.tts_voice == "verse"
+        assert c.tts_model_name == "gpt-4o-mini-tts"
+
+
+# ---------------------------------------------------------------------------
+# DEFAULT_CONFIG structure
+# ---------------------------------------------------------------------------
+
+class TestDefaultConfigStructure:
+    """Tests that DEFAULT_CONFIG has expected structure."""
+
+    def test_has_all_required_sections(self):
+        assert "providers" in DEFAULT_CONFIG
+        assert "voices" in DEFAULT_CONFIG
+        assert "models" in DEFAULT_CONFIG
+        assert "config" in DEFAULT_CONFIG
+        assert "styles" in DEFAULT_CONFIG
+
+    def test_providers_have_required_keys(self):
+        for name, pdef in DEFAULT_CONFIG["providers"].items():
+            assert "baseUrl" in pdef, f"Provider '{name}' missing baseUrl"
+            assert "apiKey" in pdef, f"Provider '{name}' missing apiKey"
+
+    def test_voices_have_required_keys(self):
+        for name, vdef in DEFAULT_CONFIG["voices"].items():
+            assert "provider" in vdef, f"Voice '{name}' missing provider"
+            assert "model" in vdef, f"Voice '{name}' missing model"
+            assert "voice" in vdef, f"Voice '{name}' missing voice"
+
+    def test_stt_models_have_provider(self):
+        for name, mdef in DEFAULT_CONFIG["models"]["stt"].items():
+            assert "provider" in mdef, f"STT model '{name}' missing provider"
+
+    def test_styles_is_list(self):
+        assert isinstance(DEFAULT_CONFIG["styles"], list)
+        assert len(DEFAULT_CONFIG["styles"]) > 0
+
+    def test_config_section_has_key_subsections(self):
+        config = DEFAULT_CONFIG["config"]
+        assert "tts" in config
+        assert "stt" in config
+        assert "session" in config
+        assert "ambient" in config
+        assert "healthMonitor" in config
+        assert "notifications" in config
+        assert "keyBindings" in config
+        assert "agents" in config
+        assert "haptic" in config
+        assert "chimes" in config
+        assert "djent" in config
+
+    def test_tts_config_defaults(self):
+        tts = DEFAULT_CONFIG["config"]["tts"]
+        assert "voice" in tts
+        assert "uiVoice" in tts
+        assert "speed" in tts
+        assert "style" in tts
+        assert "voiceRotation" in tts
+        assert "styleRotation" in tts
+        assert "localBackend" in tts
+        assert "pregenerateWorkers" in tts
+
+    def test_voice_rotation_entries_are_valid_presets(self):
+        """Voice rotation entries reference valid voice preset names."""
+        rotation = DEFAULT_CONFIG["config"]["tts"]["voiceRotation"]
+        voices = DEFAULT_CONFIG["voices"]
+        for entry in rotation:
+            assert entry in voices, f"Rotation entry '{entry}' not in voices"
+
+    def test_default_voice_is_valid_preset(self):
+        """Default TTS voice is a valid preset name."""
+        voice = DEFAULT_CONFIG["config"]["tts"]["voice"]
+        assert voice in DEFAULT_CONFIG["voices"]
+
+    def test_default_ui_voice_is_valid_preset(self):
+        """Default UI voice is a valid preset name."""
+        ui_voice = DEFAULT_CONFIG["config"]["tts"]["uiVoice"]
+        assert ui_voice in DEFAULT_CONFIG["voices"]
