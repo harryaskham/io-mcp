@@ -2140,16 +2140,6 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
             return self.query_one("#chat-choices", ListView)
         return self.query_one("#choices", ListView)
 
-    def _choices_list_view(self) -> ListView:
-        """Get the correct choices ListView for the current view mode.
-
-        Returns ``#chat-choices`` when chat view is active, otherwise
-        ``#choices`` (the right-pane list in the two-column inbox layout).
-        """
-        if self._chat_view_active:
-            return self.query_one("#chat-choices", ListView)
-        return self.query_one("#choices", ListView)
-
     def _get_item_at_display_index(self, idx: int) -> Optional[ChoiceItem]:
         """Get ChoiceItem at a display position."""
         list_view = self.query_one("#choices", ListView)
@@ -3842,7 +3832,10 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
             offset = 0
             # Chat view: first child is a PreambleItem header
             if has_preamble_item:
-                items[0].update(preamble_text)  # PreambleItem.update()
+                try:
+                    items[0].query_one(".preamble-text", Label).update(preamble_text)
+                except Exception:
+                    pass
                 offset = 1
 
             # Row: select-all toggle
@@ -5248,41 +5241,54 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
             chat_input = self.query_one("#chat-input", SubmitTextArea)
             message = chat_input.text.strip()
         except Exception:
+            _log.warning("on_chat_input_submitted: failed to read chat input")
             return
         if not message:
             return
         session = self._focused()
-        if session and session.active and session.choices:
-            # Freeform selection
-            self._tts.stop()
-            self._vibrate(100)
-            ui_speed = self._config.tts_speed_for("ui") if self._config else None
-            self._tts.speak_fragments(["selected", message], speed_override=ui_speed)
-            self._resolve_selection(session, {"selected": message, "summary": "(freeform input)"})
+        if not session:
+            self._speak_ui("No active session")
             try:
-                self.query_one("#chat-choices").display = False
+                chat_input.clear()
             except Exception:
                 pass
-            self._chat_content_hash = ""
-            self._refresh_chat_feed()
-        elif session:
-            # Queue as message
-            session.pending_messages.append(message)
-            self._speak_ui("Message queued")
-            self._chat_content_hash = ""
-            self._refresh_chat_feed()
+            return
+        try:
+            if session.active and session.choices:
+                # Freeform selection — submit typed text as a choice response
+                self._tts.stop()
+                self._vibrate(100)
+                ui_speed = self._config.tts_speed_for("ui") if self._config else None
+                self._tts.speak_fragments(["selected", message], speed_override=ui_speed)
+                self._resolve_selection(session, {"selected": message, "summary": "(freeform input)"})
+                try:
+                    self.query_one("#chat-choices").display = False
+                except Exception:
+                    pass
+            else:
+                # No active choices — queue as a pending message for the agent
+                session.pending_messages.append(message)
+                self._speak_ui("Message queued")
+        except Exception:
+            _log.exception("on_chat_input_submitted: error processing message")
+        # Always clear input and refresh feed
         try:
             chat_input.clear()
         except Exception:
             pass
+        self._chat_content_hash = ""
+        self._refresh_chat_feed()
 
     def on_click(self, event) -> None:
         """Handle clicks — check if the voice button was clicked."""
         try:
-            if self._chat_view_active and event.widget and event.widget.id == "chat-voice-btn":
+            if not self._chat_view_active:
+                return
+            widget = getattr(event, "widget", None)
+            if widget is not None and getattr(widget, "id", None) == "chat-voice-btn":
                 self.action_voice_input()
         except Exception:
-            pass
+            _log.debug("on_click: error handling click", exc_info=True)
 
     def on_key(self, event) -> None:
         """Handle Escape in voice/settings/filter mode."""
