@@ -534,7 +534,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         yield ManagedListView(id="chat-choices")
         # Chat input bar — text input + voice button, always visible in chat view
         with Horizontal(id="chat-input-bar"):
-            yield SubmitTextArea(id="chat-input")
+            yield SubmitTextArea(id="chat-input", placeholder="Type a message...")
             yield Static("🎤", id="chat-voice-btn")
         yield Input(placeholder="Filter choices...", id="filter-input")
         yield Static("", id="footer-status")
@@ -2252,6 +2252,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
             status.display = not self._chat_view_active
             if not self._chat_view_active:
                 self.query_one("#main-content").display = False
+            self._update_footer_status()
             return
 
         if session.tool_call_count > 0:
@@ -2268,6 +2269,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
                 self.query_one("#main-content").display = False
             except Exception:
                 pass
+            self._update_footer_status()
             return
 
         # Show inbox view with history
@@ -2276,6 +2278,8 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         # Delegate to _show_waiting_with_shortcuts for a richer waiting state
         # that includes agent metadata, shortcuts, and pending messages
         self._show_waiting_with_shortcuts(session)
+
+        self._update_footer_status()
 
     def _show_waiting_with_shortcuts(self, session) -> None:
         """Show a clean waiting state with essential keyboard shortcuts.

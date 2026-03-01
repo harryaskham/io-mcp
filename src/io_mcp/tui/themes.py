@@ -471,6 +471,15 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
         background: {s['bg_alt']};
     }}
 
+    #chat-input .text-area--cursor {{
+        color: {s['bg_alt']};
+        background: {s['accent']};
+    }}
+
+    #chat-input .text-area--placeholder {{
+        color: {s['fg_dim']};
+    }}
+
     #chat-input:focus {{
         border: tall {s['accent']};
     }}
