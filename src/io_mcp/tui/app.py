@@ -4097,6 +4097,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
                     self._chat_refresh_timer.stop()
                 self._chat_refresh_timer = self.set_interval(
                     3.0, lambda: self._refresh_chat_feed())
+                self._update_footer_status()
             try:
                 self.call_from_thread(_activate_chat)
             except Exception:

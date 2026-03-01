@@ -211,6 +211,7 @@ class SettingsMixin:
                 self._chat_refresh_timer.stop()
             self._chat_refresh_timer = self.set_interval(
                 3.0, lambda: self._refresh_chat_feed())
+            self._update_footer_status()
             self._tts.stop()
             self._speak_ui("Back to chat")
             return
