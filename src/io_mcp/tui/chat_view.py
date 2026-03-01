@@ -82,26 +82,30 @@ class ChatBubbleItem(ListItem):
         except Exception:
             s = get_scheme(DEFAULT_SCHEME)
 
+        # Add kind-specific CSS class for left-border color coding
+        kind_class = self.bubble_kind.replace("_", "-")
+        self.add_class(f"-{kind_class}")
+
+        ts = _time.strftime("%H:%M", _time.localtime(self.bubble_timestamp))
+
         if self.bubble_kind == "speech":
-            # Agent speech bubble
-            ts = _time.strftime("%H:%M", _time.localtime(self.bubble_timestamp))
+            # Agent speech bubble — accent left border
             yield Label(
-                f"[{s['fg_dim']}]{ts}[/{s['fg_dim']}]  "
-                f"[{s['accent']}]{self.agent_name}[/{s['accent']}]  "
-                f"{self.bubble_text}",
-                classes="chat-bubble-text",
+                f"[{s['accent']}]{self.agent_name}[/{s['accent']}] "
+                f"[{s['fg_dim']}]{ts}[/{s['fg_dim']}]",
+                classes="chat-bubble-ts",
             )
+            yield Label(self.bubble_text, classes="chat-bubble-text")
 
         elif self.bubble_kind == "choices":
-            # Choice presentation
-            ts = _time.strftime("%H:%M", _time.localtime(self.bubble_timestamp))
-            # Preamble
+            # Choice presentation — warning left border
             yield Label(
-                f"[{s['fg_dim']}]{ts}[/{s['fg_dim']}]  "
-                f"[{s['warning']}]choices[/{s['warning']}]  "
-                f"{self.bubble_text}",
-                classes="chat-bubble-text",
+                f"[{s['warning']}]choices[/{s['warning']}] "
+                f"[{s['fg_dim']}]{ts}[/{s['fg_dim']}]",
+                classes="chat-bubble-ts",
             )
+            if self.bubble_text:
+                yield Label(self.bubble_text, classes="chat-bubble-text")
             # Choice options
             for i, c in enumerate(self.bubble_choices):
                 label = c.get("label", "")
@@ -110,49 +114,43 @@ class ChatBubbleItem(ListItem):
                                self.bubble_result == label)
                 if is_selected:
                     yield Label(
-                        f"       [{s['success']}]>[/{s['success']}] "
+                        f"  [{s['success']}]▸[/{s['success']}] "
                         f"[bold {s['success']}]{label}[/bold {s['success']}]"
                         f"  [{s['fg_dim']}]{summary}[/{s['fg_dim']}]",
                         classes="chat-bubble-choice-selected",
                     )
                 elif self.bubble_resolved:
                     yield Label(
-                        f"         [{s['fg_dim']}]{label}[/{s['fg_dim']}]"
-                        f"  [{s['fg_dim']}]{summary}[/{s['fg_dim']}]",
+                        f"    [{s['fg_dim']}]{label}[/{s['fg_dim']}]",
                         classes="chat-bubble-choice-dim",
                     )
                 else:
                     yield Label(
-                        f"       [{s['accent']}]{i+1}.[/{s['accent']}] "
+                        f"  [{s['accent']}]{i+1}.[/{s['accent']}] "
                         f"{label}"
                         f"  [{s['fg_dim']}]{summary}[/{s['fg_dim']}]",
                         classes="chat-bubble-choice",
                     )
-            if self.bubble_resolved and self.bubble_result:
-                pass  # selected option is highlighted above
-            elif not self.bubble_resolved:
+            if not self.bubble_resolved and not self.bubble_result:
                 yield Label(
-                    f"       [{s['warning']}]awaiting selection...[/{s['warning']}]",
+                    f"  [{s['warning']}]awaiting selection…[/{s['warning']}]",
                     classes="chat-bubble-pending",
                 )
 
         elif self.bubble_kind == "user_msg":
-            # User message with status indicator
-            ts = _time.strftime("%H:%M", _time.localtime(self.bubble_timestamp))
-            icon = f"[{s['success']}]\u2713[/{s['success']}]" if self.bubble_flushed else f"[{s['fg_dim']}]\u25cb[/{s['fg_dim']}]"
+            # User message — purple left border, indented right
+            icon = f"[{s['success']}]✓[/{s['success']}]" if self.bubble_flushed else f"[{s['fg_dim']}]○[/{s['fg_dim']}]"
             yield Label(
-                f"[{s['fg_dim']}]{ts}[/{s['fg_dim']}]  "
-                f"{icon} "
-                f"[{s['purple']}]you[/{s['purple']}]  "
-                f"{self.bubble_text}",
-                classes="chat-bubble-text",
+                f"{icon} [{s['purple']}]you[/{s['purple']}] "
+                f"[{s['fg_dim']}]{ts}[/{s['fg_dim']}]",
+                classes="chat-bubble-ts",
             )
+            yield Label(self.bubble_text, classes="chat-bubble-text")
 
         elif self.bubble_kind == "system":
-            # System event
-            ts = _time.strftime("%H:%M", _time.localtime(self.bubble_timestamp))
+            # System event — no border, minimal inline text
             yield Label(
-                f"[{s['fg_dim']}]{ts}  \u2022 {self.bubble_text}[/{s['fg_dim']}]",
+                f"[{s['fg_dim']}]{ts}  · {self.bubble_text}[/{s['fg_dim']}]",
                 classes="chat-bubble-system",
             )
 

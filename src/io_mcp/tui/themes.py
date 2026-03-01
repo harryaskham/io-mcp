@@ -410,7 +410,12 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
         display: none;
         width: 1fr;
         height: 1fr;
-        scrollbar-size: 0 0;
+        scrollbar-size: 1 1;
+        scrollbar-background: {s['bg']};
+        scrollbar-background-hover: {s['bg']};
+        scrollbar-color: {s['border']};
+        scrollbar-color-hover: {s['fg_dim']};
+        scrollbar-color-active: {s['accent']};
         background: {s['bg']};
     }}
 
@@ -426,6 +431,10 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
         scrollbar-background: {s['bg_alt']};
         scrollbar-color: {s['border']};
         scrollbar-color-hover: {s['fg_dim']};
+    }}
+
+    #chat-choices:focus {{
+        border: tall {s['highlight_accent']};
     }}
 
     #chat-input-bar {{
@@ -449,7 +458,7 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
     }}
 
     #chat-voice-btn {{
-        width: 4;
+        width: 6;
         height: auto;
         min-height: 3;
         content-align: center middle;
@@ -462,19 +471,52 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
         background: {s['bg_alt']};
     }}
 
+    #chat-input:focus {{
+        border: tall {s['accent']};
+    }}
+
     ChatBubbleItem {{
         padding: 0 2;
         height: auto;
         width: 1fr;
         background: {s['bg']};
         border: solid {s['border']};
-        margin: 0 1 1 1;
+        margin: 0 1 0 1;
     }}
+
+    /* ─── Bubble kind variants (left-border color coding) ─── */
+
+    ChatBubbleItem.-speech {{
+        border-left: thick {s['accent']};
+    }}
+
+    ChatBubbleItem.-choices {{
+        border-left: thick {s['warning']};
+    }}
+
+    ChatBubbleItem.-user-msg {{
+        border-left: thick {s['purple']};
+        margin-left: 6;
+    }}
+
+    ChatBubbleItem.-system {{
+        border: none;
+        background: transparent;
+        padding: 0 2;
+    }}
+
+    /* ─── Bubble inner elements ──────────────────────────── */
 
     ChatBubbleItem > .chat-bubble-text {{
         width: 1fr;
         height: auto;
         color: {s['fg']};
+    }}
+
+    ChatBubbleItem > .chat-bubble-ts {{
+        width: 1fr;
+        height: auto;
+        color: {s['fg_dim']};
     }}
 
     ChatBubbleItem > .chat-bubble-choice {{
@@ -507,9 +549,28 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
         color: {s['fg_dim']};
     }}
 
+    /* ─── Highlighted (focused) bubble ───────────────────── */
+
     ChatBubbleItem.-highlight {{
         background: {s['highlight_bg']};
         border: solid {s['accent']};
+    }}
+
+    ChatBubbleItem.-highlight.-speech {{
+        border-left: thick {s['accent']};
+    }}
+
+    ChatBubbleItem.-highlight.-choices {{
+        border-left: thick {s['warning']};
+    }}
+
+    ChatBubbleItem.-highlight.-user-msg {{
+        border-left: thick {s['purple']};
+    }}
+
+    ChatBubbleItem.-highlight.-system {{
+        border: none;
+        background: {s['highlight_bg']};
     }}
 
     TextArea {{
