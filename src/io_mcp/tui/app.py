@@ -2163,12 +2163,14 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
             label = c.get('label', '')
             summary = c.get('summary', '')
             list_view.append(ChoiceItem(label, summary, index=i+1, display_index=i))
-        # Add primary extras
+        # Add primary extras (voice input, etc.) with negative indices
+        # so on_list_selected routes them to _handle_extra_select
         di = len(choices)
-        for e in PRIMARY_EXTRAS:
+        extras_list = list(PRIMARY_EXTRAS)
+        for ei, e in enumerate(extras_list):
             list_view.append(ChoiceItem(
                 e.get('label', ''), e.get('summary', ''),
-                index=0, display_index=di,
+                index=-(len(extras_list) - 1 - ei), display_index=di,
             ))
             di += 1
         list_view.display = True
@@ -3117,6 +3119,9 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
 
     def _show_session_waiting(self, session: Session) -> None:
         """Show waiting state for a specific session."""
+        # Chat view handles its own waiting state
+        if self._chat_view_active:
+            return
         # Don't overwrite UI when user is typing a message or freeform input
         if self._message_mode or getattr(session, 'input_mode', False):
             return
@@ -4061,8 +4066,13 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         if not self._chat_view_active:
             def _activate_chat():
                 if self._chat_view_active:
+                    _log.info("_activate_chat: already active, skipping")
                     return
+                _log.info("_activate_chat: activating chat view")
                 self._chat_view_active = True
+                # Determine unified mode based on session count
+                all_sessions = list(self.manager.all_sessions()) if hasattr(self, 'manager') else []
+                self._chat_unified = len(all_sessions) > 1
                 try:
                     self.query_one("#chat-feed").display = True
                     self.query_one("#chat-input-bar").display = True
@@ -4075,7 +4085,16 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
                     self.query_one("#pane-view").display = False
                 except Exception:
                     pass
-                # Start auto-refresh
+                # Build feed immediately so it's not empty for 3 seconds
+                focused = self._focused()
+                if focused:
+                    if self._chat_unified:
+                        self._build_chat_feed(focused, sessions=all_sessions)
+                    else:
+                        self._build_chat_feed(focused)
+                # Start auto-refresh (stop any existing timer first)
+                if hasattr(self, '_chat_refresh_timer') and self._chat_refresh_timer:
+                    self._chat_refresh_timer.stop()
                 self._chat_refresh_timer = self.set_interval(
                     3.0, lambda: self._refresh_chat_feed())
             try:

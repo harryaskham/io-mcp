@@ -127,6 +127,9 @@ def get_logger(
         handler.setLevel(level)
         logger.addHandler(handler)
         logger.setLevel(level)
+        # Prevent child loggers from duplicating entries in parent handlers
+        # that write to the same file (e.g. "io-mcp.tui.chat" → "io-mcp.tui")
+        logger.propagate = False
         _configured.add(key)
     return logger
 

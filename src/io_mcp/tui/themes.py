@@ -416,9 +416,10 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
 
     #chat-choices {{
         display: none;
+        dock: bottom;
         width: 1fr;
         height: auto;
-        max-height: 50%;
+        max-height: 40%;
         background: {s['bg_alt']};
         border: tall {s['accent']};
         margin: 0 1;
