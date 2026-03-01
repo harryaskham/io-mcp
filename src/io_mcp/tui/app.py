@@ -1613,7 +1613,17 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
                 return
 
             # No more pending items — show waiting state
-            self._show_waiting_with_shortcuts(session)
+            if self._chat_view_active:
+                # Chat view: refresh feed to show dismissed item, hide choices panel
+                self._chat_content_hash = ""  # Force rebuild
+                self._refresh_chat_feed()
+                try:
+                    self.query_one("#chat-choices").display = False
+                except Exception:
+                    pass
+                self._update_footer_status()
+            else:
+                self._show_waiting_with_shortcuts(session)
 
     # ─── Choice presentation (called from MCP server thread) ─────────
 
