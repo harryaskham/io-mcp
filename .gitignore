@@ -17,3 +17,4 @@ result
 .env.local
 .io-mcp.local.yml
 .local/
+.claude/worktrees/
