@@ -51,7 +51,7 @@ def _setup_session_with_choices(app, session_id="test-1", name="Test",
 
 @pytest.mark.asyncio
 async def test_populate_chat_choices_list_correct_item_count():
-    """_populate_chat_choices_list fills #chat-choices with choices + PRIMARY_EXTRAS."""
+    """_populate_chat_choices_list fills #chat-choices with choices + extras."""
     app = make_app()
     async with app.run_test() as pilot:
         session = _setup_session_with_choices(app)
@@ -65,13 +65,15 @@ async def test_populate_chat_choices_list_correct_item_count():
 
         items = [c for c in chat_lv.children if isinstance(c, ChoiceItem)]
 
-        # Should have 3 real choices + len(PRIMARY_EXTRAS) extras
+        # Should have 3 real choices + extras (More options + PRIMARY_EXTRAS when collapsed)
         real = [c for c in items if c.choice_index > 0]
         extras = [c for c in items if c.choice_index <= 0]
 
         assert len(real) == 3
-        assert len(extras) == len(PRIMARY_EXTRAS)
-        assert len(items) == 3 + len(PRIMARY_EXTRAS)
+        # Collapsed: More options toggle + PRIMARY_EXTRAS
+        expected_extras = 1 + len(PRIMARY_EXTRAS)  # "More options" + primary
+        assert len(extras) == expected_extras
+        assert len(items) == 3 + expected_extras
 
         # Real choices should have correct labels
         assert real[0].choice_label == "Alpha"
@@ -85,7 +87,7 @@ async def test_populate_chat_choices_list_correct_item_count():
 
 @pytest.mark.asyncio
 async def test_populate_chat_choices_list_empty_choices():
-    """_populate_chat_choices_list with no choices still shows PRIMARY_EXTRAS."""
+    """_populate_chat_choices_list with no choices still shows extras."""
     app = make_app()
     async with app.run_test() as pilot:
         session = _setup_session_with_choices(app, choices=[])
@@ -101,7 +103,9 @@ async def test_populate_chat_choices_list_empty_choices():
         extras = [c for c in items if c.choice_index <= 0]
 
         assert len(real) == 0
-        assert len(extras) == len(PRIMARY_EXTRAS)
+        # Collapsed: More options toggle + PRIMARY_EXTRAS
+        expected_extras = 1 + len(PRIMARY_EXTRAS)
+        assert len(extras) == expected_extras
 
 
 # ─── Test: _show_waiting hides #chat-choices in chat view ──────────

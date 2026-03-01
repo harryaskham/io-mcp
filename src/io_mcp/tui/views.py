@@ -8,14 +8,12 @@ from __future__ import annotations
 
 import os
 import subprocess
-import time
 from typing import TYPE_CHECKING
 
 from textual import work
 from textual.widgets import Label, ListView, RichLog
 
 from ..logging import read_log_tail, TUI_ERROR_LOG, PROXY_LOG
-from .themes import DEFAULT_SCHEME, get_scheme
 from .widgets import ChoiceItem, _safe_action
 
 if TYPE_CHECKING:

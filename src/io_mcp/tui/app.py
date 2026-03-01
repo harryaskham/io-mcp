@@ -242,6 +242,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         # Extra options expand/collapse state
         self._extras_expanded = False
+        self._chat_extras_expanded = False
 
         # Dwell timer
         self._dwell_timer: Optional[Timer] = None
@@ -2159,8 +2160,10 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         # Don't overwrite the UI if user is composing a message or typing
         if self._message_mode or (session and session.input_mode):
             # Choices are stored on the session; they'll be shown after input is done
-            # Play inbox chime (distinct from choices chime) since user is busy
+            # Play inbox chime + brief announcement so screen-off user knows what happened
             self._tts.play_chime("inbox")
+            if session:
+                self._speak_ui(f"Choices from {session.name}")
             return
 
         preamble_widget = self.query_one("#preamble", Label)
@@ -2267,6 +2270,14 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         # so on_list_selected routes them to _handle_extra_select
         di = len(choices)
         extras_list = list(PRIMARY_EXTRAS)
+
+        # Add "More options" toggle + secondary extras in chat view too,
+        # so all features are accessible via scroll+enter (not just keyboard shortcuts)
+        if getattr(self, '_chat_extras_expanded', False):
+            extras_list = list(SECONDARY_EXTRAS) + extras_list
+        else:
+            extras_list = [MORE_OPTIONS_ITEM] + extras_list
+
         for ei, e in enumerate(extras_list):
             list_view.append(ChoiceItem(
                 e.get('label', ''), e.get('summary', ''),
@@ -2355,6 +2366,9 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
             if not self._chat_view_active:
                 self.query_one("#main-content").display = False
             self._update_footer_status()
+            # TTS guidance for screen-off users — let them know what keys are available
+            if not self._demo:
+                self._speak_ui("No agents connected. Press t to spawn, s for settings, q to quit.")
             return
 
         if session.tool_call_count > 0:
@@ -2789,9 +2803,9 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
                 inbox_list.index = 0
 
         except Exception:
-            pass
+            _log.debug("_update_inbox_list failed", exc_info=True)
 
-    def _get_inbox_item_at_index(self, idx: int):
+    def _get_inbox_item_at_index(self, idx: int) -> Optional[InboxItem]:
         """Get the InboxItem corresponding to an inbox list position.
 
         Mirrors the unified inbox ordering from _update_inbox_list:
@@ -2950,7 +2964,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
             frontend_api.emit_speech_requested(
                 session.session_id, text, blocking=block, priority=priority)
         except Exception:
-            pass
+            _log.debug("Failed to emit speech event to frontend API", exc_info=True)
 
         # Log the speech
         entry = SpeechEntry(text=text, priority=priority)
@@ -3073,7 +3087,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
             frontend_api.emit_speech_requested(
                 session.session_id, text, blocking=True, priority=priority)
         except Exception:
-            pass
+            _log.debug("Failed to emit speech event for inbox speech item", exc_info=True)
 
         # Update inbox UI to show this item as active
         session._active_inbox_item = item
@@ -3133,7 +3147,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
             list_view.clear()
             list_view.display = True
         except Exception:
-            pass
+            _log.debug("_show_speech_item failed", exc_info=True)
 
     def _try_play_background_queue(self) -> None:
         """Try to play queued background speech if foreground is idle."""
@@ -4201,7 +4215,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         try:
             self.call_from_thread(self._update_tab_bar)
         except Exception:
-            pass
+            _log.debug("on_session_created: update_tab_bar failed", exc_info=True)
 
         # Auto-activate chat view on first session connection.
         if not self._chat_view_active:
@@ -4281,7 +4295,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         try:
             frontend_api.emit_session_created(session.session_id, session.name)
         except Exception:
-            pass
+            _log.debug("Failed to emit session_created event", exc_info=True)
 
         # Notification webhook for session creation
         try:
@@ -4295,7 +4309,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
                 tags=["new", "robot_face"],
             ))
         except Exception:
-            pass
+            _log.debug("Failed to send agent_connected notification", exc_info=True)
 
     def on_session_removed(self, session_id: str) -> None:
         """Called when a session is removed."""
@@ -4309,7 +4323,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         try:
             frontend_api.emit_session_removed(session_id)
         except Exception:
-            pass
+            _log.debug("Failed to emit session_removed event", exc_info=True)
 
         # Notification webhook
         try:
@@ -4323,7 +4337,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
                 tags=["wave"],
             ))
         except Exception:
-            pass
+            _log.debug("Failed to send agent_disconnected notification", exc_info=True)
 
         try:
             self.call_from_thread(self._update_tab_bar)
@@ -4334,7 +4348,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
             else:
                 self.call_from_thread(self._show_idle)
         except Exception:
-            pass
+            _log.debug("on_session_removed: UI update failed", exc_info=True)
 
     # ─── Prompt replay ────────────────────────────────────────────
 
@@ -5707,9 +5721,18 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         if label == "More options ›" or label == "More options":
             # Toggle expand/collapse and re-render
-            self._extras_expanded = not self._extras_expanded
-            self._show_choices()
-            if self._extras_expanded:
+            if self._chat_view_active:
+                # Chat view has its own expand state
+                self._chat_extras_expanded = not getattr(self, '_chat_extras_expanded', False)
+                session = self._focused()
+                if session and session.active:
+                    self._populate_chat_choices_list(session)
+            else:
+                self._extras_expanded = not self._extras_expanded
+                self._show_choices()
+            expanded = (self._chat_extras_expanded if self._chat_view_active
+                        else self._extras_expanded)
+            if expanded:
                 self._speak_ui("More options")
             else:
                 self._speak_ui("Collapsed")
@@ -5745,6 +5768,18 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
             self._show_history()
         elif label == "Queue message":
             self.action_queue_message()
+        elif label == "Help":
+            self.action_show_help()
+        elif label == "Type reply":
+            self.action_freeform_input()
+        elif label == "Undo":
+            self.action_undo_selection()
+        elif label == "Replay prompt":
+            self.action_replay_prompt()
+        elif label == "Chat view":
+            self.action_chat_view()
+        elif label == "Filter":
+            self.action_filter_choices()
 
     def _enter_quick_settings(self) -> None:
         """Show quick settings submenu with speed/voice toggles, settings, restart, etc."""

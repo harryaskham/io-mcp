@@ -95,6 +95,12 @@ SECONDARY_EXTRAS = [
     {"label": "View logs", "summary": "TUI errors, proxy logs, speech history"},
     {"label": "Close tab", "summary": "Close the focused agent tab"},
     {"label": "Quick settings", "summary": "Speed, voice, notifications, restart"},
+    {"label": "Help", "summary": "Show keyboard shortcut reference"},
+    {"label": "Type reply", "summary": "Type a freeform text reply (keyboard input)"},
+    {"label": "Undo", "summary": "Undo the last selection and re-present choices"},
+    {"label": "Replay prompt", "summary": "Re-read the agent's question aloud"},
+    {"label": "Chat view", "summary": "Toggle chat bubble view"},
+    {"label": "Filter", "summary": "Type to filter the choice list"},
 ]
 
 # "More options" toggle item

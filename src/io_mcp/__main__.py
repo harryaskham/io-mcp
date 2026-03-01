@@ -359,7 +359,7 @@ def _detect_hostname() -> str:
                 if ts_hostname:
                     hostname = ts_hostname
     except Exception:
-        pass
+        _file_log.debug("Tailscale hostname detection failed", exc_info=True)
 
     # Fallback to socket hostname
     if not hostname:
@@ -489,7 +489,7 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
             try:
                 frontend.on_session_created(session)
             except Exception:
-                pass
+                _file_log.debug("on_session_created callback failed", exc_info=True)
         session.last_tool_call = _time.time()
         session.heartbeat_spoken = False
         session.ambient_count = 0
@@ -928,7 +928,7 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
                 app._restart_requested = True
                 app.call_from_thread(lambda: app.exit(return_code=42))
             except Exception:
-                pass
+                _file_log.debug("Failed to trigger TUI restart", exc_info=True)
 
         threading.Thread(target=_do_restart, daemon=True).start()
         return json.dumps({"status": "accepted", "message": "TUI will restart in ~1.5 seconds. Proxy stays alive."})
@@ -980,11 +980,12 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
                 app.call_from_thread(lambda: app.on_session_removed(session_id))
             except Exception:
                 # Fallback: remove directly from manager
+                _file_log.debug("call_from_thread failed for session removal, using fallback", exc_info=True)
                 frontend.manager.remove(session_id)
                 try:
                     frontend.update_tab_bar()
                 except Exception:
-                    pass
+                    _file_log.debug("Fallback update_tab_bar also failed", exc_info=True)
             return json.dumps({"status": "closed", "message": f"Session '{name}' closed."})
 
         # User declined — ask for a reason
@@ -1379,13 +1380,13 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
                             frontend.tts.play_chime("achievement")
                             frontend.tts.speak_async(f"Achievement unlocked: {ach}")
                         except Exception:
-                            pass
+                            _file_log.debug("Achievement chime/speech failed", exc_info=True)
 
                     # Update TUI waiting view to reflect new activity
                     try:
                         frontend.update_tab_bar()
                     except Exception:
-                        pass
+                        _file_log.debug("Post-tool tab bar update failed", exc_info=True)
 
             # Add speech reminder for non-speech tools
             if tool_name not in _SPEECH_TOOLS:
@@ -1404,7 +1405,7 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
                 frontend.tts.play_chime("error")
                 frontend.tts.speak_async(f"Tool error: {tool_name}. {str(e)[:80]}")
             except Exception:
-                pass
+                _file_log.debug("Failed to play error chime/speech", exc_info=True)
             error_data = {"error": f"{type(e).__name__}: {str(e)[:200]}", "tool": tool_name}
             # Include crash log content so agents can self-heal
             crash_log = ""
@@ -1579,6 +1580,221 @@ def _restart_proxy_command() -> None:
         print("  Failed. Check logs.")
 
 
+# ─── Cache subcommand ─────────────────────────────────────────────
+
+def _collect_warmup_texts(config: IoMcpConfig) -> list[str]:
+    """Collect all fixed UI strings that should be pre-cached for TTS.
+
+    Returns a deduplicated list of strings from:
+    - Extra option labels (PRIMARY_EXTRAS, SECONDARY_EXTRAS, MORE_OPTIONS_ITEM)
+    - Settings menu labels
+    - Common UI phrases
+    - Number words (for instant-select readout)
+    - Speed values (for settings scrolling)
+    - Emotion/style names, voice preset names, STT model names
+    - Theme names
+    """
+    from .tui.widgets import PRIMARY_EXTRAS, SECONDARY_EXTRAS, MORE_OPTIONS_ITEM
+    from .tui.themes import COLOR_SCHEMES
+    from .settings import Settings
+
+    texts: list[str] = []
+
+    # 1. Extra option labels
+    for item in PRIMARY_EXTRAS:
+        texts.append(item["label"])
+    for item in SECONDARY_EXTRAS:
+        texts.append(item["label"])
+    texts.append(MORE_OPTIONS_ITEM["label"])
+
+    # 2. Settings menu labels
+    settings_labels = [
+        "Speed", "Agent voice", "UI voice", "Style", "STT model",
+        "Local TTS", "Color scheme", "TTS cache", "Close settings",
+    ]
+    texts.extend(settings_labels)
+
+    # 3. Common UI phrases
+    common_phrases = [
+        "Settings", "Back to choices", "Back to chat", "Settings closed",
+        "Help", "Waiting for agent", "No active sessions", "Connected",
+    ]
+    texts.extend(common_phrases)
+
+    # 4. Number words for instant-select readout
+    number_words = [
+        "one", "two", "three", "four", "five",
+        "six", "seven", "eight", "nine",
+    ]
+    texts.extend(number_words)
+
+    # 5. Speed values
+    speed_values = [f"{v / 10:.1f}" for v in range(5, 26)]
+    texts.extend(speed_values)
+
+    # 6. Settings values from config
+    settings = Settings(config)
+    texts.extend(settings.get_emotions())
+    texts.extend(settings.get_voices())
+    texts.extend(settings.get_stt_models())
+
+    # 7. Theme names
+    texts.extend(COLOR_SCHEMES.keys())
+
+    # Deduplicate while preserving order
+    seen: set[str] = set()
+    unique: list[str] = []
+    for t in texts:
+        if t not in seen:
+            seen.add(t)
+            unique.append(t)
+
+    return unique
+
+
+def _run_cache_warmup(verbose: bool = False) -> None:
+    """Pre-generate TTS audio for all fixed UI strings."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    config = IoMcpConfig.load()
+    tts = TTSEngine(local=False, config=config)
+
+    texts = _collect_warmup_texts(config)
+
+    # Determine which voice(s) to generate for
+    agent_voice = config.tts_voice_preset
+    ui_voice = config.tts_ui_voice_preset
+    has_separate_ui_voice = ui_voice and ui_voice != agent_voice
+
+    # Build work items: (text, voice_override)
+    work_items: list[tuple[str, str | None]] = []
+    for t in texts:
+        work_items.append((t, None))  # agent voice (default)
+    if has_separate_ui_voice:
+        for t in texts:
+            work_items.append((t, ui_voice))  # UI voice
+
+    # Count already cached
+    already_cached = 0
+    to_generate: list[tuple[str, str | None]] = []
+    for text, voice_override in work_items:
+        key = tts._cache_key(text, voice_override=voice_override)
+        if key in tts._cache:
+            already_cached += 1
+        else:
+            to_generate.append((text, voice_override))
+
+    total = len(work_items)
+    voice_info = f"agent voice: {agent_voice}"
+    if has_separate_ui_voice:
+        voice_info += f", UI voice: {ui_voice}"
+
+    print(f"io-mcp cache warmup")
+    print(f"─" * 40)
+    print(f"  {voice_info}")
+    print(f"  Total strings: {len(texts)}")
+    print(f"  Total items (with voice variants): {total}")
+    print(f"  Already cached: {already_cached}")
+    print(f"  To generate: {len(to_generate)}")
+    print()
+
+    if not to_generate:
+        print("  All items already cached. Nothing to do.")
+        # Print summary
+        count, total_bytes = tts.cache_stats()
+        size_str = _format_size(total_bytes)
+        print(f"\n  Cache: {count} items ({size_str})")
+        return
+
+    # Generate with a thread pool
+    completed = 0
+    errors = 0
+
+    def _generate_one(item: tuple[str, str | None]) -> bool:
+        text, voice_override = item
+        try:
+            result = tts._generate_to_file_unlocked(
+                text, voice_override=voice_override)
+            return result is not None
+        except Exception:
+            return False
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        futures = {pool.submit(_generate_one, item): item for item in to_generate}
+        for future in as_completed(futures):
+            if future.result():
+                completed += 1
+            else:
+                errors += 1
+            done = completed + errors
+            # Progress counter
+            print(f"\r  Generating: {done}/{len(to_generate)}", end="", flush=True)
+
+    print()  # newline after progress
+
+    # Summary
+    count, total_bytes = tts.cache_stats()
+    size_str = _format_size(total_bytes)
+    print(f"\n  Generated {completed} items ({errors} errors)")
+    print(f"  Cache: {count} items ({size_str})")
+
+
+def _run_cache_status(verbose: bool = False) -> None:
+    """Show TTS cache statistics."""
+    config = IoMcpConfig.load()
+    tts = TTSEngine(local=False, config=config)
+
+    count, total_bytes = tts.cache_stats()
+    size_str = _format_size(total_bytes)
+
+    print(f"io-mcp cache status")
+    print(f"─" * 40)
+    print(f"  Items: {count}")
+    print(f"  Size:  {size_str}")
+
+    if verbose and tts._cache:
+        print(f"\n  Cached entries:")
+        # The cache maps hash → path; we can't recover the original text
+        # from the hash, but we can show the file paths and sizes
+        for key, path in sorted(tts._cache.items()):
+            try:
+                fsize = os.path.getsize(path)
+                print(f"    {key[:12]}…  {_format_size(fsize):>10}  {os.path.basename(path)}")
+            except OSError:
+                print(f"    {key[:12]}…  (missing)")
+
+
+def _format_size(nbytes: int) -> str:
+    """Format byte count as human-readable string."""
+    if nbytes >= 1_048_576:
+        return f"{nbytes / 1_048_576:.1f} MB"
+    elif nbytes >= 1024:
+        return f"{nbytes / 1024:.1f} KB"
+    else:
+        return f"{nbytes} B"
+
+
+def _run_cache_command() -> None:
+    """CLI subcommand: io-mcp cache [warmup|status]"""
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="io-mcp cache",
+        description="Manage TTS audio cache",
+    )
+    parser.add_argument("cache", help=argparse.SUPPRESS)  # consume 'cache'
+    parser.add_argument("action", choices=["warmup", "status"],
+                        help="Action: warmup (pre-generate audio) or status (show cache stats)")
+    parser.add_argument("--verbose", "-v", action="store_true",
+                        help="Show verbose output (cache entry details for status)")
+    args = parser.parse_args()
+
+    if args.action == "warmup":
+        _run_cache_warmup(verbose=args.verbose)
+    elif args.action == "status":
+        _run_cache_status(verbose=args.verbose)
+
+
 # ─── Main entry point ────────────────────────────────────────────
 
 def main() -> None:
@@ -1601,6 +1817,10 @@ def main() -> None:
 
     if len(sys.argv) > 1 and sys.argv[1] == "restart-proxy":
         _restart_proxy_command()
+        return
+
+    if len(sys.argv) > 1 and sys.argv[1] == "cache":
+        _run_cache_command()
         return
 
     # ─── Ensure truecolor support ──────────────────────────────
@@ -1753,7 +1973,7 @@ def main() -> None:
                     _app.call_from_thread(_app._update_inbox_list)
                     _app.call_from_thread(_app._update_tab_bar)
             except Exception:
-                pass
+                _file_log.debug("cancel_mcp handler failed", exc_info=True)
 
         def _report_activity(session_id: str, tool: str, detail: str, kind: str) -> None:
             """Log an activity from a hook (e.g. PreToolUse) to the session's feed."""
@@ -1770,7 +1990,7 @@ def main() -> None:
                 if session:
                     session.log_activity(tool, detail, kind)
             except Exception:
-                pass
+                _file_log.debug("report_activity failed", exc_info=True)
 
         start_backend_server(dispatch, host="0.0.0.0", port=args.port,
                            cancel_dispatch=_cancel_dispatch,

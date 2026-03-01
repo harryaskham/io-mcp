@@ -30,13 +30,34 @@ _log = get_logger("io-mcp.tts", TUI_ERROR_LOG)
 # espeak-ng words per minute
 TTS_SPEED = 160
 
-# Path to the gpt-4o-mini-tts wrapper
-
 # LD_LIBRARY_PATH needed for sounddevice/portaudio on NOD
 PORTAUDIO_LIB = os.path.expanduser("~/.nix-profile/lib")
 
 # Cache dir for pregenerated audio
 CACHE_DIR = os.path.join(tempfile.gettempdir(), "io-mcp-tts-cache")
+
+# WAV file header size in bytes (RIFF header)
+WAV_HEADER_SIZE = 44
+
+# PulseAudio settle delay (seconds) — brief pause before playback
+# to prevent glitches on network audio (e.g. Tailscale)
+PULSE_SETTLE_DELAY = 0.05
+
+# Timeout for paplay startup check (seconds) — how long to wait
+# for paplay to either start playing or fail with a connection error
+PAPLAY_STARTUP_CHECK_TIMEOUT = 0.15
+
+# Timeout for blocking playback wait (seconds)
+PLAYBACK_TIMEOUT = 30
+
+# Timeout for termux-tts-speak blocking wait (seconds)
+TERMUX_SPEAK_TIMEOUT = 30
+
+# Timeout for WAV header read during streaming TTS (seconds)
+STREAMING_HEADER_TIMEOUT = 10
+
+# Default pregeneration workers
+DEFAULT_PREGEN_WORKERS = 3
 
 
 def _find_binary(name: str) -> Optional[str]:
@@ -393,7 +414,7 @@ class TTSEngine:
 
                         try:
                             fsize = os.path.getsize(out_path)
-                            if fsize < 44:
+                            if fsize < WAV_HEADER_SIZE:
                                 self._log_tts_error(
                                     f"tts CLI produced invalid WAV ({fsize} bytes)", text)
                                 self._record_api_gen_failure()
@@ -453,8 +474,8 @@ class TTSEngine:
         for p in paths:
             try:
                 with open(p, "rb") as f:
-                    header = f.read(44)
-                    if len(header) < 44:
+                    header = f.read(WAV_HEADER_SIZE)
+                    if len(header) < WAV_HEADER_SIZE:
                         continue
                     # Validate RIFF/WAVE header
                     if header[:4] != b"RIFF" or header[8:12] != b"WAVE":
@@ -565,7 +586,7 @@ class TTSEngine:
                     # All fragments cached — concatenate and play
                     combined = self._concat_wavs(paths)
                     if combined:
-                        _time_mod.sleep(0.05)  # Brief pause for PulseAudio
+                        _time_mod.sleep(PULSE_SETTLE_DELAY)  # Brief pause for PulseAudio
                         self._start_playback(combined, max_attempts=self._max_retries)
                         self._wait_for_playback()
                     else:
@@ -680,7 +701,7 @@ class TTSEngine:
             if self._config and hasattr(self._config, 'tts_pregenerate_workers'):
                 max_workers = self._config.tts_pregenerate_workers
             else:
-                max_workers = 3
+                max_workers = DEFAULT_PREGEN_WORKERS
 
         # Generate in parallel using a thread pool.
         # Workers check _pregen_gen before each API call.
@@ -823,7 +844,7 @@ class TTSEngine:
 
                 try:
                     fsize = os.path.getsize(out_path)
-                    if fsize < 44:
+                    if fsize < WAV_HEADER_SIZE:
                         self._log_tts_error(
                             f"tts CLI produced invalid WAV ({fsize} bytes)", text)
                         self._record_api_gen_failure()
@@ -880,7 +901,7 @@ class TTSEngine:
         path = self._cache.get(key)
 
         if path and os.path.isfile(path):
-            _time_mod.sleep(0.05)  # Brief pause to let PulseAudio settle
+            _time_mod.sleep(PULSE_SETTLE_DELAY)  # Brief pause to let PulseAudio settle
             if not self._start_playback(path, max_attempts=self._max_retries):
                 self._log_tts_error("paplay failed for cached audio", text)
             elif block:
@@ -891,7 +912,7 @@ class TTSEngine:
                                        model_override=model_override,
                                        speed_override=speed_override)
             if p:
-                _time_mod.sleep(0.05)  # Brief pause to let PulseAudio settle
+                _time_mod.sleep(PULSE_SETTLE_DELAY)  # Brief pause to let PulseAudio settle
                 if not self._start_playback(p, max_attempts=self._max_retries):
                     self._log_tts_error("paplay failed after generation", text)
                 elif block:
@@ -943,7 +964,7 @@ class TTSEngine:
                 proc = subprocess.run(
                     cmd, capture_output=True, timeout=10,
                 )
-                if proc.returncode == 0 and len(proc.stdout) > 44:
+                if proc.returncode == 0 and len(proc.stdout) > WAV_HEADER_SIZE:
                     # Write to temp file and play
                     import tempfile
                     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
@@ -952,7 +973,7 @@ class TTSEngine:
                     self.stop_sync()
                     self._start_playback(tmp_path)
         except Exception:
-            pass
+            _log.debug("Local TTS fallback failed", exc_info=True)
 
     def _start_playback(self, path: str, max_attempts: int = 0) -> bool:
         """Start paplay for a WAV file. Returns True if playback started ok.
@@ -984,7 +1005,7 @@ class TTSEngine:
 
             # Give paplay a moment to fail on connection errors
             try:
-                retcode = proc.wait(timeout=0.15)
+                retcode = proc.wait(timeout=PAPLAY_STARTUP_CHECK_TIMEOUT)
                 # Process exited immediately — likely a connection error
                 stderr_out = ""
                 try:
@@ -1022,7 +1043,7 @@ class TTSEngine:
         if tracked is not None:
             proc = tracked.proc
             try:
-                retcode = proc.wait(timeout=30)
+                retcode = proc.wait(timeout=PLAYBACK_TIMEOUT)
                 if retcode != 0:
                     # Negative return code = killed by signal (intentional stop)
                     if retcode < 0:
@@ -1036,7 +1057,7 @@ class TTSEngine:
                         f"paplay exited with code {retcode}: {stderr_out or 'no stderr'}"
                     )
             except subprocess.TimeoutExpired:
-                self._record_failure("paplay timed out after 30s")
+                self._record_failure(f"paplay timed out after {PLAYBACK_TIMEOUT}s")
             except Exception:
                 pass
 
@@ -1158,11 +1179,11 @@ class TTSEngine:
             )
             if block:
                 try:
-                    tracked.proc.wait(timeout=30)
+                    tracked.proc.wait(timeout=TERMUX_SPEAK_TIMEOUT)
                 except subprocess.TimeoutExpired:
                     tracked.kill()
         except Exception:
-            pass
+            _log.debug("termux-tts-speak failed", exc_info=True)
 
     def _kill_termux_proc(self) -> None:
         """Kill the current termux-tts-speak process and its entire process group."""
@@ -1241,7 +1262,7 @@ class TTSEngine:
                         self.stop_sync()
                         self._start_playback(tmp)
                     except Exception:
-                        pass
+                        _log.debug("espeak local fallback failed", exc_info=True)
                 threading.Thread(target=_espeak_local, daemon=True).start()
             return
 
@@ -1363,11 +1384,11 @@ class TTSEngine:
             # giving paplay an empty/corrupt stream.
             import select
             header = b""
-            deadline = _time_mod.time() + 10  # 10s to get WAV header
-            while len(header) < 44 and _time_mod.time() < deadline:
+            deadline = _time_mod.time() + STREAMING_HEADER_TIMEOUT
+            while len(header) < WAV_HEADER_SIZE and _time_mod.time() < deadline:
                 ready, _, _ = select.select([tts_proc.stdout], [], [], 0.5)
                 if ready:
-                    chunk = tts_proc.stdout.read(44 - len(header))
+                    chunk = tts_proc.stdout.read(WAV_HEADER_SIZE - len(header))
                     if not chunk:
                         break  # EOF — TTS process closed stdout
                     header += chunk
@@ -1375,7 +1396,7 @@ class TTSEngine:
                 if tts_proc.poll() is not None and not ready:
                     break
 
-            if len(header) < 44 or header[:4] != b"RIFF":
+            if len(header) < WAV_HEADER_SIZE or header[:4] != b"RIFF":
                 # Check if the process was killed by a signal (intentional cancellation)
                 # e.g. cancel_all() from stop()/stop_sync() during scroll or new speech.
                 # These are expected during normal operation — no need to log.
@@ -1655,7 +1676,7 @@ class TTSEngine:
             shutil.rmtree(CACHE_DIR, ignore_errors=True)
             os.makedirs(CACHE_DIR, exist_ok=True)
         except Exception:
-            pass
+            _log.debug("Failed to clear TTS cache directory", exc_info=True)
 
     def reconnect_pulse(self) -> tuple[bool, str]:
         """Attempt to reconnect PulseAudio with gentle recovery strategies.

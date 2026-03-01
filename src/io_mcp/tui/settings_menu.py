@@ -17,6 +17,15 @@ if TYPE_CHECKING:
     from .app import IoMcpApp
 
 
+def _format_byte_size(n: int) -> str:
+    """Format a byte count as a human-readable size string (B, KB, or MB)."""
+    if n >= 1_048_576:
+        return f"{n / 1_048_576:.1f} MB"
+    elif n >= 1024:
+        return f"{n / 1024:.1f} KB"
+    return f"{n} B"
+
+
 class SettingsMixin:
     """Mixin providing settings menu action methods."""
 
@@ -70,12 +79,7 @@ class SettingsMixin:
 
         # TTS cache stats
         cache_count, cache_bytes = self._tts.cache_stats()
-        if cache_bytes >= 1_048_576:
-            cache_size_str = f"{cache_bytes / 1_048_576:.1f} MB"
-        elif cache_bytes >= 1024:
-            cache_size_str = f"{cache_bytes / 1024:.1f} KB"
-        else:
-            cache_size_str = f"{cache_bytes} B"
+        cache_size_str = _format_byte_size(cache_bytes)
         cache_summary = f"{cache_count} items ({cache_size_str})" if cache_count else "empty"
 
         self._settings_items = [
@@ -258,12 +262,7 @@ class SettingsMixin:
             list_view = self.query_one("#choices", ListView)
             list_view.clear()
             cache_count, cache_bytes = self._tts.cache_stats()
-            if cache_bytes >= 1_048_576:
-                size_str = f"{cache_bytes / 1_048_576:.1f} MB"
-            elif cache_bytes >= 1024:
-                size_str = f"{cache_bytes / 1024:.1f} KB"
-            else:
-                size_str = f"{cache_bytes} B"
+            size_str = _format_byte_size(cache_bytes)
             list_view.append(ChoiceItem("Clear cache", f"Remove {cache_count} items ({size_str})", index=1, display_index=0))
             list_view.append(ChoiceItem("Back", "", index=2, display_index=1))
             list_view.index = 0
