@@ -420,7 +420,7 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
         height: auto;
         max-height: 50%;
         background: {s['bg_alt']};
-        border: solid {s['border']};
+        border: tall {s['accent']};
         margin: 0 1;
         scrollbar-background: {s['bg_alt']};
         scrollbar-color: {s['border']};
