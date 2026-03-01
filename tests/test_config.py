@@ -1495,11 +1495,12 @@ class TestPropertyAccessorsAdditional:
         assert c.tts_pregenerate_workers == 8
 
     def test_tts_speed_for_context(self, tmp_config):
-        """Per-context speed returns context-specific value when set."""
+        """Per-context speed multiplier is applied to base speed."""
         custom = {"config": {"tts": {"speed": 1.0, "speeds": {"speak": 1.5, "ui": 2.0}}}}
         with open(tmp_config, "w") as f:
             yaml.dump(custom, f)
         c = IoMcpConfig.load(tmp_config)
+        # base 1.0 × multiplier → same as multiplier when base is 1.0
         assert c.tts_speed_for("speak") == 1.5
         assert c.tts_speed_for("ui") == 2.0
 
@@ -1509,8 +1510,8 @@ class TestPropertyAccessorsAdditional:
         with open(tmp_config, "w") as f:
             yaml.dump(custom, f)
         c = IoMcpConfig.load(tmp_config)
-        # "speak" has a per-context value
-        assert c.tts_speed_for("speak") == 1.5
+        # "speak" multiplier 1.5 × base 1.3 = 1.95
+        assert c.tts_speed_for("speak") == 1.95
         # "nonexistent" is not in speeds — falls back to base speed
         assert c.tts_speed_for("nonexistent") == 1.3
 

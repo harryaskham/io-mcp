@@ -123,9 +123,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "uiVoice": "teo",
             "speed": 1.0,
             "speeds": {
+                # Per-context speed multipliers — applied on top of the base speed.
+                # Final speed = base_speed × multiplier. E.g. base 1.2 × scroll 1.3 = 1.56.
+                "scroll": 1.3,         # scroll readout — faster for quick scanning
                 "speak": 1.5,          # blocking agent speech (speak())
                 "speakAsync": 2.0,     # non-blocking agent speech (speak_async())
                 "preamble": 1.0,       # preamble readout when choices arrive
+                "agent": 1.0,          # generic agent speech (fallback for speak/speakAsync)
                 "choiceLabel": 1.5,    # choice option labels during readout
                 "choiceSummary": 2.0,  # choice option summaries during readout
                 "ui": 1.5,            # UI narration (settings, menus, numbers, "selected")
@@ -170,6 +174,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "turboThresholdMs": 40,            # avg interval below this → skip turboSkip items
             "fastSkip": 3,                     # items to skip in fast mode
             "turboSkip": 5,                    # items to skip in turbo mode
+        },
+        "conversation": {
+            "autoReply": False,                # auto-select "continue" choices in conversation mode
+            "autoReplyDelaySecs": 3.0,         # delay before auto-selecting
         },
         "dwell": {
             "enabled": False,                  # master toggle for dwell-to-select
@@ -465,7 +473,7 @@ class IoMcpConfig:
         known_config_keys = {
             "colorScheme", "tts", "stt", "realtime", "session",
             "ambient", "pulseAudio", "scroll", "scrollAcceleration",
-            "dwell", "haptic", "chimes", "healthMonitor",
+            "conversation", "dwell", "haptic", "chimes", "healthMonitor",
             "notifications", "agents", "keyBindings", "djent",
             "alwaysAllow", "ringReceiver",
         }
@@ -845,15 +853,21 @@ class IoMcpConfig:
     def tts_speed_for(self, context: str) -> float:
         """Get TTS speed for a specific context.
 
-        Returns the per-context speed from config.tts.speeds if set,
-        otherwise falls back to the base speed (config.tts.speed).
+        Values in config.tts.speeds are **multipliers** applied to the base
+        speed (config.tts.speed).  For example, base speed 1.2 with a scroll
+        multiplier of 1.3 yields 1.56.
 
-        Contexts: speak, speakAsync, preamble, choiceLabel, choiceSummary, ui
+        If the context is not found in speeds, falls back to the base speed
+        (i.e. an implicit multiplier of 1.0).
+
+        Contexts: scroll, speak, speakAsync, preamble, agent,
+                  choiceLabel, choiceSummary, ui
         """
+        base = self.tts_speed
         speeds = self.runtime.get("tts", {}).get("speeds", {})
-        val = speeds.get(context)
-        if val is not None:
-            return float(val)
+        multiplier = speeds.get(context)
+        if multiplier is not None:
+            return round(base * float(multiplier), 4)
         return self.tts_speed
 
     @property
@@ -1351,6 +1365,40 @@ class IoMcpConfig:
             return max(0.0, duration)
         except (TypeError, ValueError):
             return 0.0
+
+    # ─── Conversation / auto-reply settings ──────────────────────
+
+    @property
+    def conversation_auto_reply(self) -> bool:
+        """Whether auto-reply is enabled for conversation mode.
+
+        When True and conversation mode is active, single "continue"-style
+        choices are auto-selected after a configurable delay.
+        """
+        try:
+            return bool(
+                self.expanded.get("config", {})
+                .get("conversation", {})
+                .get("autoReply", False)
+            )
+        except (TypeError, ValueError):
+            return False
+
+    @property
+    def conversation_auto_reply_delay(self) -> float:
+        """Delay in seconds before auto-selecting a continuation choice.
+
+        Returns 3.0 by default. Clamped to [0.5, 30.0].
+        """
+        try:
+            val = float(
+                self.expanded.get("config", {})
+                .get("conversation", {})
+                .get("autoReplyDelaySecs", 3.0)
+            )
+            return max(0.5, min(30.0, val))
+        except (TypeError, ValueError):
+            return 3.0
 
     # ─── Scroll settings ──────────────────────────────────────────
 

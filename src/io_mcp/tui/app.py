@@ -59,6 +59,54 @@ if TYPE_CHECKING:
 _build_css = build_css
 
 
+# ─── Auto-reply continuation detection ──────────────────────────────────────
+
+# Patterns that indicate a "continue working" choice.
+# Case-insensitive prefix matching, so "Keep building the feature" matches "keep building".
+_CONTINUATION_PATTERNS = [
+    "keep building",
+    "keep going",
+    "keep working",
+    "continue",
+    "proceed",
+    "yes, continue",
+    "yes continue",
+    "yes, keep",
+    "yes keep",
+    "sounds good",
+    "go ahead",
+    "do it",
+    "looks good",
+    "lgtm",
+]
+
+
+def _is_continuation_choice(choices: list[dict]) -> Optional[int]:
+    """Check if there's exactly one obvious "continue" choice.
+
+    Scans the choice labels for patterns that indicate the agent is asking
+    "should I keep going?" with a single affirmative option. Only returns
+    a match if there's exactly ONE continuation-style choice in the list.
+
+    Args:
+        choices: List of choice dicts with 'label' keys.
+
+    Returns:
+        0-based index of the single continuation choice, or None if no
+        unique match is found (zero matches or multiple matches).
+    """
+    matches: list[int] = []
+    for i, choice in enumerate(choices):
+        label = choice.get("label", "").strip().lower()
+        if not label:
+            continue
+        for pattern in _CONTINUATION_PATTERNS:
+            if label.startswith(pattern) or label == pattern:
+                matches.append(i)
+                break  # Don't double-count the same choice
+    return matches[0] if len(matches) == 1 else None
+
+
 # ─── Main TUI App ───────────────────────────────────────────────────────────
 
 class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
@@ -279,6 +327,10 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         # Conversation mode — continuous voice back-and-forth
         self._conversation_mode = False
+
+        # Auto-reply generation counter — incremented on any user interaction
+        # (scroll, key press) to cancel pending auto-reply timers.
+        self._auto_reply_gen = 0
 
         # System logs mode (TUI errors, proxy logs, speech history)
         self._system_logs_mode = False
@@ -2155,6 +2207,68 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
 
             # Try to speak in background if fg is idle
             self._try_play_background_queue()
+
+        # ── Auto-reply: auto-select continuation choices in conversation mode ──
+        if (self._conversation_mode
+                and is_fg
+                and self._config
+                and self._config.conversation_auto_reply):
+            cont_idx = _is_continuation_choice(choices)
+            if cont_idx is not None:
+                delay = self._config.conversation_auto_reply_delay
+                gen_at_start = self._auto_reply_gen
+
+                def _auto_reply_worker():
+                    """Wait, then auto-select if no user interaction occurred."""
+                    import time as _t
+                    # Sleep in small increments so we can bail early
+                    elapsed = 0.0
+                    step = 0.1
+                    while elapsed < delay:
+                        if self._auto_reply_gen != gen_at_start:
+                            return  # User interacted — cancel
+                        if item.done:
+                            return  # Already resolved (user selected manually)
+                        if not self._conversation_mode:
+                            return  # Conversation mode was turned off
+                        if not session.active:
+                            return  # Session no longer active
+                        _t.sleep(step)
+                        elapsed += step
+
+                    # Final check before auto-selecting
+                    if (self._auto_reply_gen != gen_at_start
+                            or item.done
+                            or not self._conversation_mode
+                            or not session.active):
+                        return
+
+                    # Auto-select the continuation choice
+                    chosen = choices[cont_idx]
+                    label = chosen.get("label", "")
+                    summary = chosen.get("summary", "")
+
+                    self._tts.stop()
+                    self._speak_ui("Auto-continuing")
+
+                    # Record in history
+                    try:
+                        session.append_history(HistoryEntry(
+                            label=label, summary=summary, preamble=session.preamble))
+                    except Exception:
+                        pass
+
+                    self._resolve_selection(session, {"selected": label, "summary": summary})
+
+                    # Emit event for remote frontends
+                    try:
+                        frontend_api.emit_selection_made(session.session_id, label, summary)
+                    except Exception:
+                        pass
+
+                    self._safe_call(lambda: self._show_waiting(label))
+
+                threading.Thread(target=_auto_reply_worker, daemon=True).start()
 
         # Block until selection (on the inbox item's event, not session.selection_event)
         item.event.wait()
@@ -5124,6 +5238,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         return 1
 
     def action_cursor_down(self) -> None:
+        self._auto_reply_gen += 1  # Cancel pending auto-reply
         session = self._focused()
         if session and (session.input_mode or session.voice_recording):
             return
@@ -5166,6 +5281,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
             list_view.action_cursor_down()
 
     def action_cursor_up(self) -> None:
+        self._auto_reply_gen += 1  # Cancel pending auto-reply
         session = self._focused()
         if session and (session.input_mode or session.voice_recording):
             return
@@ -5216,6 +5332,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         return True
 
     def on_mouse_scroll_down(self, event: MouseScrollDown) -> None:
+        self._auto_reply_gen += 1  # Cancel pending auto-reply
         session = self._focused()
         if (self._in_settings or self._setting_edit_mode or session) and self._scroll_allowed():
             self._interrupt_readout()
@@ -5231,6 +5348,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
                 event.stop()
 
     def on_mouse_scroll_up(self, event: MouseScrollUp) -> None:
+        self._auto_reply_gen += 1  # Cancel pending auto-reply
         session = self._focused()
         if (self._in_settings or self._setting_edit_mode or session) and self._scroll_allowed():
             self._interrupt_readout()
@@ -5252,6 +5370,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         This method only handles cases where Enter has meaning outside the list:
         voice recording stop, setting edit apply.
         """
+        self._auto_reply_gen += 1  # Cancel pending auto-reply
         if self._setting_edit_mode:
             self._apply_setting_edit()
             return
