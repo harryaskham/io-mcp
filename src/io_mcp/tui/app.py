@@ -22,7 +22,7 @@ from textual.timer import Timer
 from textual.widget import Widget
 from textual.widgets import Header, Input, Label, ListView, RichLog, Static
 
-from ..session import Session, SessionManager, SpeechEntry, HistoryEntry, InboxItem
+from ..session import Session, SessionManager, SpeechEntry, HistoryEntry, InboxItem, _resolve_pending_inbox
 from ..settings import Settings
 from ..tts import TTSEngine, _find_binary
 from .. import api as frontend_api
@@ -1659,6 +1659,10 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         is alive, present_choices will return a cancelled-style result. If the
         agent is dead (restarted/crashed), this simply cleans up the stale item.
 
+        Also handles stale items from dead/removed sessions: if the focused
+        session no longer exists in the manager, or the inbox item's owner
+        thread is dead, the item is directly cancelled and removed.
+
         Triggered by the "Dismiss" extra option or the 'd' keyboard shortcut.
         """
         session = self._focused()
@@ -1691,6 +1695,20 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
             self._safe_call(self._update_tab_bar)
 
             # Auto-advance to next pending item or show waiting view
+            self._safe_call(self._show_next_or_waiting)
+        elif session.active or any(not it.done for it in session.inbox):
+            # Session is marked active but the _active_inbox_item is missing
+            # or already done, OR session has stale pending inbox items from
+            # dead/removed agents.  Clean up all pending items and reset state.
+            _resolve_pending_inbox(session)
+            session._active_inbox_item = None
+            session.active = False
+            session.preamble = ""
+            session.choices = []
+
+            self._speak_ui("Dismissed stale item")
+            self._safe_call(self._update_inbox_list)
+            self._safe_call(self._update_tab_bar)
             self._safe_call(self._show_next_or_waiting)
         else:
             self._speak_ui("Nothing to dismiss")
@@ -4123,8 +4141,10 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         # Block during text input and voice recording
         if session.input_mode or session.voice_recording:
             return
-        # Only works when there's an active choice item
-        if not session.active:
+        # Works when there's an active choice item, or when there are stale
+        # pending inbox items that need cleanup (e.g. from dead sessions)
+        has_pending = any(not item.done for item in session.inbox)
+        if not session.active and not has_pending:
             self._speak_ui("Nothing to dismiss")
             return
         self._dismiss_active_item()
@@ -4313,9 +4333,21 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
 
     def on_session_removed(self, session_id: str) -> None:
         """Called when a session is removed."""
-        # Capture name before removal for notification
+        # Capture name and resolve pending inbox items before removal
         removed_session = self.manager.get(session_id)
         removed_name = removed_session.name if removed_session else session_id
+
+        # Resolve any pending inbox items so blocked MCP threads get a clean
+        # cancellation instead of hanging forever.  manager.remove() also calls
+        # _resolve_pending_inbox, but we do it here first to ensure the active
+        # inbox item reference is cleaned up on the TUI side as well.
+        if removed_session:
+            _resolve_pending_inbox(removed_session)
+            # Clear TUI-side active state so stale choices don't linger
+            removed_session.active = False
+            removed_session.preamble = ""
+            removed_session.choices = []
+            removed_session._active_inbox_item = None
 
         new_active = self.manager.remove(session_id)
 
@@ -4341,6 +4373,9 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         try:
             self.call_from_thread(self._update_tab_bar)
+            # Force inbox list rebuild to remove stale items from dead session
+            self._inbox_last_generation = -1
+            self.call_from_thread(self._update_inbox_list)
             if new_active is not None:
                 new_session = self.manager.get(new_active)
                 if new_session:

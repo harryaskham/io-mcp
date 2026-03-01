@@ -471,7 +471,7 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
         max-height: 8;
         layout: horizontal;
         width: 1fr;
-        margin: 0 1;
+        margin: 0 1 1 1;
     }}
 
     #chat-input {{

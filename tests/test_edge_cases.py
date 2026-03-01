@@ -580,3 +580,237 @@ class TestTabNavigationEdgeCases:
         mgr.focus("s1")
         result = mgr.prev_tab()
         assert result is s3
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 8. Stale inbox items from dead/removed sessions
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestStaleInboxCleanup:
+    """Test that inbox items from dead/removed sessions are properly cleaned up."""
+
+    def test_resolve_pending_inbox_cancels_all_items(self):
+        """_resolve_pending_inbox should cancel all pending items and unblock threads."""
+        from io_mcp.session import _resolve_pending_inbox
+
+        session = Session(session_id="test-1", name="Test")
+
+        # Enqueue multiple pending items
+        items = []
+        for i in range(3):
+            item = InboxItem(
+                kind="choices",
+                preamble=f"Pick {i}",
+                choices=[{"label": f"Option {i}"}],
+            )
+            session.enqueue(item)
+            items.append(item)
+
+        # Resolve all pending
+        resolved = _resolve_pending_inbox(session)
+
+        assert resolved == 3
+        assert len(session.inbox) == 0
+        for item in items:
+            assert item.done is True
+            assert item.result["selected"] == "_cancelled"
+            assert item.event.is_set()
+
+    def test_resolve_pending_inbox_unblocks_waiting_threads(self):
+        """Blocked threads should wake up when _resolve_pending_inbox is called."""
+        from io_mcp.session import _resolve_pending_inbox
+
+        session = Session(session_id="test-1", name="Test")
+
+        item = InboxItem(
+            kind="choices",
+            preamble="Pick one",
+            choices=[{"label": "A"}],
+        )
+        session.enqueue(item)
+
+        # Simulate a thread waiting on this item
+        woke_up = threading.Event()
+
+        def waiter():
+            item.event.wait(timeout=5)
+            woke_up.set()
+
+        t = threading.Thread(target=waiter, daemon=True)
+        t.start()
+        time.sleep(0.05)  # let waiter start blocking
+
+        # Resolve — should wake up the waiter
+        _resolve_pending_inbox(session)
+        woke_up.wait(timeout=2)
+
+        assert woke_up.is_set()
+        assert item.result["selected"] == "_cancelled"
+
+    def test_session_removal_resolves_inbox_items(self):
+        """SessionManager.remove should resolve pending inbox items."""
+        mgr = SessionManager()
+        session, _ = mgr.get_or_create("s1")
+
+        # Add pending inbox items
+        item1 = InboxItem(kind="choices", preamble="P1",
+                          choices=[{"label": "A"}])
+        item2 = InboxItem(kind="choices", preamble="P2",
+                          choices=[{"label": "B"}])
+        session.enqueue(item1)
+        session.enqueue(item2)
+
+        # Remove the session
+        mgr.remove("s1")
+
+        # Items should be resolved with _cancelled
+        assert item1.done is True
+        assert item1.result["selected"] == "_cancelled"
+        assert item1.event.is_set()
+        assert item2.done is True
+        assert item2.result["selected"] == "_cancelled"
+        assert item2.event.is_set()
+
+    def test_session_removal_does_not_affect_other_sessions(self):
+        """Removing one session should not affect inbox items in other sessions."""
+        mgr = SessionManager()
+        s1, _ = mgr.get_or_create("s1")
+        s2, _ = mgr.get_or_create("s2")
+
+        # Add items to both sessions
+        item_s1 = InboxItem(kind="choices", preamble="S1 item",
+                            choices=[{"label": "A"}])
+        s1.enqueue(item_s1)
+
+        item_s2 = InboxItem(kind="choices", preamble="S2 item",
+                            choices=[{"label": "B"}])
+        s2.enqueue(item_s2)
+
+        # Remove s1 only
+        mgr.remove("s1")
+
+        # s1's item should be cancelled
+        assert item_s1.done is True
+        assert item_s1.result["selected"] == "_cancelled"
+
+        # s2's item should be untouched
+        assert item_s2.done is False
+        assert item_s2.result is None
+
+    def test_dismiss_stale_active_item_with_no_inbox_item(self):
+        """Dismissing when session.active=True but _active_inbox_item is gone should clean up."""
+        from io_mcp.session import _resolve_pending_inbox
+
+        session = Session(session_id="test-1", name="Test")
+
+        # Simulate stale state: session.active is True but no _active_inbox_item
+        session.active = True
+        session.preamble = "Stale preamble"
+        session.choices = [{"label": "Stale"}]
+        session._active_inbox_item = None
+
+        # Also add some orphaned pending items in the inbox
+        orphan = InboxItem(kind="choices", preamble="Orphan",
+                           choices=[{"label": "X"}])
+        session.enqueue(orphan)
+
+        # Resolve should clean up everything
+        _resolve_pending_inbox(session)
+        session.active = False
+        session.preamble = ""
+        session.choices = []
+
+        assert len(session.inbox) == 0
+        assert orphan.done is True
+        assert orphan.result["selected"] == "_cancelled"
+
+    def test_dismiss_clears_stale_pending_items(self):
+        """Dismissing should clear stale pending items even when session.active=False."""
+        from io_mcp.session import _resolve_pending_inbox
+
+        session = Session(session_id="test-1", name="Test")
+        session.active = False
+
+        # Add stale pending items (e.g. from a dead agent thread)
+        stale1 = InboxItem(kind="choices", preamble="Stale 1",
+                           choices=[{"label": "A"}])
+        stale2 = InboxItem(kind="choices", preamble="Stale 2",
+                           choices=[{"label": "B"}])
+        session.enqueue(stale1)
+        session.enqueue(stale2)
+
+        assert session.inbox_choices_count() == 2
+
+        # Resolve all pending items
+        resolved = _resolve_pending_inbox(session)
+
+        assert resolved == 2
+        assert session.inbox_choices_count() == 0
+        assert stale1.done is True
+        assert stale2.done is True
+
+    def test_cleanup_stale_skips_sessions_with_pending_inbox(self):
+        """cleanup_stale should NOT remove sessions that have pending inbox items."""
+        mgr = SessionManager()
+        s1, _ = mgr.get_or_create("s1")
+        s2, _ = mgr.get_or_create("s2")
+
+        # Make both sessions stale by timestamp
+        s1.last_activity = time.time() - 600
+        s2.last_activity = time.time() - 600
+
+        # s2 has pending inbox items — should be protected
+        item = InboxItem(kind="choices", preamble="Pending",
+                         choices=[{"label": "A"}])
+        s2.enqueue(item)
+
+        # Focus something else so s1 is removable
+        mgr.focus("s2")
+
+        removed = mgr.cleanup_stale(timeout_seconds=300)
+
+        # s1 should be removed (stale, no inbox items, not focused)
+        assert "s1" in removed
+        # s2 should NOT be removed (has pending inbox items)
+        assert "s2" not in removed
+        assert mgr.get("s2") is not None
+
+    def test_concurrent_session_removal_with_pending_items(self):
+        """Removing sessions with pending items from multiple threads should be safe."""
+        mgr = SessionManager()
+        errors = []
+
+        # Create sessions with pending items
+        sessions = []
+        for i in range(10):
+            s, _ = mgr.get_or_create(f"s-{i}")
+            item = InboxItem(kind="choices", preamble=f"P{i}",
+                             choices=[{"label": f"L{i}"}])
+            s.enqueue(item)
+            sessions.append((s, item))
+
+        def remove_sessions(start, count):
+            try:
+                for i in range(start, start + count):
+                    mgr.remove(f"s-{i}")
+            except Exception as e:
+                errors.append(e)
+
+        # Remove from multiple threads simultaneously
+        threads = [
+            threading.Thread(target=remove_sessions, args=(i * 5, 5))
+            for i in range(2)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=5)
+
+        assert not errors, f"Thread errors: {errors}"
+        assert mgr.count() == 0
+
+        # All items should be resolved
+        for s, item in sessions:
+            assert item.done is True
+            assert item.event.is_set()

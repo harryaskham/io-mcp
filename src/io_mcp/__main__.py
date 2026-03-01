@@ -899,7 +899,9 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
                 [{"label": "Approve restart", "summary": "Restart io-mcp TUI now"},
                  {"label": "Deny", "summary": "Keep running"}])
             if result.get("selected", "").lower() != "approve restart":
-                return json.dumps({"status": "rejected", "message": "User denied restart"})
+                return _attach_messages(
+                    json.dumps({"status": "rejected", "message": "User denied restart"}),
+                    session)
 
         # Use the TUI restart loop (not os.execv which kills everything)
         def _do_restart():
@@ -931,7 +933,9 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
                 _file_log.debug("Failed to trigger TUI restart", exc_info=True)
 
         threading.Thread(target=_do_restart, daemon=True).start()
-        return json.dumps({"status": "accepted", "message": "TUI will restart in ~1.5 seconds. Proxy stays alive."})
+        return _attach_messages(
+            json.dumps({"status": "accepted", "message": "TUI will restart in ~1.5 seconds. Proxy stays alive."}),
+            session)
 
     def _tool_request_proxy_restart(args, session_id):
         session = _get_session(session_id)
@@ -941,7 +945,9 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
             [{"label": "Approve proxy restart", "summary": "Restart the MCP proxy — all agents disconnect"},
              {"label": "Deny", "summary": "Keep proxy running"}])
         if result.get("selected", "").lower() != "approve proxy restart":
-            return json.dumps({"status": "rejected", "message": "User denied proxy restart"})
+            return _attach_messages(
+                json.dumps({"status": "rejected", "message": "User denied proxy restart"}),
+                session)
 
         # Actually restart the proxy in a background thread
         def _do_proxy_restart():
@@ -958,7 +964,9 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
                 frontend.tts.speak_async("Proxy restart failed. Check logs.")
 
         threading.Thread(target=_do_proxy_restart, daemon=True).start()
-        return json.dumps({"status": "accepted", "message": "Proxy restarting. Agents must reconnect."})
+        return _attach_messages(
+            json.dumps({"status": "accepted", "message": "Proxy restarting. Agents must reconnect."}),
+            session)
 
     def _tool_request_close(args, session_id):
         """Request closing this agent's session with user confirmation."""
