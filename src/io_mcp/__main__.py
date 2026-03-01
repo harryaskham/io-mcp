@@ -556,14 +556,19 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
                 t.start()
                 t.join(timeout=float(timeout))
                 if result_box[0] is None:
-                    # Timed out — don't leave orphaned pending items.
-                    # Resolve the active inbox item so the drain loop moves on.
+                    # Timed out — resolve the active inbox item cleanly
                     _active = getattr(session, '_active_inbox_item', None)
                     if _active and not _active.done:
-                        _active.result = {"selected": "_timeout", "summary": "timeout"}
+                        _active.result = {"selected": "_timeout", "summary": "timed out"}
                         _active.done = True
                         _active.event.set()
                         session.drain_kick.set()
+                    # Tell the TUI to show idle state
+                    try:
+                        frontend._app._safe_call(
+                            lambda: frontend._app._show_waiting("(timed out)"))
+                    except Exception:
+                        pass
                     return _attach_messages(
                         json.dumps({"selected": "_timeout", "summary": f"No selection within {timeout}s — choices still visible"}),
                         session)

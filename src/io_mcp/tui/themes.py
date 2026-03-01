@@ -298,16 +298,17 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
     }}
 
     ChoiceItem.-highlight {{
-        background: {s['highlight_bg']};
         border-left: thick {s['accent']};
     }}
 
     ChoiceItem.-highlight > .choice-label {{
+        background: {s['highlight_bg']};
         color: {s['highlight_fg']};
         text-style: bold;
     }}
 
     ChoiceItem.-highlight > .choice-summary {{
+        background: {s['highlight_bg']};
         color: {s['highlight_accent']};
     }}
 
@@ -419,6 +420,8 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
         height: auto;
         max-height: 50%;
         background: {s['bg_alt']};
+        border: solid {s['border']};
+        margin: 0 1;
         scrollbar-background: {s['bg_alt']};
         scrollbar-color: {s['border']};
         scrollbar-color-hover: {s['fg_dim']};
