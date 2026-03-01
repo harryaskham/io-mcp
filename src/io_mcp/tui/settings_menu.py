@@ -132,6 +132,22 @@ class SettingsMixin:
         self._tts.stop()
         self._speak_ui("Settings")
 
+        # Pregenerate settings labels + summaries for instant scroll TTS.
+        # Labels like "Speed", "Agent voice" etc. are read via speak_async
+        # on highlight, which checks the cache. Pregenerate with UI voice
+        # so cache keys match the speak_async path.
+        settings_texts = set()
+        for s in self._settings_items:
+            label = s.get("label", "")
+            summary = s.get("summary", "")
+            if label:
+                settings_texts.add(label)
+            # Combine label.summary for the full TTS string read on highlight
+            if summary:
+                settings_texts.add(f"{label}. {summary}")
+        if settings_texts:
+            self._pregenerate_ui_worker(list(settings_texts))
+
     def _clear_all_modal_state(self, *, session=None) -> None:
         """Reset ALL modal/menu state flags to their defaults.
 
@@ -357,9 +373,10 @@ class SettingsMixin:
         current_val = self._setting_edit_values[self._setting_edit_index]
         self._speak_ui(f"Editing {key}. Current: {current_val}. Scroll to change, Enter to confirm.")
 
-        # Pregenerate in background
-        if key in ("speed", "voice"):
-            self._pregenerate_worker(list(self._setting_edit_values))
+        # Pregenerate setting edit values in background for instant scroll TTS.
+        # All values are pregenerated (not just speed/voice) since scrolling
+        # through styles, STT models, color schemes etc. should also be instant.
+        self._pregenerate_ui_worker(list(self._setting_edit_values))
 
     def _apply_setting_edit(self) -> None:
         """Apply the current edit selection."""

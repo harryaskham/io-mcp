@@ -457,6 +457,80 @@ class TTSEngine:
         6: "six", 7: "seven", 8: "eight", 9: "nine",
     }
 
+    # Common UI phrases spoken via _speak_ui during normal interaction.
+    # Pregenerating these on mount ensures instant cache hits for the
+    # most frequently heard UI feedback strings.
+    _COMMON_UI_PHRASES = [
+        # Selection / dismissal feedback
+        "selected",
+        "Dismissed",
+        "Dismissed stale item",
+        "Nothing to dismiss",
+        "Collapsed",
+        "More options",
+        # Navigation
+        "Back to choices",
+        "Settings closed",
+        "Back to chat",
+        "Choices",
+        "Inbox expanded",
+        "Inbox collapsed",
+        "Inbox",
+        "Refreshed",
+        "No active session",
+        "No agents connected. Press t to spawn, s for settings, q to quit.",
+        "No other tabs with choices",
+        "Only one tab open. Press t to spawn a new agent.",
+        # Settings / menus
+        "Settings",
+        "Quick settings",
+        # Recording / input
+        "Type your reply",
+        "Cancelled.",
+        "Type or speak a message for the agent",
+        "Recording voice message",
+        "Recording cancelled",
+        "Message queued",
+        "Filter cleared",
+        "Type to filter choices",
+        # Multi-select
+        "Multi-select cancelled.",
+        "Nothing selected. Toggle some choices first.",
+        # Misc
+        "Undoing selection",
+        "Nothing to undo",
+        "Already in choices. Scroll to pick.",
+        "Conversation mode on. I'll listen after each response.",
+        "Conversation mode off. Back to choices.",
+        "Conversation mode off.",
+        "No config loaded",
+    ]
+
+    # Settings menu labels — pregenerated when the settings menu opens
+    _SETTINGS_LABELS = [
+        "Speed",
+        "Agent voice",
+        "UI voice",
+        "Style",
+        "STT model",
+        "Local TTS",
+        "Color scheme",
+        "TTS cache",
+        "Close settings",
+    ]
+
+    # Quick settings labels — pregenerated when quick settings opens
+    _QUICK_SETTINGS_LABELS = [
+        "Fast toggle",
+        "Voice toggle",
+        "Notifications",
+        "View logs",
+        "Settings",
+        "Restart proxy",
+        "Restart TUI",
+        "Back",
+    ]
+
     def _concat_wavs(self, paths: list[str]) -> Optional[str]:
         """Concatenate multiple WAV files into one. Returns path to combined file.
 

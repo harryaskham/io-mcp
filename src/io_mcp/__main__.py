@@ -1660,7 +1660,7 @@ def _collect_warmup_texts(config: IoMcpConfig) -> list[str]:
     return unique
 
 
-def _run_cache_warmup(verbose: bool = False) -> None:
+def _run_cache_warmup(verbose: bool = False, dry_run: bool = False) -> None:
     """Pre-generate TTS audio for all fixed UI strings."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -1697,7 +1697,8 @@ def _run_cache_warmup(verbose: bool = False) -> None:
     if has_separate_ui_voice:
         voice_info += f", UI voice: {ui_voice}"
 
-    print(f"io-mcp cache warmup")
+    label = "io-mcp cache warmup (dry run)" if dry_run else "io-mcp cache warmup"
+    print(label)
     print(f"─" * 40)
     print(f"  {voice_info}")
     print(f"  Total strings: {len(texts)}")
@@ -1706,12 +1707,26 @@ def _run_cache_warmup(verbose: bool = False) -> None:
     print(f"  To generate: {len(to_generate)}")
     print()
 
+    if verbose and to_generate:
+        print("  Items to generate:")
+        for text, voice_override in to_generate:
+            voice_label = voice_override or "(default)"
+            print(f"    • {text!r}  [{voice_label}]")
+        print()
+
     if not to_generate:
         print("  All items already cached. Nothing to do.")
         # Print summary
         count, total_bytes = tts.cache_stats()
         size_str = _format_size(total_bytes)
         print(f"\n  Cache: {count} items ({size_str})")
+        return
+
+    if dry_run:
+        print(f"  Dry run — skipping generation of {len(to_generate)} items.")
+        count, total_bytes = tts.cache_stats()
+        size_str = _format_size(total_bytes)
+        print(f"  Cache: {count} items ({size_str})")
         return
 
     # Generate with a thread pool
@@ -1795,10 +1810,12 @@ def _run_cache_command() -> None:
                         help="Action: warmup (pre-generate audio) or status (show cache stats)")
     parser.add_argument("--verbose", "-v", action="store_true",
                         help="Show verbose output (cache entry details for status)")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Show what would be generated without generating (warmup only)")
     args = parser.parse_args()
 
     if args.action == "warmup":
-        _run_cache_warmup(verbose=args.verbose)
+        _run_cache_warmup(verbose=args.verbose, dry_run=args.dry_run)
     elif args.action == "status":
         _run_cache_status(verbose=args.verbose)
 

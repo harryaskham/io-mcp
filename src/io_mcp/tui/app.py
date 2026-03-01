@@ -403,6 +403,43 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         self._tts.pregenerate_ui(texts, voice_override=voice_ov,
                                  speed_override=speed_ov)
 
+    def _pregenerate_common_ui_texts(self) -> None:
+        """Pregenerate common UI phrases, number words, and extra option labels.
+
+        Called on mount and after config reload. Ensures that the most
+        frequently heard scroll-wheel TTS strings are cached before
+        the user encounters them, maximizing cache hit rates.
+
+        Uses the UI pregeneration queue (low priority, 1 worker).
+        """
+        from .widgets import PRIMARY_EXTRAS, SECONDARY_EXTRAS, MORE_OPTIONS_ITEM
+
+        ui_texts = set()
+
+        # Common UI phrases (selection feedback, navigation, menus)
+        ui_texts.update(TTSEngine._COMMON_UI_PHRASES)
+
+        # Number words ("one" through "nine") — used in scroll readout
+        ui_texts.update(TTSEngine._NUMBER_WORDS.values())
+
+        # Settings menu labels
+        ui_texts.update(TTSEngine._SETTINGS_LABELS)
+
+        # Quick settings labels
+        ui_texts.update(TTSEngine._QUICK_SETTINGS_LABELS)
+
+        # All extra option labels and summaries (primary + secondary + toggle)
+        for e in list(PRIMARY_EXTRAS) + list(SECONDARY_EXTRAS) + [MORE_OPTIONS_ITEM]:
+            label = e.get('label', '')
+            summary = e.get('summary', '')
+            if label:
+                ui_texts.add(label)
+            if summary:
+                ui_texts.add(summary)
+
+        if ui_texts:
+            self._pregenerate_ui_worker(list(ui_texts))
+
     def _ensure_main_content_visible(self, show_inbox: bool = False) -> None:
         """Ensure the #main-content container is visible.
 
@@ -599,6 +636,11 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         self._agent_health_timer = self.set_interval(health_interval, self._check_agent_health)
         # Initial health check
         self._update_daemon_status()
+
+        # Pregenerate common UI phrases and number words on mount so they're
+        # cached before the first agent connects. This runs in the UI pregen
+        # queue (low priority, 1 worker) to avoid competing with agent pregen.
+        self._pregenerate_common_ui_texts()
 
     def watch_focused(self, focused: Widget | None) -> None:
         """Keep _inbox_pane_focused in sync when widget focus changes.
@@ -2017,9 +2059,11 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         # Pregenerate extra option labels in separate UI queue
         # so they don't compete with agent choice pregeneration.
-        from .widgets import PRIMARY_EXTRAS
+        # Include PRIMARY_EXTRAS, SECONDARY_EXTRAS, and MORE_OPTIONS_ITEM
+        # so scrolling through expanded extras is also instant.
+        from .widgets import PRIMARY_EXTRAS, SECONDARY_EXTRAS, MORE_OPTIONS_ITEM
         ui_texts = set()
-        for e in PRIMARY_EXTRAS:
+        for e in list(PRIMARY_EXTRAS) + list(SECONDARY_EXTRAS) + [MORE_OPTIONS_ITEM]:
             label = e.get('label', '')
             summary = e.get('summary', '')
             if label:
@@ -4513,7 +4557,9 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         if self._setting_edit_mode:
             if isinstance(event.item, ChoiceItem):
                 val = self._setting_edit_values[event.item.display_index] if event.item.display_index < len(self._setting_edit_values) else ""
-                self._tts.speak_async(val)
+                # Use _speak_ui for settings values — matches pregeneration voice
+                # and self-interrupts on scroll (unlike speak_async which queues)
+                self._speak_ui(val)
             return
 
         # In settings mode
@@ -4533,7 +4579,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
                     if 0 <= btn_idx < len(buttons):
                         btn = buttons[btn_idx]
                         text = f"{btn['label']}. {btn.get('summary', '')}" if btn.get('summary') else btn['label']
-                        self._tts.speak_async(text)
+                        self._speak_ui(text)
                 return
             # System logs: read the log entry text and show full entry in preamble
             if getattr(self, '_system_logs_mode', False):
@@ -4542,7 +4588,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
                     full_entries = getattr(self, '_system_log_full_entries', [])
                     idx = event.item.display_index
                     if idx < len(entries):
-                        self._tts.speak_async(entries[idx])
+                        self._speak_ui(entries[idx])
                     # Show full entry in preamble for expanded view
                     if idx < len(full_entries):
                         full = full_entries[idx]
@@ -4583,7 +4629,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
                     shortcuts = getattr(self, '_help_shortcuts', [])
                     if idx < len(shortcuts):
                         key, desc = shortcuts[idx]
-                        self._tts.speak_async(f"{key}. {desc}")
+                        self._speak_ui(f"{key}. {desc}")
                 return
             # History mode: read the selection entry
             if getattr(self, '_history_mode', False):
@@ -4593,7 +4639,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
                     if idx < len(history):
                         entry = history[idx]
                         text = f"{entry.label}. {entry.summary}" if entry.summary else entry.label
-                        self._tts.speak_async(text)
+                        self._speak_ui(text)
                 return
             # Tab picker: switch to the highlighted tab live
             if getattr(self, '_tab_picker_mode', False):
@@ -4601,13 +4647,15 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
                     idx = event.item.display_index
                     sessions = getattr(self, '_tab_picker_sessions', [])
                     if idx < len(sessions):
-                        self._tts.speak_async(sessions[idx].name)
+                        self._speak_ui(sessions[idx].name)
                 return
             if isinstance(event.item, ChoiceItem):
                 s = self._settings_items[event.item.display_index] if event.item.display_index < len(self._settings_items) else None
                 if s:
                     text = f"{s['label']}. {s.get('summary', '')}" if s.get('summary') else s['label']
-                    self._tts.speak_async(text)
+                    # Use _speak_ui — matches pregeneration voice and
+                    # self-interrupts on scroll (unlike speak_async which queues)
+                    self._speak_ui(text)
             return
 
         if not session or not session.active:
@@ -4644,6 +4692,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         if isinstance(event.item, ChoiceItem):
             logical = event.item.choice_index
+            is_extra = logical <= 0  # Extra options use UI voice
             if logical > 0:
                 ci = logical - 1
                 if ci >= len(session.choices):
@@ -4689,11 +4738,21 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
                     # falling back to speak_with_local_fallback for uncached.
                     # Use UI speed for scroll readout (numbers, labels, summaries).
                     ui_speed = self._config.tts_speed_for("ui") if self._config else None
+                    # Extra options use UI voice override to match how they
+                    # were pregenerated (via _pregenerate_ui_worker). Without
+                    # this, uiVoice configs cause cache key mismatches.
+                    voice_ov = None
+                    if is_extra and self._config:
+                        ui_preset = self._config.tts_ui_voice_preset
+                        if ui_preset and ui_preset != self._config.tts_voice_preset:
+                            voice_ov = ui_preset
                     if fragments and len(fragments) > 1:
                         self._tts.speak_fragments_scroll(fragments,
+                                                         voice_override=voice_ov,
                                                          speed_override=ui_speed)
                     else:
                         self._tts.speak_with_local_fallback(text,
+                                                            voice_override=voice_ov,
                                                             speed_override=ui_speed)
 
             if self._dwell_time > 0:
@@ -5650,6 +5709,9 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
                 self._config.reload()
                 self._tts.clear_cache()
 
+            # Re-pregenerate common UI texts after cache clear
+            self._pregenerate_common_ui_texts()
+
             # Refresh the tab bar
             self._update_tab_bar()
 
@@ -5863,6 +5925,18 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         list_view.display = True
         list_view.index = 0
         list_view.focus()
+
+        # Pregenerate quick settings labels + summaries for instant scroll TTS
+        qs_texts = set()
+        for item in items:
+            label = item.get("label", "")
+            summary = item.get("summary", "")
+            if label:
+                qs_texts.add(label)
+            if summary:
+                qs_texts.add(f"{label}. {summary}")
+        if qs_texts:
+            self._pregenerate_ui_worker(list(qs_texts))
 
     def _handle_quick_settings_select(self, label: str) -> None:
         """Handle selection in the quick settings submenu."""
