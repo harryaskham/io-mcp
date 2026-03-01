@@ -68,6 +68,16 @@ class SettingsMixin:
         if self._config:
             local_backend = self._config.tts_local_backend
 
+        # TTS cache stats
+        cache_count, cache_bytes = self._tts.cache_stats()
+        if cache_bytes >= 1_048_576:
+            cache_size_str = f"{cache_bytes / 1_048_576:.1f} MB"
+        elif cache_bytes >= 1024:
+            cache_size_str = f"{cache_bytes / 1024:.1f} KB"
+        else:
+            cache_size_str = f"{cache_bytes} B"
+        cache_summary = f"{cache_count} items ({cache_size_str})" if cache_count else "empty"
+
         self._settings_items = [
             {"label": "Speed", "key": "speed",
              "summary": f"Current: {self.settings.speed:.1f}"},
@@ -83,6 +93,8 @@ class SettingsMixin:
              "summary": f"Current: {local_backend}"},
             {"label": "Color scheme", "key": "color_scheme",
              "summary": f"Current: {scheme}"},
+            {"label": "TTS cache", "key": "tts_cache",
+             "summary": cache_summary},
             {"label": "Close settings", "key": "close", "summary": ""},
         ]
 
@@ -232,6 +244,31 @@ class SettingsMixin:
 
     def _enter_setting_edit(self, key: str) -> None:
         """Enter edit mode for a specific setting."""
+        if key == "tts_cache":
+            # Show clear cache option
+            self._setting_edit_mode = True
+            self._setting_edit_key = key
+            self._setting_edit_values = ["Clear cache", "Back"]
+            self._setting_edit_index = 0
+
+            list_view = self.query_one("#choices", ListView)
+            list_view.clear()
+            cache_count, cache_bytes = self._tts.cache_stats()
+            if cache_bytes >= 1_048_576:
+                size_str = f"{cache_bytes / 1_048_576:.1f} MB"
+            elif cache_bytes >= 1024:
+                size_str = f"{cache_bytes / 1024:.1f} KB"
+            else:
+                size_str = f"{cache_bytes} B"
+            list_view.append(ChoiceItem("Clear cache", f"Remove {cache_count} items ({size_str})", index=1, display_index=0))
+            list_view.append(ChoiceItem("Back", "", index=2, display_index=1))
+            list_view.index = 0
+            list_view.focus()
+
+            self._tts.stop()
+            self._speak_ui(f"TTS cache: {cache_count} items, {size_str}. Select Clear to remove.")
+            return
+
         self._setting_edit_mode = True
         self._setting_edit_key = key
 
@@ -361,6 +398,19 @@ class SettingsMixin:
                 self._config.save()
                 # Update the TTS engine's local backend preference
                 self._tts._local_backend = value
+        elif key == "tts_cache":
+            if value == "Clear cache":
+                self._tts.clear_cache()
+                self._setting_edit_mode = False
+                self._tts.stop()
+                self._speak_ui("Cache cleared")
+                self._enter_settings()
+                return
+            else:
+                # "Back" — return to settings without clearing
+                self._setting_edit_mode = False
+                self._enter_settings()
+                return
 
         self._tts.clear_cache()
 

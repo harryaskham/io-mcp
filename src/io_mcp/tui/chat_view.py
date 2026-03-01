@@ -35,6 +35,7 @@ class ChatBubbleItem(ListItem):
     """A single item in the chat feed.
 
     Kinds:
+        header   - Session header showing name, cwd, connection time
         speech   - Agent spoke text (speak/speak_async)
         choices  - Agent presented choices (may be resolved or pending)
         user_msg - User queued a message
@@ -61,7 +62,9 @@ class ChatBubbleItem(ListItem):
 
     def _make_tts_text(self) -> str:
         """Build clean plain text for TTS readout."""
-        if self.bubble_kind == "speech":
+        if self.bubble_kind == "header":
+            return f"{self.agent_name} session"
+        elif self.bubble_kind == "speech":
             return self.bubble_text
         elif self.bubble_kind == "choices":
             if self.bubble_resolved and self.bubble_result:
@@ -88,7 +91,31 @@ class ChatBubbleItem(ListItem):
 
         ts = _time.strftime("%H:%M", _time.localtime(self.bubble_timestamp))
 
-        if self.bubble_kind == "speech":
+        if self.bubble_kind == "header":
+            # Session header — dim, compact divider line
+            parts = [self.agent_name]
+            if self.bubble_detail:
+                parts.append(self.bubble_detail)
+            # Format relative connection time from timestamp
+            if self.bubble_timestamp > 0:
+                age = _time.time() - self.bubble_timestamp
+                if age < 60:
+                    age_str = f"connected {int(age)}s ago"
+                elif age < 3600:
+                    age_str = f"connected {int(age) // 60}m ago"
+                else:
+                    h = int(age) // 3600
+                    m = (int(age) % 3600) // 60
+                    age_str = f"connected {h}h{m:02d}m ago"
+                parts.append(age_str)
+
+            inner = " \u00b7 ".join(parts)
+            yield Label(
+                f"[{s['fg_dim']}]\u2500\u2500\u2500 {inner} \u2500\u2500\u2500[/{s['fg_dim']}]",
+                classes="chat-bubble-header",
+            )
+
+        elif self.bubble_kind == "speech":
             # Agent speech bubble — accent left border
             yield Label(
                 f"[{s['accent']}]{self.agent_name}[/{s['accent']}] "
@@ -114,7 +141,7 @@ class ChatBubbleItem(ListItem):
                                self.bubble_result == label)
                 if is_selected:
                     yield Label(
-                        f"  [{s['success']}]▸[/{s['success']}] "
+                        f"  [{s['success']}]\u25b8[/{s['success']}] "
                         f"[bold {s['success']}]{label}[/bold {s['success']}]"
                         f"  [{s['fg_dim']}]{summary}[/{s['fg_dim']}]",
                         classes="chat-bubble-choice-selected",
@@ -133,13 +160,13 @@ class ChatBubbleItem(ListItem):
                     )
             if not self.bubble_resolved and not self.bubble_result:
                 yield Label(
-                    f"  [{s['warning']}]awaiting selection…[/{s['warning']}]",
+                    f"  [{s['warning']}]awaiting selection\u2026[/{s['warning']}]",
                     classes="chat-bubble-pending",
                 )
 
         elif self.bubble_kind == "user_msg":
             # User message — purple left border, indented right
-            icon = f"[{s['success']}]✓[/{s['success']}]" if self.bubble_flushed else f"[{s['fg_dim']}]○[/{s['fg_dim']}]"
+            icon = f"[{s['success']}]\u2713[/{s['success']}]" if self.bubble_flushed else f"[{s['fg_dim']}]\u25cb[/{s['fg_dim']}]"
             yield Label(
                 f"{icon} [{s['purple']}]you[/{s['purple']}] "
                 f"[{s['fg_dim']}]{ts}[/{s['fg_dim']}]",
@@ -150,7 +177,7 @@ class ChatBubbleItem(ListItem):
         elif self.bubble_kind == "system":
             # System event — no border, minimal inline text
             yield Label(
-                f"[{s['fg_dim']}]{ts}  · {self.bubble_text}[/{s['fg_dim']}]",
+                f"[{s['fg_dim']}]{ts}  \u00b7 {self.bubble_text}[/{s['fg_dim']}]",
                 classes="chat-bubble-system",
             )
 
@@ -298,6 +325,23 @@ class ChatViewMixin:
 
         for sess in all_sessions:
             name = sess.name or "agent"
+
+            # 0. Session header — appears at the very top of each session's feed
+            reg_ts = getattr(sess, "registered_at", 0.0) or 0.0
+            # Use registered_at if available, otherwise fall back to session creation time
+            header_ts = reg_ts if reg_ts > 0 else sess.last_activity
+            cwd = getattr(sess, "cwd", "") or ""
+            raw_items.append((
+                header_ts - 0.001,  # slightly before first real event
+                "header",
+                ChatBubbleItem(
+                    kind="header",
+                    text="",
+                    timestamp=header_ts,
+                    detail=cwd,
+                    agent_name=name,
+                ),
+            ))
 
             # 1. Speech log entries
             for entry in sess.speech_log:

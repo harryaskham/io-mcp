@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from typing import Any, Optional, Protocol
 
 from mcp.server.fastmcp import FastMCP, Context
@@ -577,6 +578,7 @@ def create_mcp_server(
         """
         session = _safe_get_session(ctx)
         session.registered = True
+        session.registered_at = time.time()
         if cwd:
             session.cwd = cwd
         if hostname:

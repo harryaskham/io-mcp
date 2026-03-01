@@ -1617,6 +1617,21 @@ class TTSEngine:
         """Allow audio playback again."""
         self._muted = False
 
+    def cache_stats(self) -> tuple[int, int]:
+        """Return (item_count, total_bytes) for the in-memory cache.
+
+        Iterates cached file paths and sums their sizes on disk.
+        Missing files are silently skipped.
+        """
+        count = len(self._cache)
+        total = 0
+        for path in self._cache.values():
+            try:
+                total += os.path.getsize(path)
+            except OSError:
+                pass
+        return count, total
+
     def clear_cache(self) -> None:
         """Remove all cached audio files."""
         self._cache.clear()

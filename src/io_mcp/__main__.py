@@ -416,6 +416,8 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
             return self._app.on_session_created(session)
         def update_tab_bar(self):
             self._app.call_from_thread(self._app._update_tab_bar)
+        def update_footer_status(self):
+            self._app.call_from_thread(self._app._update_footer_status)
         def hot_reload(self):
             self._app.call_from_thread(self._app.action_hot_reload)
         def notify_inbox_update(self, session):
@@ -754,6 +756,7 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
         session = _get_session(session_id)
         session.last_tool_name = "register_session"
         session.registered = True
+        session.registered_at = _time.time()
         for field in ("cwd", "hostname", "tmux_session", "tmux_pane", "username"):
             val = args.get(field, "")
             if val:
@@ -1006,6 +1009,7 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
         # Update TUI to show the new activity
         try:
             frontend.update_tab_bar()
+            frontend.update_footer_status()
         except Exception:
             pass
         return _attach_messages(json.dumps({"status": "logged", "text": status[:120]}), session)

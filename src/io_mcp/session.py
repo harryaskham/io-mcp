@@ -166,6 +166,7 @@ class Session:
 
     # ── Agent registration metadata ─────────────────────────────
     registered: bool = False                 # has the agent called register_session?
+    registered_at: float = 0.0               # timestamp when register_session was called
     cwd: str = ""                            # agent's working directory
     hostname: str = ""                       # machine the agent is running on
     username: str = ""                       # user running the agent

@@ -1520,6 +1520,11 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         if session.pending_messages:
             parts.append(f"[{s['purple']}]{len(session.pending_messages)} msg[/{s['purple']}]")
 
+        # Agent working indicator — show latest status if recent (< 30s)
+        _typing_text = self._get_agent_typing_status(session)
+        if _typing_text:
+            parts.append(f"[italic {s['fg_dim']}]{_typing_text}[/italic {s['fg_dim']}]")
+
         # Chat view hint
         if self._chat_view_active:
             parts.append(f"[{s['fg_dim']}]g=close[/{s['fg_dim']}]")
@@ -1527,6 +1532,36 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
             parts.append(f"[{s['fg_dim']}]g=feed[/{s['fg_dim']}]")
 
         footer.update("  ".join(parts))
+
+    def _get_agent_typing_status(self, session) -> str:
+        """Return a transient typing/status string if the agent reported status recently.
+
+        Checks the session's activity_log for the most recent 'status' entry.
+        If it's less than 30 seconds old and the session isn't actively presenting
+        choices, returns a truncated status string (e.g. "⟳ reading config").
+        Returns empty string otherwise.
+        """
+        import time as _time
+
+        if session.active:
+            # Agent is presenting choices — no typing indicator needed
+            return ""
+
+        # Walk backward through activity log to find the last status entry
+        for entry in reversed(session.activity_log):
+            if entry.get("kind") == "status":
+                age = _time.time() - entry["timestamp"]
+                if age < 30:
+                    detail = entry.get("detail", "")
+                    if detail:
+                        # Truncate long status text
+                        if len(detail) > 40:
+                            detail = detail[:37] + "…"
+                        return f"⟳ {detail}"
+                # Only check the most recent status entry
+                break
+
+        return ""
 
     # ─── Choice resolution helper ─────────────────────────────────────
 
