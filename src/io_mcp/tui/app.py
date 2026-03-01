@@ -46,7 +46,7 @@ def _strip_rich_markup(text: str) -> str:
     return _RICH_TAG_RE.sub('', text).strip()
 
 from .themes import COLOR_SCHEMES, DEFAULT_SCHEME, get_scheme, build_css
-from .widgets import ChoiceItem, InboxListItem, DwellBar, ManagedListView, TextInputModal, SubmitTextArea, VOICE_REQUESTED, EXTRA_OPTIONS, PRIMARY_EXTRAS, SECONDARY_EXTRAS, MORE_OPTIONS_ITEM, _safe_action
+from .widgets import ChoiceItem, InboxListItem, PreambleItem, DwellBar, ManagedListView, TextInputModal, SubmitTextArea, VOICE_REQUESTED, EXTRA_OPTIONS, PRIMARY_EXTRAS, SECONDARY_EXTRAS, MORE_OPTIONS_ITEM, _safe_action
 from .views import ViewsMixin
 from .voice import VoiceMixin
 from .settings_menu import SettingsMixin
@@ -1397,13 +1397,16 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
                 if session.active:
                     inbox_count = session.inbox_choices_count()
                     if inbox_count > 1:
-                        health_icon = f" [{s['success']}]o+{inbox_count - 1}[/{s['success']}]"
+                        health_icon = f"  [{s['success']}]●+{inbox_count - 1}[/{s['success']}]"
                     else:
-                        health_icon = f" [{s['success']}]o[/{s['success']}]"
+                        health_icon = f"  [{s['success']}]●[/{s['success']}]"
                 elif health == "warning":
-                    health_icon = f" [{s['warning']}]![/{s['warning']}]"
+                    health_icon = f"  [{s['warning']}]![/{s['warning']}]"
                 elif health == "unresponsive":
-                    health_icon = f" [{s['error']}]x[/{s['error']}]"
+                    health_icon = f"  [{s['error']}]✗[/{s['error']}]"
+                else:
+                    # Connected but idle (no active choices, healthy)
+                    health_icon = f"  [{s['fg_dim']}]●[/{s['fg_dim']}]"
                 # Streak fire
                 streak = session.streak_minutes
                 streak_text = ""
@@ -1419,6 +1422,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
                 success=s['success'],
                 warning=s['warning'],
                 error=s['error'],
+                fg_dim=s['fg_dim'],
             )
 
         tab_left.update(lhs)
@@ -2162,12 +2166,18 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         Shows choices in a scrollable list at the bottom of the screen,
         separate from the chat feed. Supports j/k scroll and Enter to select.
+        The preamble (agent question/context) is prepended as a non-selectable
+        header item above the choices.
         """
         try:
             list_view = self.query_one("#chat-choices", ListView)
         except Exception:
             return
         list_view.clear()
+        # Prepend preamble as a non-selectable header
+        preamble_text = session.preamble or ""
+        if preamble_text:
+            list_view.append(PreambleItem(preamble_text))
         choices = session.choices or []
         for i, c in enumerate(choices):
             label = c.get('label', '')
@@ -2184,11 +2194,13 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
             ))
             di += 1
         list_view.display = True
-        list_view.index = 0
+        # Start on first selectable item (skip preamble header)
+        list_view.index = 1 if preamble_text else 0
         list_view.focus()
         _log.info("_populate_chat_choices_list: populated", extra={"context": {
             "n_choices": len(choices),
             "n_extras": di - len(choices),
+            "has_preamble": bool(preamble_text),
             "display": True,
         }})
 
@@ -5867,6 +5879,12 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         Only works when the session is in 'waiting for agent' state
         (selection was made, agent hasn't responded yet). Sets a special
         sentinel that the server's present_choices loop recognizes.
+
+        In chat view: hides the #chat-choices panel, removes the undone
+        item from inbox so it doesn't appear as a resolved choice with
+        an "_undo" result label in the chat feed, and force-refreshes
+        the feed. The server loop then re-presents the same choices,
+        which triggers _show_choices → _populate_chat_choices_list.
         """
         session = self._focused()
         if not session:
@@ -5895,8 +5913,35 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         self._tts.stop()
         self._speak_ui("Undoing selection")
 
+        # Remove the active inbox item from both inbox and inbox_done
+        # so it doesn't appear as a resolved choice in the chat feed.
+        # If it's still in inbox, removing it prevents peek_inbox (backend
+        # thread) from moving it to inbox_done with an "_undo" result.
+        # If it already reached inbox_done (backend already processed it),
+        # remove it there so the chat feed drops the "selected" indicator.
+        # The item reference is still held by _activate_and_present so
+        # item.event.wait() + item.result still work correctly.
+        item = getattr(session, '_active_inbox_item', None)
+        if item:
+            if item in session.inbox:
+                session.inbox.remove(item)
+                session._inbox_generation += 1
+            elif item in session.inbox_done:
+                session.inbox_done.remove(item)
+                session._inbox_generation += 1
+
         # Re-activate the session with the saved choices
         self._resolve_selection(session, {"selected": "_undo", "summary": ""})
+
+        # Chat view: hide choices panel and refresh feed so the undone
+        # item's "selected" indicator is removed from the timeline.
+        if self._chat_view_active:
+            try:
+                self.query_one("#chat-choices").display = False
+            except Exception:
+                pass
+            self._chat_content_hash = ""  # Force rebuild
+            self._refresh_chat_feed()
 
     @_safe_action
     def action_spawn_agent(self) -> None:

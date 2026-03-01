@@ -437,6 +437,32 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
         border: tall {s['highlight_accent']};
     }}
 
+    /* ─── Preamble header in chat-choices list ─────────────── */
+
+    PreambleItem {{
+        padding: 1 2;
+        height: auto;
+        width: 1fr;
+        background: {s['bg_alt']};
+        border-left: thick {s['success']};
+        border-bottom: dashed {s['border']};
+    }}
+
+    PreambleItem > .preamble-text {{
+        color: {s['success']};
+        width: 1fr;
+        height: auto;
+        text-style: bold;
+    }}
+
+    PreambleItem.-highlight {{
+        background: {s['bg_alt']};
+    }}
+
+    PreambleItem.-highlight > .preamble-text {{
+        color: {s['success']};
+    }}
+
     #chat-input-bar {{
         display: none;
         dock: bottom;

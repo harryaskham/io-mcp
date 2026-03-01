@@ -704,13 +704,17 @@ class SessionManager:
             return self.sessions.get(session_id)
 
     def tab_bar_text(self, accent: str = "#88c0d0", success: str = "#a3be8c",
-                     warning: str = "#ebcb8b", error: str = "#bf616a") -> str:
+                     warning: str = "#ebcb8b", error: str = "#bf616a",
+                     fg_dim: str = "#4c566a") -> str:
         """Render the tab bar string with rich formatting.
 
-        Active tab is highlighted with brackets and bold.
-        Tabs with pending choices get a dot indicator.
-        Tabs with unhealthy agents get a health indicator (warning=yellow, unresponsive=red).
-        Colors are passed from the TUI's active color scheme.
+        Active tab is bold with accent colour. Tabs are separated by
+        dim pipe characters. Each tab shows a status indicator:
+        - ● green: active choices pending
+        - ● dim: connected, idle (healthy, no choices)
+        - !: health warning
+        - ✗: unresponsive
+        Queued inbox items show a +N badge.
         """
         with self._lock:
             if not self.session_order:
@@ -723,26 +727,29 @@ class SessionManager:
                 inbox_count = session.inbox_choices_count()
                 if session.active:
                     if inbox_count > 1:
-                        indicator = f" [bold {success}]o+{inbox_count - 1}[/bold {success}]"
+                        indicator = f" [{success}]●+{inbox_count - 1}[/{success}]"
                     else:
-                        indicator = f" [bold {success}]o[/bold {success}]"
+                        indicator = f" [{success}]●[/{success}]"
                 elif inbox_count > 0:
                     # Has queued choices but isn't displaying yet
-                    indicator = f" [bold {success}]+{inbox_count}[/bold {success}]"
+                    indicator = f" [{success}]+{inbox_count}[/{success}]"
                 else:
                     indicator = ""
                 # Health indicator (only when not showing active choices)
                 health = getattr(session, 'health_status', 'healthy')
                 if not session.active:
                     if health == "warning":
-                        indicator = f" [bold {warning}]![/bold {warning}]"
+                        indicator = f" [{warning}]![/{warning}]"
                     elif health == "unresponsive":
-                        indicator = f" [bold {error}]x[/bold {error}]"
+                        indicator = f" [{error}]✗[/{error}]"
+                    elif health == "healthy" and inbox_count == 0:
+                        # Connected but idle — dim dot (don't override +N badge)
+                        indicator = f" [{fg_dim}]●[/{fg_dim}]"
                 if sid == self.active_session_id:
-                    parts.append(f"[bold {accent}]> {name}[/bold {accent}]{indicator}")
+                    parts.append(f"[bold {accent}]{name}[/bold {accent}]{indicator}")
                 else:
-                    parts.append(f"[dim]  {name}[/dim]{indicator}")
-            return "  ".join(parts)
+                    parts.append(f"[dim]{name}[/dim]{indicator}")
+            return f" [dim]|[/dim] ".join(parts)
 
     def cleanup_stale(self, timeout_seconds: float = 300.0) -> list[str]:
         """Remove sessions that have been inactive for longer than timeout.

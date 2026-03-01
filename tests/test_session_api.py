@@ -140,7 +140,7 @@ class TestSessionManagerExtended:
         s1.name = "Agent 1"
         s1.active = True
         text = m.tab_bar_text()
-        assert "o" in text  # active indicator (was ●)
+        assert "●" in text  # active indicator (green dot)
 
     def test_focus_nonexistent(self):
         m = SessionManager()
@@ -199,14 +199,14 @@ class TestSessionHealthMonitoring:
         assert "!" in text
 
     def test_tab_bar_shows_unresponsive_indicator(self):
-        """Tab bar shows x for unresponsive health status."""
+        """Tab bar shows ✗ for unresponsive health status."""
         m = SessionManager()
         s1, _ = m.get_or_create("a")
         s1.name = "Agent 1"
         s1.health_status = "unresponsive"
         s1.active = False
         text = m.tab_bar_text()
-        assert "[bold #bf616a]x[/bold #bf616a]" in text
+        assert "[#bf616a]✗[/#bf616a]" in text
 
     def test_tab_bar_active_choices_hides_warning(self):
         """When agent has active choices, health warning is hidden (agent is healthy)."""
@@ -216,21 +216,23 @@ class TestSessionHealthMonitoring:
         s1.health_status = "warning"
         s1.active = True  # agent is presenting choices — not stuck
         text = m.tab_bar_text()
-        # Should show choices indicator (o), not warning (!)
-        assert "[bold #a3be8c]o[/bold #a3be8c]" in text
+        # Should show choices indicator (●), not warning (!)
+        assert "[#a3be8c]●[/#a3be8c]" in text
         assert "!" not in text
 
     def test_tab_bar_healthy_no_indicator(self):
-        """Healthy agents with no active choices show no status indicator."""
+        """Healthy agents with no active choices show dim dot indicator."""
         m = SessionManager()
         s1, _ = m.get_or_create("a")
         s1.name = "Agent 1"
         s1.health_status = "healthy"
         s1.active = False
         text = m.tab_bar_text()
-        assert "[bold #ebcb8b]![/bold #ebcb8b]" not in text
-        assert "[bold #bf616a]x[/bold #bf616a]" not in text
-        assert "[bold #a3be8c]o[/bold #a3be8c]" not in text
+        assert "[#ebcb8b]![/#ebcb8b]" not in text
+        assert "[#bf616a]✗[/#bf616a]" not in text
+        assert "[#a3be8c]●[/#a3be8c]" not in text
+        # Should show dim dot for idle-but-connected
+        assert "[#4c566a]●[/#4c566a]" in text
 
     def test_health_threshold_warning_logic(self):
         """Simulate the warning threshold detection logic."""
@@ -339,7 +341,8 @@ class TestSessionHealthMonitoring:
         assert "Slow Agent" in text
         assert "Dead Agent" in text
         assert "!" in text   # warning indicator
-        assert "[bold #bf616a]x[/bold #bf616a]" in text   # unresponsive indicator
+        assert "[#bf616a]✗[/#bf616a]" in text   # unresponsive indicator
+        assert "|" in text   # pipe separator between tabs
 
 
 class TestSessionSummaryAndTimeline:
@@ -725,7 +728,7 @@ class TestTabBarInboxBadge:
         # One item in inbox
         s.enqueue(InboxItem(kind="choices"))
         text = m.tab_bar_text()
-        assert "o" in text
+        assert "●" in text
         assert "+0" not in text  # no +0 badge
 
     def test_tab_bar_badge_with_queued_items(self):
@@ -739,7 +742,7 @@ class TestTabBarInboxBadge:
         s.enqueue(InboxItem(kind="choices"))
         s.enqueue(InboxItem(kind="choices"))
         text = m.tab_bar_text()
-        assert "o+2" in text  # 3 total, active shows o, +2 queued
+        assert "●+2" in text  # 3 total, active shows ●, +2 queued
 
     def test_tab_bar_badge_queued_but_not_active(self):
         """Queued choices when session is not yet active show +N badge."""
@@ -764,12 +767,12 @@ class TestTabBarInboxBadge:
         s.enqueue(item1)
         s.enqueue(item2)
         text_before = m.tab_bar_text()
-        assert "o+1" in text_before
+        assert "●+1" in text_before
         # Resolve first item
         s.resolve_front({"selected": "A"})
         text_after = m.tab_bar_text()
         # Now only 1 item, no +N badge
-        assert "+1" not in text_after or "o+0" not in text_after
+        assert "+1" not in text_after or "●+0" not in text_after
 
 
 class TestDedupAndEnqueue:

@@ -252,6 +252,44 @@ def _deep_merge(base: dict, override: dict) -> dict:
     return result
 
 
+def _closest_match(key: str, valid_keys: set[str], max_distance: int = 3) -> str | None:
+    """Find the closest match for a key in a set of valid keys.
+
+    Uses Levenshtein-style edit distance to suggest typo corrections.
+    Returns None if no match is close enough (within max_distance edits).
+    """
+    best_match = None
+    best_dist = max_distance + 1
+    key_lower = key.lower()
+    for candidate in valid_keys:
+        cand_lower = candidate.lower()
+        if key_lower == cand_lower:
+            return candidate
+        # Quick length check — if lengths differ too much, skip
+        if abs(len(key_lower) - len(cand_lower)) > max_distance:
+            continue
+        # Simple edit distance (Levenshtein)
+        dist = _edit_distance(key_lower, cand_lower)
+        if dist < best_dist:
+            best_dist = dist
+            best_match = candidate
+    return best_match if best_dist <= max_distance else None
+
+
+def _edit_distance(a: str, b: str) -> int:
+    """Compute Levenshtein edit distance between two strings."""
+    if len(a) > len(b):
+        a, b = b, a
+    prev = list(range(len(a) + 1))
+    for j in range(1, len(b) + 1):
+        curr = [j] + [0] * len(a)
+        for i in range(1, len(a) + 1):
+            cost = 0 if a[i - 1] == b[j - 1] else 1
+            curr[i] = min(curr[i - 1] + 1, prev[i] + 1, prev[i - 1] + cost)
+        prev = curr
+    return prev[len(a)]
+
+
 def _find_new_keys(defaults: dict, user: dict, prefix: str = "") -> list[str]:
     """Find keys present in defaults but missing from user config.
 
@@ -388,12 +426,77 @@ class IoMcpConfig:
         """Validate config structure and report warnings for issues."""
         warnings: list[str] = []
 
+        # ── Unknown top-level keys ────────────────────────────────
+        known_top_level = {"providers", "voices", "models", "config",
+                           "styles", "extraOptions", "quickActions"}
+        for key in self.raw:
+            if key not in known_top_level:
+                # Suggest closest match for likely typos
+                _suggest = _closest_match(key, known_top_level)
+                hint = f" (did you mean '{_suggest}'?)" if _suggest else ""
+                warnings.append(
+                    f"Unknown top-level key '{key}'{hint} — "
+                    f"expected one of: {', '.join(sorted(known_top_level))}"
+                )
+
         # Check required top-level keys
         for key in ("providers", "voices", "config"):
             if key not in self.raw:
                 warnings.append(f"Missing top-level key '{key}' — using defaults")
 
         voices = self.raw.get("voices", {})
+
+        # ── Unknown keys inside config section ────────────────────
+        known_config_keys = {
+            "colorScheme", "tts", "stt", "realtime", "session",
+            "ambient", "pulseAudio", "haptic", "chimes", "healthMonitor",
+            "notifications", "agents", "keyBindings", "djent",
+            "alwaysAllow", "ringReceiver",
+        }
+        user_config = self.raw.get("config", {})
+        if isinstance(user_config, dict):
+            for key in user_config:
+                if key not in known_config_keys:
+                    _suggest = _closest_match(key, known_config_keys)
+                    hint = f" (did you mean '{_suggest}'?)" if _suggest else ""
+                    warnings.append(
+                        f"Unknown config key 'config.{key}'{hint} — "
+                        f"expected one of: {', '.join(sorted(known_config_keys))}"
+                    )
+
+        # ── Unknown keys inside config.tts ────────────────────────
+        known_tts_keys = {
+            "voice", "uiVoice", "speed", "speeds", "style", "emotion",
+            "styleDegree", "localBackend", "pregenerateWorkers",
+            "voiceRotation", "randomRotation", "styleRotation",
+            "emotionRotation",
+        }
+        user_tts = user_config.get("tts", {}) if isinstance(user_config, dict) else {}
+        if isinstance(user_tts, dict):
+            for key in user_tts:
+                if key not in known_tts_keys:
+                    _suggest = _closest_match(key, known_tts_keys)
+                    hint = f" (did you mean '{_suggest}'?)" if _suggest else ""
+                    warnings.append(
+                        f"Unknown TTS key 'config.tts.{key}'{hint} — "
+                        f"expected one of: {', '.join(sorted(known_tts_keys))}"
+                    )
+
+        # ── Unknown keys inside config.tts.speeds ─────────────────
+        known_speed_contexts = {
+            "speak", "speakAsync", "preamble",
+            "choiceLabel", "choiceSummary", "ui",
+        }
+        user_speeds = user_tts.get("speeds", {}) if isinstance(user_tts, dict) else {}
+        if isinstance(user_speeds, dict):
+            for key in user_speeds:
+                if key not in known_speed_contexts:
+                    _suggest = _closest_match(key, known_speed_contexts)
+                    hint = f" (did you mean '{_suggest}'?)" if _suggest else ""
+                    warnings.append(
+                        f"Unknown speed context 'config.tts.speeds.{key}'{hint} — "
+                        f"expected one of: {', '.join(sorted(known_speed_contexts))}"
+                    )
 
         # Check TTS voice preset exists
         tts_voice = self.runtime.get("tts", {}).get("voice", "")
@@ -410,7 +513,7 @@ class IoMcpConfig:
         for entry in voice_rot:
             name = entry if isinstance(entry, str) else entry.get("voice", "") if isinstance(entry, dict) else ""
             if name and name not in voices:
-                warnings.append(f"Voice rotation entry '{name}' not found in voices")
+                warnings.append(f"Voice rotation entry '{name}' not found in voices — available: {list(voices.keys())}")
 
         # Check providers referenced by voice presets exist
         for name, vdef in voices.items():
@@ -430,18 +533,93 @@ class IoMcpConfig:
             if provider and provider not in self.raw.get("providers", {}):
                 warnings.append(f"STT model '{name}' references provider '{provider}' which is not defined")
 
-        # Check style exists in styles list
+        # ── Style/emotion validation ──────────────────────────────
         style = self.runtime.get("tts", {}).get("style",
                 self.runtime.get("tts", {}).get("emotion", ""))
         styles = self.expanded.get("styles", [])
         if style and styles and style not in styles:
-            # Not an error — could be a custom style name
-            pass
+            # Not a hard error — custom style names are allowed — but warn
+            warnings.append(
+                f"TTS style '{style}' not in styles list "
+                f"(custom styles are OK, but check for typos) — "
+                f"known styles: {styles}"
+            )
+
+        # ── Style rotation validation ─────────────────────────────
+        style_rot = self.runtime.get("tts", {}).get("styleRotation",
+                    self.runtime.get("tts", {}).get("emotionRotation", []))
+        if style_rot and styles:
+            for entry in style_rot:
+                if isinstance(entry, str) and entry not in styles:
+                    warnings.append(
+                        f"Style rotation entry '{entry}' not in styles list "
+                        f"(custom styles are OK, but check for typos)"
+                    )
 
         # Check speed is in valid range
         speed = self.runtime.get("tts", {}).get("speed", 1.0)
         if not isinstance(speed, (int, float)) or speed < 0.1 or speed > 5.0:
             warnings.append(f"TTS speed {speed} is out of range (0.1-5.0)")
+
+        # ── Per-context speed validation ──────────────────────────
+        speeds_cfg = self.runtime.get("tts", {}).get("speeds", {})
+        if isinstance(speeds_cfg, dict):
+            for ctx, val in speeds_cfg.items():
+                if ctx in known_speed_contexts:
+                    if not isinstance(val, (int, float)):
+                        warnings.append(f"config.tts.speeds.{ctx} must be a number, got {type(val).__name__}")
+                    elif val < 0.1 or val > 5.0:
+                        warnings.append(f"config.tts.speeds.{ctx} ({val}) is out of range (0.1-5.0)")
+
+        # ── localBackend validation ───────────────────────────────
+        local_backend = self.runtime.get("tts", {}).get("localBackend", "espeak")
+        valid_backends = {"termux", "espeak", "none"}
+        if local_backend not in valid_backends:
+            warnings.append(
+                f"config.tts.localBackend '{local_backend}' is not valid — "
+                f"expected one of: {', '.join(sorted(valid_backends))}"
+            )
+
+        # ── colorScheme validation ────────────────────────────────
+        color_scheme = self.runtime.get("colorScheme", "nord")
+        valid_schemes = {"nord", "tokyo-night", "catppuccin", "dracula"}
+        if color_scheme not in valid_schemes:
+            warnings.append(
+                f"config.colorScheme '{color_scheme}' is not valid — "
+                f"expected one of: {', '.join(sorted(valid_schemes))}"
+            )
+
+        # ── pregenerateWorkers range warning ──────────────────────
+        pregen = self.runtime.get("tts", {}).get("pregenerateWorkers", 3)
+        if isinstance(pregen, (int, float)):
+            if pregen < 1 or pregen > 8:
+                warnings.append(
+                    f"config.tts.pregenerateWorkers ({pregen}) is out of range — "
+                    f"will be clamped to 1-8"
+                )
+
+        # ── styleDegree range validation ──────────────────────────
+        style_degree = self.runtime.get("tts", {}).get("styleDegree")
+        if style_degree is not None:
+            if not isinstance(style_degree, (int, float)):
+                warnings.append(f"config.tts.styleDegree must be a number, got {type(style_degree).__name__}")
+            elif style_degree < 0.01 or style_degree > 2.0:
+                warnings.append(
+                    f"config.tts.styleDegree ({style_degree}) is out of range (0.01-2.0)"
+                )
+
+        # ── Key bindings validation ───────────────────────────────
+        known_actions = set(DEFAULT_CONFIG.get("config", {}).get("keyBindings", {}).keys())
+        user_bindings = user_config.get("keyBindings", {}) if isinstance(user_config, dict) else {}
+        if isinstance(user_bindings, dict):
+            for action in user_bindings:
+                if action not in known_actions:
+                    _suggest = _closest_match(action, known_actions)
+                    hint = f" (did you mean '{_suggest}'?)" if _suggest else ""
+                    warnings.append(
+                        f"Unknown key binding action 'config.keyBindings.{action}'{hint} — "
+                        f"expected one of: {', '.join(sorted(known_actions))}"
+                    )
 
         # ── Health monitor validation ─────────────────────────────
         health_cfg = self.runtime.get("healthMonitor", {})
@@ -493,7 +671,8 @@ class IoMcpConfig:
                 if events:
                     valid_events = {"all", "health_warning", "health_unresponsive",
                                     "choices_timeout", "agent_connected",
-                                    "agent_disconnected", "error"}
+                                    "agent_disconnected", "error",
+                                    "pulse_down", "pulse_recovered"}
                     for evt in events:
                         if evt not in valid_events:
                             warnings.append(
@@ -504,6 +683,20 @@ class IoMcpConfig:
             cooldown = notif_cfg.get("cooldownSecs", 60)
             if isinstance(cooldown, (int, float)) and cooldown < 0:
                 warnings.append(f"notifications.cooldownSecs ({cooldown}) cannot be negative")
+
+        # ── Voice preset structure validation ─────────────────────
+        for name, vdef in voices.items():
+            if not isinstance(vdef, dict):
+                warnings.append(
+                    f"Voice preset '{name}' should be a dict with "
+                    f"provider/model/voice keys, got {type(vdef).__name__}"
+                )
+            else:
+                missing = [k for k in ("provider", "model", "voice") if k not in vdef]
+                if missing:
+                    warnings.append(
+                        f"Voice preset '{name}' is missing keys: {', '.join(missing)}"
+                    )
 
         # ── Store warnings for programmatic access ────────────────
         self.validation_warnings = list(warnings)

@@ -156,6 +156,24 @@ class ChoiceItem(ListItem):
             pass
 
 
+# ─── Preamble Item Widget (non-selectable header in chat-choices) ─────────────
+
+class PreambleItem(ListItem):
+    """Non-selectable preamble text shown above choices in #chat-choices.
+
+    Displays the agent's question/context with success (green) styling.
+    Uses ``disabled=True`` so the ListView skips it during selection
+    and keyboard navigation.
+    """
+
+    def __init__(self, text: str, **kwargs) -> None:
+        super().__init__(disabled=True, **kwargs)
+        self.preamble_text = text
+
+    def compose(self) -> ComposeResult:
+        yield Label(self.preamble_text, classes="preamble-text")
+
+
 # ─── Inbox List Item Widget ───────────────────────────────────────────────────
 
 class InboxListItem(ListItem):
