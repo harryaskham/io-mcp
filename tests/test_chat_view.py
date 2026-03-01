@@ -777,3 +777,413 @@ async def test_build_chat_feed_skips_pregeneration_for_empty_feed():
             # If called, it should have short header text
             assert all(len(t) < 200 for texts in pregen_calls for t in texts)
 
+
+# ─── Test: pane view interaction with chat view ───────────────────────
+
+
+@pytest.mark.asyncio
+async def test_pane_view_from_chat_view_hides_chat_widgets():
+    """Opening pane view from chat view should hide all chat widgets."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        session = _setup_session_with_choices(app)
+        session.tmux_pane = "%42"
+
+        # Activate chat view
+        app._chat_view_active = True
+        try:
+            app.query_one("#chat-feed").display = True
+            app.query_one("#chat-input-bar").display = True
+        except Exception:
+            pass
+        await pilot.pause(0.1)
+
+        # Open pane view
+        app.action_pane_view()
+        await pilot.pause(0.1)
+
+        # Chat widgets should be hidden
+        assert app.query_one("#chat-feed").display is False
+        try:
+            assert app.query_one("#chat-choices").display is False
+        except Exception:
+            pass
+        try:
+            assert app.query_one("#chat-input-bar").display is False
+        except Exception:
+            pass
+
+        # Pane view should be visible
+        assert app.query_one("#pane-view").display is True
+
+        # Chat view should be temporarily deactivated
+        assert app._chat_view_active is False
+
+        # But _pane_view_was_chat should be True
+        assert app._pane_view_was_chat is True
+
+
+@pytest.mark.asyncio
+async def test_pane_view_close_restores_chat_view():
+    """Closing pane view should restore chat view if it was active before."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        session = _setup_session_with_choices(app)
+        session.tmux_pane = "%42"
+
+        # Activate chat view
+        app._chat_view_active = True
+        try:
+            app.query_one("#chat-feed").display = True
+            app.query_one("#chat-input-bar").display = True
+        except Exception:
+            pass
+        await pilot.pause(0.1)
+
+        # Open pane view (saves chat state)
+        app.action_pane_view()
+        await pilot.pause(0.1)
+
+        assert app._chat_view_active is False
+        assert app._pane_view_was_chat is True
+
+        # Close pane view (should restore chat)
+        app.action_pane_view()
+        await pilot.pause(0.1)
+
+        # Chat view should be restored
+        assert app._chat_view_active is True
+        assert app.query_one("#chat-feed").display is True
+        try:
+            assert app.query_one("#chat-input-bar").display is True
+        except Exception:
+            pass
+
+        # Pane view should be hidden
+        assert app.query_one("#pane-view").display is False
+
+        # Main content should remain hidden (chat view doesn't use it)
+        assert app.query_one("#main-content").display is False
+
+
+@pytest.mark.asyncio
+async def test_pane_view_close_without_chat_view_shows_main_content():
+    """Closing pane view without chat view should restore normal view."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        session = _setup_session_with_choices(app)
+        session.tmux_pane = "%42"
+
+        # Normal mode (no chat view)
+        app._chat_view_active = False
+        await pilot.pause(0.1)
+
+        # Open pane view
+        app.action_pane_view()
+        await pilot.pause(0.1)
+
+        assert app._pane_view_was_chat is False
+
+        # Close pane view — should restore choices (session is active)
+        app.action_pane_view()
+        await pilot.pause(0.1)
+
+        # Pane view closed
+        assert app.query_one("#pane-view").display is False
+        # Chat view should NOT be active
+        assert app._chat_view_active is False
+
+
+@pytest.mark.asyncio
+async def test_pane_view_close_no_active_session_shows_main():
+    """Closing pane view with no active session should show main content."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        session = _setup_session_with_choices(app)
+        session.tmux_pane = "%42"
+
+        # Normal mode
+        app._chat_view_active = False
+        await pilot.pause(0.1)
+
+        # Open pane view
+        app.action_pane_view()
+        await pilot.pause(0.1)
+
+        # Deactivate session
+        session.active = False
+        session.choices = []
+
+        # Close pane view — should show main content + status
+        app.action_pane_view()
+        await pilot.pause(0.1)
+
+        assert app.query_one("#pane-view").display is False
+        assert app.query_one("#main-content").display is True
+        assert app.query_one("#status").display is True
+
+
+# ─── Test: incremental append optimization ───────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_incremental_append_new_speech_items():
+    """_build_chat_feed uses incremental append when only new speech items are added."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        session = _setup_session_with_choices(app)
+
+        # Add initial speech entries
+        for i in range(3):
+            session.speech_log.append(SpeechEntry(text=f"Speech {i}"))
+
+        app._chat_view_active = True
+        app._build_chat_feed(session)
+        await pilot.pause(0.1)
+
+        feed = app.query_one("#chat-feed", ListView)
+        initial_count = len(feed.children)
+        assert initial_count > 0
+
+        # Track the last item count set by initial build
+        assert app._chat_last_item_count == initial_count
+        assert app._chat_base_fingerprint != ""
+
+        # Add more speech entries (append-only change)
+        for i in range(3, 6):
+            session.speech_log.append(SpeechEntry(text=f"Speech {i}"))
+
+        # Rebuild — should use incremental append
+        app._build_chat_feed(session)
+        await pilot.pause(0.1)
+
+        new_count = len(feed.children)
+        # Should have more items now
+        assert new_count == initial_count + 3
+        # Tracker should be updated
+        assert app._chat_last_item_count == new_count
+
+
+@pytest.mark.asyncio
+async def test_incremental_append_does_not_clear_feed():
+    """Incremental append should NOT clear existing items from the feed."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        session = _setup_session_with_choices(app)
+
+        # Build initial feed with speech
+        session.speech_log.append(SpeechEntry(text="First speech"))
+        app._chat_view_active = True
+        app._build_chat_feed(session)
+        await pilot.pause(0.1)
+
+        feed = app.query_one("#chat-feed", ListView)
+        initial_count = len(feed.children)
+
+        # Record the IDs of existing widgets to verify they aren't replaced
+        existing_ids = [id(child) for child in feed.children]
+
+        # Add a new speech entry
+        session.speech_log.append(SpeechEntry(text="Second speech"))
+        app._build_chat_feed(session)
+        await pilot.pause(0.1)
+
+        # Existing items should still be the same objects (not rebuilt)
+        for i, eid in enumerate(existing_ids):
+            assert id(feed.children[i]) == eid, \
+                f"Item {i} was replaced during incremental append"
+
+        # New item should be appended
+        assert len(feed.children) == initial_count + 1
+
+
+@pytest.mark.asyncio
+async def test_full_rebuild_on_base_fingerprint_change():
+    """_build_chat_feed does full rebuild when base fingerprint changes."""
+    from io_mcp.session import FlushedMessage
+    app = make_app()
+    async with app.run_test() as pilot:
+        session = _setup_session_with_choices(app)
+
+        # Build initial feed
+        session.speech_log.append(SpeechEntry(text="Speech 1"))
+        app._chat_view_active = True
+        app._build_chat_feed(session)
+        await pilot.pause(0.1)
+
+        feed = app.query_one("#chat-feed", ListView)
+        initial_count = len(feed.children)
+        existing_ids = [id(child) for child in feed.children]
+
+        # Flush a pending message — this changes the base fingerprint
+        # (pending_messages count decreases)
+        session.pending_messages.append("hello")
+        app._build_chat_feed(session)
+        await pilot.pause(0.1)
+
+        count_with_msg = len(feed.children)
+        # Now drain the pending message (simulating flush)
+        session.pending_messages.clear()
+        session.flushed_messages.append(FlushedMessage(text="hello"))
+        app._build_chat_feed(session)
+        await pilot.pause(0.1)
+
+        # Base fingerprint changed (pm count went from 1 to 0, flushed grew)
+        # So this should be a full rebuild — existing items are replaced
+        rebuilt_ids = [id(child) for child in feed.children]
+        # At least some items should be different objects (full rebuild)
+        assert rebuilt_ids != existing_ids
+
+
+@pytest.mark.asyncio
+async def test_force_full_rebuild_flag():
+    """_chat_force_full_rebuild flag forces a full rebuild."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        session = _setup_session_with_choices(app)
+
+        # Build initial feed
+        session.speech_log.append(SpeechEntry(text="Speech 1"))
+        app._chat_view_active = True
+        app._build_chat_feed(session)
+        await pilot.pause(0.1)
+
+        feed = app.query_one("#chat-feed", ListView)
+        initial_count = len(feed.children)
+        existing_ids = [id(child) for child in feed.children]
+
+        # Set force flag and add a new item
+        app._chat_force_full_rebuild = True
+        session.speech_log.append(SpeechEntry(text="Speech 2"))
+        app._build_chat_feed(session)
+        await pilot.pause(0.1)
+
+        # Should be a full rebuild despite no base changes
+        rebuilt_ids = [id(child) for child in feed.children]
+        # All items rebuilt from scratch
+        assert rebuilt_ids != existing_ids
+        # Flag should be cleared after use
+        assert app._chat_force_full_rebuild is False
+
+
+@pytest.mark.asyncio
+async def test_incremental_append_skipped_for_unified_mode():
+    """Incremental append is not used in unified (multi-session) mode."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        session1 = _setup_session_with_choices(app, session_id="s1", name="S1")
+        session2, _ = app.manager.get_or_create("s2")
+        session2.registered = True
+        session2.name = "S2"
+        app.on_session_created(session2)
+
+        all_sessions = list(app.manager.all_sessions())
+
+        # Build initial unified feed
+        session1.speech_log.append(SpeechEntry(text="S1 speech"))
+        app._chat_view_active = True
+        app._chat_unified = True
+        app._build_chat_feed(session1, sessions=all_sessions)
+        await pilot.pause(0.1)
+
+        feed = app.query_one("#chat-feed", ListView)
+        initial_count = len(feed.children)
+        existing_ids = [id(child) for child in feed.children]
+
+        # Add speech to session2
+        session2.speech_log.append(SpeechEntry(text="S2 speech"))
+        app._build_chat_feed(session1, sessions=all_sessions)
+        await pilot.pause(0.1)
+
+        # Should be a full rebuild (unified mode doesn't use incremental)
+        rebuilt_ids = [id(child) for child in feed.children]
+        assert rebuilt_ids != existing_ids
+
+
+@pytest.mark.asyncio
+async def test_incremental_append_resets_on_chat_view_open():
+    """Opening chat view resets incremental trackers."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        session = _setup_session_with_choices(app)
+
+        # Simulate having stale tracker values from a previous chat view
+        app._chat_last_item_count = 42
+        app._chat_base_fingerprint = "stale"
+
+        # Open chat view
+        app.action_chat_view()
+        await pilot.pause(0.1)
+
+        # Trackers should be reset to 0/""
+        # (the build that just happened will set them to real values)
+        # The key assertion: the feed was built without incremental
+        # (old_count was 0 after reset)
+        feed = app.query_one("#chat-feed", ListView)
+        assert len(feed.children) > 0
+        # last_item_count should now match actual feed size
+        assert app._chat_last_item_count == len(feed.children)
+
+
+@pytest.mark.asyncio
+async def test_base_fingerprint_for_detects_front_trimming():
+    """_chat_base_fingerprint_for changes when activity_log is trimmed from front."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        session = _setup_session_with_choices(app)
+
+        # Add activity log entries with distinct timestamps
+        session.activity_log.append({"timestamp": 1000.0, "tool": "tool1", "detail": "", "kind": "tool"})
+        session.activity_log.append({"timestamp": 2000.0, "tool": "tool2", "detail": "", "kind": "tool"})
+
+        fp1 = app._chat_base_fingerprint_for(session)
+
+        # Trim the first entry (simulating _activity_log_max overflow)
+        session.activity_log = session.activity_log[1:]
+
+        fp2 = app._chat_base_fingerprint_for(session)
+
+        # Fingerprint should change because first item timestamp changed
+        assert fp1 != fp2
+
+
+@pytest.mark.asyncio
+async def test_base_fingerprint_for_detects_pending_message_flush():
+    """_chat_base_fingerprint_for changes when pending messages are flushed."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        session = _setup_session_with_choices(app)
+
+        session.pending_messages.append("hello")
+        fp1 = app._chat_base_fingerprint_for(session)
+
+        # Flush the message
+        session.pending_messages.clear()
+        fp2 = app._chat_base_fingerprint_for(session)
+
+        # Fingerprint should change because pm count changed
+        assert fp1 != fp2
+
+
+@pytest.mark.asyncio
+async def test_incremental_skipped_at_200_item_cap():
+    """Incremental append is skipped when at the 200-item cap to avoid truncation bugs."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        session = _setup_session_with_choices(app)
+
+        # Simulate having exactly 200 items
+        app._chat_last_item_count = 200
+        app._chat_base_fingerprint = app._chat_base_fingerprint_for(session)
+
+        # Even with matching fingerprint, should do full rebuild
+        app._chat_view_active = True
+        session.speech_log.append(SpeechEntry(text="Extra"))
+        app._build_chat_feed(session)
+        await pilot.pause(0.1)
+
+        # The feed should have been fully rebuilt (not incrementally appended)
+        # We verify by checking that _chat_last_item_count is now the actual
+        # count (not 200 + delta)
+        feed = app.query_one("#chat-feed", ListView)
+        assert app._chat_last_item_count == len(feed.children)

@@ -1853,6 +1853,10 @@ class TTSEngine:
         """
         if self._muted:
             return
+        # Early exit if chimes are disabled in config — avoids spawning
+        # a background thread just to have play_tone return immediately.
+        if self._config and not self._config.chimes_enabled:
+            return
 
         def _play():
             if style == "choices":

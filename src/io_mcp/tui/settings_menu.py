@@ -158,13 +158,16 @@ class SettingsMixin:
         self._dialog_buttons = []
 
         # Clean up pane viewer if active
-        if getattr(self, '_pane_viewer_mode', False):
-            self._pane_viewer_mode = False
-            self._stop_pane_refresh()
-            try:
-                self.query_one("#pane-view", RichLog).display = False
-            except Exception:
-                pass
+        try:
+            pane_view = self.query_one("#pane-view", RichLog)
+            if pane_view.display:
+                pane_view.display = False
+                if hasattr(self, '_pane_refresh_timer') and self._pane_refresh_timer:
+                    self._pane_refresh_timer.stop()
+                    self._pane_refresh_timer = None
+                self._pane_view_was_chat = False
+        except Exception:
+            pass
 
         # Clean up chat view if active
         if getattr(self, '_chat_view_active', False):
@@ -214,6 +217,7 @@ class SettingsMixin:
             # Rebuild feed
             if session:
                 self._chat_content_hash = ""
+                self._chat_force_full_rebuild = True  # Theme may have changed
                 if self._chat_unified:
                     self._build_chat_feed(session, sessions=all_sessions)
                 else:

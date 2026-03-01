@@ -46,6 +46,7 @@ class FakeConfig:
         speed: float = 1.3,
         emotion: str = "friendly",
         local_backend: str = "none",
+        chimes_enabled: bool = True,
     ):
         self.tts_model_name = model
         self.tts_voice = voice
@@ -55,6 +56,7 @@ class FakeConfig:
         self.tts_local_backend = local_backend
         self.tts_ui_voice = ""
         self.tts_ui_voice_preset = ""
+        self.chimes_enabled = chimes_enabled
 
     def tts_speed_for(self, context: str) -> float:
         """Return the base speed for any context (no sub-speeds in tests)."""
@@ -990,7 +992,7 @@ class TestPlayChime:
     KNOWN_STYLES = [
         "choices", "select", "connect", "record_start", "record_stop",
         "convo_on", "convo_off", "urgent", "error", "warning",
-        "success", "disconnect", "heartbeat",
+        "success", "disconnect", "heartbeat", "inbox",
     ]
 
     def test_all_known_styles_call_play_tone(self):
@@ -1038,6 +1040,26 @@ class TestPlayChime:
             engine.play_chime("success")
             time.sleep(0.5)
             assert mock_tone.call_count == 4
+
+    def test_play_chime_noop_when_chimes_disabled(self):
+        """play_chime should be a no-op when config.chimes_enabled is False."""
+        config = FakeConfig(chimes_enabled=False)
+        engine = _make_engine(config=config)
+        engine._paplay = "/usr/bin/paplay"
+
+        with mock.patch.object(engine, "play_tone") as mock_tone:
+            engine.play_chime("choices")
+            time.sleep(0.2)
+            mock_tone.assert_not_called()
+
+    def test_inbox_chime_plays_three_tones(self):
+        engine = _make_engine()
+        engine._paplay = "/usr/bin/paplay"
+
+        with mock.patch.object(engine, "play_tone") as mock_tone:
+            engine.play_chime("inbox")
+            time.sleep(0.3)
+            assert mock_tone.call_count == 3
 
 
 # ─── Local backend fallback chain ────────────────────────────────────

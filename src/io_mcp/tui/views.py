@@ -163,6 +163,9 @@ class ViewsMixin:
 
         Uses tmux capture-pane locally, or ssh+tmux for remote agents.
         Auto-refreshes every 2 seconds. Press v or Escape to close.
+
+        Works from both normal view and chat view — saves and restores
+        the previous view state on close.
         """
         # Toggle off if already in pane view
         pane_view = self.query_one("#pane-view", RichLog)
@@ -172,9 +175,39 @@ class ViewsMixin:
                 self._pane_refresh_timer.stop()
                 self._pane_refresh_timer = None
             self._speak_ui("Pane view closed.")
-            session = self._focused()
-            if session and session.active:
-                self._show_choices()
+
+            # Restore chat view if it was active before pane view
+            was_chat = getattr(self, '_pane_view_was_chat', False)
+            self._pane_view_was_chat = False
+            if was_chat:
+                self._chat_view_active = True
+                try:
+                    self.query_one("#chat-feed").display = True
+                    self.query_one("#chat-input-bar").display = True
+                    self.query_one("#main-content").display = False
+                    self.query_one("#inbox-list").display = False
+                    self.query_one("#preamble").display = False
+                    self.query_one("#status").display = False
+                except Exception:
+                    pass
+                # Rebuild chat feed and show choices if active
+                session = self._focused()
+                self._chat_content_hash = ""
+                self._refresh_chat_feed()
+                if session and session.active and session.choices:
+                    self._show_choices()
+                # Restart chat refresh timer
+                if hasattr(self, '_chat_refresh_timer') and self._chat_refresh_timer:
+                    self._chat_refresh_timer.stop()
+                self._chat_refresh_timer = self.set_interval(
+                    3.0, lambda: self._refresh_chat_feed())
+            else:
+                session = self._focused()
+                if session and session.active:
+                    self._show_choices()
+                else:
+                    self.query_one("#main-content").display = True
+                    self.query_one("#status").display = True
             return
 
         session = self._focused()
@@ -196,9 +229,27 @@ class ViewsMixin:
         self._tts.stop()
         self._speak_ui(f"Pane view for {session.name}. Press v to close.")
 
+        # Remember if chat view was active so we can restore on close
+        self._pane_view_was_chat = getattr(self, '_chat_view_active', False)
+
+        # If chat view is active, hide its widgets and pause its timer
+        if self._pane_view_was_chat:
+            self._chat_view_active = False
+            try:
+                self.query_one("#chat-feed").display = False
+                self.query_one("#chat-choices").display = False
+                self.query_one("#chat-input-bar").display = False
+            except Exception:
+                pass
+            if hasattr(self, '_chat_refresh_timer') and self._chat_refresh_timer:
+                self._chat_refresh_timer.stop()
+                self._chat_refresh_timer = None
+
         # Show pane view, hide main content
         self.query_one("#main-content").display = False
         self.query_one("#preamble").display = False
+        self.query_one("#inbox-list").display = False
+        self.query_one("#status").display = False
         pane_view.clear()
         pane_view.display = True
 
@@ -435,6 +486,24 @@ class ViewsMixin:
             return
 
         self._tts.stop()
+
+        # Remember if chat view was active so we can restore on exit
+        self._settings_was_chat_view = getattr(self, '_chat_view_active', False)
+
+        # If chat view is active, temporarily hide it and show main-content
+        if self._settings_was_chat_view:
+            self._chat_view_active = False
+            try:
+                self.query_one("#chat-feed").display = False
+                self.query_one("#chat-choices").display = False
+                self.query_one("#chat-input-bar").display = False
+            except Exception:
+                pass
+            # Stop chat refresh timer
+            if hasattr(self, '_chat_refresh_timer') and self._chat_refresh_timer:
+                self._chat_refresh_timer.stop()
+                self._chat_refresh_timer = None
+
         self._in_settings = True
         self._setting_edit_mode = False
         self._spawn_options = None
@@ -458,6 +527,7 @@ class ViewsMixin:
             (kb.get("multiSelect", "x"), "Enter/confirm multi-select mode"),
             (kb.get("conversationMode", "c"), "Toggle continuous voice conversation mode"),
             (kb.get("paneView", "v"), "Show live tmux pane output"),
+            (kb.get("chatView", "g"), "Toggle chat bubble view"),
             (kb.get("undoSelection", "u"), "Undo last selection"),
             (kb.get("dismiss", "d"), "Dismiss active choice without responding"),
             (kb.get("filterChoices", "slash"), "Filter choices by typing"),
@@ -465,6 +535,9 @@ class ViewsMixin:
             (kb.get("hotReload", "r"), "Refresh / hot reload"),
             (kb.get("quit", "q"), "Back / Quit (context-aware)"),
         ]
+
+        # Store shortcuts for TTS readout on scroll
+        self._help_shortcuts = shortcuts
 
         preamble_widget = self.query_one("#preamble", Label)
         preamble_widget.update(
@@ -510,6 +583,23 @@ class ViewsMixin:
             return
 
         self._tts.stop()
+
+        # Remember if chat view was active so we can restore on exit
+        self._settings_was_chat_view = getattr(self, '_chat_view_active', False)
+
+        # If chat view is active, temporarily hide it and show main-content
+        if self._settings_was_chat_view:
+            self._chat_view_active = False
+            try:
+                self.query_one("#chat-feed").display = False
+                self.query_one("#chat-choices").display = False
+                self.query_one("#chat-input-bar").display = False
+            except Exception:
+                pass
+            # Stop chat refresh timer
+            if hasattr(self, '_chat_refresh_timer') and self._chat_refresh_timer:
+                self._chat_refresh_timer.stop()
+                self._chat_refresh_timer = None
 
         # Collect logs from all sources
         log_entries = []  # (section, text) tuples

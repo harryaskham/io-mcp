@@ -1308,6 +1308,9 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
                 phrase = random.choice(self._THINKING_PHRASES)
                 self._speak_ui(phrase)
                 self._update_ambient_indicator(session, elapsed)
+                # Log to activity feed so chat view shows the ambient update
+                session.log_activity("ambient", phrase, kind="ambient")
+                self._notify_chat_feed_update(session)
         else:
             # Subsequent updates: exponential backoff after 4th update
             # 1st repeat at initial + repeat
@@ -1356,6 +1359,9 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
 
                 self._tts.speak_async(msg)
                 self._update_ambient_indicator(session, elapsed)
+                # Log to activity feed so chat view shows the ambient update
+                session.log_activity("ambient", msg[:120], kind="ambient")
+                self._notify_chat_feed_update(session)
 
     def _update_ambient_indicator(self, session: Session, elapsed: float) -> None:
         """Update the agent activity label with elapsed time and last tool."""
@@ -2362,6 +2368,8 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         # In chat view, rebuild feed for new session and hide choices panel
         if self._chat_view_active:
             self._chat_content_hash = ""  # Force rebuild
+            self._chat_last_item_count = 0  # Reset for new session
+            self._chat_base_fingerprint = ""  # Reset for new session
             self._refresh_chat_feed()
             try:
                 self.query_one("#main-content").display = False
@@ -4404,8 +4412,9 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         if event.item is None:
             return
 
-        # Haptic feedback on scroll (short buzz)
-        self._vibrate(30)
+        # Haptic feedback on scroll (short buzz) — skip in settings menus
+        if not self._in_settings and not self._setting_edit_mode:
+            self._vibrate(30)
 
         # Chat bubble item: read clean TTS text (no markup/timestamps)
         if isinstance(event.item, ChatBubbleItem):
@@ -5790,7 +5799,6 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
     def _handle_quick_settings_select(self, label: str) -> None:
         """Handle selection in the quick settings submenu."""
         self._tts.stop()
-        self._vibrate(100)
         self._quick_settings_mode = False
 
         if label == "Fast toggle":

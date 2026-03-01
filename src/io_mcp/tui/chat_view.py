@@ -197,6 +197,9 @@ class ChatViewMixin:
     _chat_unified: bool = False  # True = show all agents' data in unified feed
     _chat_content_hash: str = ""  # Track content to avoid redundant rebuilds
     _chat_auto_scroll: bool = True  # Auto-scroll to bottom on new content
+    _chat_last_item_count: int = 0  # Track item count for incremental appends
+    _chat_base_fingerprint: str = ""  # Fingerprint of "stable" data (detect modifications)
+    _chat_force_full_rebuild: bool = False  # Set by external code to skip incremental
 
     @_safe_action
     def action_chat_view(self: "IoMcpApp") -> None:
@@ -273,6 +276,8 @@ class ChatViewMixin:
             pass
         self._chat_view_active = True
         self._chat_auto_scroll = True  # Start at bottom when opening chat view
+        self._chat_last_item_count = 0  # Force full build on open
+        self._chat_base_fingerprint = ""  # Reset incremental tracker
 
         # Build feed — unified or single-session
         if self._chat_unified:
@@ -311,7 +316,14 @@ class ChatViewMixin:
 
     def _build_chat_feed(self: "IoMcpApp", session: "Session",
                          sessions: list["Session"] | None = None) -> None:
-        """Build the chronological chat feed from session data."""
+        """Build the chronological chat feed from session data.
+
+        Optimized for the common case of appending new items:
+        - If only new items were added (no modifications to existing items),
+          appends just the delta instead of clearing and rebuilding.
+        - Falls back to full rebuild when items are modified (e.g., choice
+          resolved, pending message flushed, log trimmed).
+        """
         try:
             feed = self.query_one("#chat-feed", ListView)
         except Exception:
@@ -320,37 +332,101 @@ class ChatViewMixin:
         # Check scroll position BEFORE clearing so we know if user was at bottom
         was_at_bottom = self._chat_feed_is_at_bottom()
 
-        feed.clear()
         items = self._collect_chat_items(session, sessions=sessions)
 
-        _log.info("_build_chat_feed: building", extra={"context": {
-            "n_items": len(items),
-            "unified": sessions is not None,
-            "was_at_bottom": was_at_bottom,
-            "auto_scroll": self._chat_auto_scroll,
-        }})
+        # Determine whether we can do an incremental append
+        # Conditions for incremental:
+        #   1. Feed already has items (not first build)
+        #   2. New item count >= old item count (items were added, not removed)
+        #   3. Base fingerprint unchanged (existing items not modified)
+        #   4. Not in unified mode (multi-session sorting makes incremental unreliable)
+        #   5. Old count was below the 200-item cap (otherwise truncation shifts items)
+        #   6. No explicit force-full-rebuild flag set
+        can_append = False
+        old_count = self._chat_last_item_count
 
-        for item in items:
+        if (not self._chat_force_full_rebuild
+                and old_count > 0
+                and old_count < 200  # At cap, new items cause front truncation
+                and len(items) >= old_count
+                and sessions is None):
+            # Compute base fingerprint for all relevant sessions
+            base_fp = self._chat_base_fingerprint_for(session)
+            if base_fp == self._chat_base_fingerprint:
+                can_append = True
+
+        # Clear the force flag after checking it
+        self._chat_force_full_rebuild = False
+
+        if can_append:
+            # Incremental append — only add new items
+            delta = items[old_count:]
+            _log.info("_build_chat_feed: incremental append", extra={"context": {
+                "old_count": old_count,
+                "new_count": len(items),
+                "delta": len(delta),
+                "was_at_bottom": was_at_bottom,
+            }})
+            for item in delta:
+                try:
+                    feed.append(item)
+                except Exception:
+                    pass
+
+            # Pregenerate TTS only for the new items
             try:
-                feed.append(item)
+                tts_texts = set()
+                for item in delta:
+                    t = getattr(item, 'tts_text', '')
+                    if t and len(t) < 200:
+                        tts_texts.add(t)
+                if tts_texts and hasattr(self, '_pregenerate_ui_worker'):
+                    self._pregenerate_ui_worker(list(tts_texts))
+            except Exception:
+                pass
+        else:
+            # Full rebuild — clear and re-add everything
+            feed.clear()
+
+            _log.info("_build_chat_feed: full rebuild", extra={"context": {
+                "n_items": len(items),
+                "unified": sessions is not None,
+                "was_at_bottom": was_at_bottom,
+                "auto_scroll": self._chat_auto_scroll,
+                "old_count": old_count,
+            }})
+
+            for item in items:
+                try:
+                    feed.append(item)
+                except Exception:
+                    pass
+
+            # Pregenerate TTS for visible chat bubble items so scroll readout
+            # is instant (cache hit) instead of silent (cache miss → API call).
+            # Only pregenerate the last ~20 items since the user is most likely
+            # to scroll through recent history.
+            try:
+                tts_texts = set()
+                recent = items[-20:] if len(items) > 20 else items
+                for item in recent:
+                    t = getattr(item, 'tts_text', '')
+                    if t and len(t) < 200:  # skip very long texts
+                        tts_texts.add(t)
+                if tts_texts and hasattr(self, '_pregenerate_ui_worker'):
+                    self._pregenerate_ui_worker(list(tts_texts))
             except Exception:
                 pass
 
-        # Pregenerate TTS for visible chat bubble items so scroll readout
-        # is instant (cache hit) instead of silent (cache miss → API call).
-        # Only pregenerate the last ~20 items since the user is most likely
-        # to scroll through recent history.
-        try:
-            tts_texts = set()
-            recent = items[-20:] if len(items) > 20 else items
-            for item in recent:
-                t = getattr(item, 'tts_text', '')
-                if t and len(t) < 200:  # skip very long texts
-                    tts_texts.add(t)
-            if tts_texts and hasattr(self, '_pregenerate_ui_worker'):
-                self._pregenerate_ui_worker(list(tts_texts))
-        except Exception:
-            pass
+        # Update trackers for next incremental check
+        self._chat_last_item_count = len(items)
+        if sessions is None:
+            self._chat_base_fingerprint = self._chat_base_fingerprint_for(session)
+        else:
+            # Unified mode: store combined base fingerprint
+            self._chat_base_fingerprint = "||".join(
+                self._chat_base_fingerprint_for(s) for s in sessions
+            )
 
         # Only scroll to bottom if user was already at the bottom
         # (respects their scroll position if they scrolled up to read history)
@@ -460,7 +536,11 @@ class ChatViewMixin:
                     continue
                 tool = entry.get("tool", "")
                 detail = entry.get("detail", "")
-                text = f"{tool}" + (f": {detail[:60]}" if detail else "")
+                if kind == "ambient":
+                    # Ambient updates: show the phrase with a ~ prefix
+                    text = f"~ {detail}" if detail else "~ working"
+                else:
+                    text = f"{tool}" + (f": {detail[:60]}" if detail else "")
                 raw_items.append((
                     entry["timestamp"],
                     "system",
@@ -502,6 +582,35 @@ class ChatViewMixin:
             parts.append(f"f{flushed[-1].flushed_at:.0f}")
         if session.activity_log:
             parts.append(f"a{session.activity_log[-1].get('timestamp', 0):.0f}")
+        return "|".join(parts)
+
+    def _chat_base_fingerprint_for(self: "IoMcpApp", session: "Session") -> str:
+        """Compute a fingerprint of the 'base' (existing) items.
+
+        This captures the first item timestamps from each data source.
+        If the base fingerprint hasn't changed, it means existing items
+        weren't modified — only new items were appended. This lets us
+        do an incremental append instead of a full rebuild.
+
+        Changes that invalidate the base:
+        - activity_log trimmed from front (first timestamp changes)
+        - inbox_done trimmed from front
+        - speech_log first item removed (shouldn't happen normally)
+        - pending_messages count decreased (message flushed)
+        """
+        flushed = getattr(session, 'flushed_messages', [])
+        parts = []
+        # First-item timestamps — detect trimming from front
+        if session.speech_log:
+            parts.append(f"s0:{session.speech_log[0].timestamp:.0f}")
+        if session.inbox_done:
+            parts.append(f"d0:{session.inbox_done[0].timestamp:.0f}")
+        if flushed:
+            parts.append(f"f0:{flushed[0].flushed_at:.0f}")
+        if session.activity_log:
+            parts.append(f"a0:{session.activity_log[0].get('timestamp', 0):.0f}")
+        # Pending messages count — decreases when flushed
+        parts.append(f"pm:{len(session.pending_messages)}")
         return "|".join(parts)
 
     def _refresh_chat_feed(self: "IoMcpApp") -> None:
@@ -548,5 +657,6 @@ class ChatViewMixin:
         if not getattr(self, '_chat_unified', False) and focused.session_id != session.session_id:
             return
         # Force a rebuild by clearing the content hash
+        # (incremental append will still be used if base fingerprint is unchanged)
         self._chat_content_hash = ""
         self._refresh_chat_feed()
