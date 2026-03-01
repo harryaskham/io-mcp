@@ -532,6 +532,10 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         yield ManagedListView(id="chat-feed")
         # Standalone choices list for chat view — scrollable, no inbox
         yield ManagedListView(id="chat-choices")
+        # Chat input bar — text input + voice button, always visible in chat view
+        with Horizontal(id="chat-input-bar"):
+            yield SubmitTextArea(id="chat-input")
+            yield Static("🎤", id="chat-voice-btn")
         yield Input(placeholder="Filter choices...", id="filter-input")
         yield Static("", id="footer-status")
 
@@ -547,6 +551,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         self.query_one("#pane-view").display = False
         self.query_one("#chat-feed").display = False
         self.query_one("#chat-choices").display = False
+        self.query_one("#chat-input-bar").display = False
         self.query_one("#main-content").display = False
         self.query_one("#inbox-list").display = False
 
@@ -4060,6 +4065,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
                 self._chat_view_active = True
                 try:
                     self.query_one("#chat-feed").display = True
+                    self.query_one("#chat-input-bar").display = True
                     self.query_one("#main-content").display = False
                     self.query_one("#inbox-list").display = False
                     self.query_one("#preamble").display = False
@@ -5032,6 +5038,51 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
     # and _cancel_freeform have been removed. Text input now uses TextInputModal
     # (a Textual ModalScreen) which handles its own submit/cancel/change events.
     # See action_freeform_input() and action_queue_message().
+
+    @on(SubmitTextArea.Submitted, "#chat-input")
+    def on_chat_input_submitted(self, event: SubmitTextArea.Submitted) -> None:
+        """Handle message submitted from the chat view input box."""
+        if not self._chat_view_active:
+            return
+        try:
+            chat_input = self.query_one("#chat-input", SubmitTextArea)
+            message = chat_input.text.strip()
+        except Exception:
+            return
+        if not message:
+            return
+        session = self._focused()
+        if session and session.active and session.choices:
+            # Freeform selection
+            self._tts.stop()
+            self._vibrate(100)
+            ui_speed = self._config.tts_speed_for("ui") if self._config else None
+            self._tts.speak_fragments(["selected", message], speed_override=ui_speed)
+            self._resolve_selection(session, {"selected": message, "summary": "(freeform input)"})
+            try:
+                self.query_one("#chat-choices").display = False
+            except Exception:
+                pass
+            self._chat_content_hash = ""
+            self._refresh_chat_feed()
+        elif session:
+            # Queue as message
+            session.pending_messages.append(message)
+            self._speak_ui("Message queued")
+            self._chat_content_hash = ""
+            self._refresh_chat_feed()
+        try:
+            chat_input.clear()
+        except Exception:
+            pass
+
+    def on_click(self, event) -> None:
+        """Handle clicks — check if the voice button was clicked."""
+        try:
+            if self._chat_view_active and event.widget and event.widget.id == "chat-voice-btn":
+                self.action_voice_input()
+        except Exception:
+            pass
 
     def on_key(self, event) -> None:
         """Handle Escape in voice/settings/filter mode."""

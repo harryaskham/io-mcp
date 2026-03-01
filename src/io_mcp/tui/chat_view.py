@@ -181,6 +181,12 @@ class ChatViewMixin:
             _log.info("action_chat_view: toggling OFF")
             chat_feed.display = False
             self._chat_view_active = False
+            # Hide chat-specific widgets
+            try:
+                self.query_one("#chat-choices").display = False
+                self.query_one("#chat-input-bar").display = False
+            except Exception:
+                pass
             if hasattr(self, '_chat_refresh_timer') and self._chat_refresh_timer:
                 self._chat_refresh_timer.stop()
                 self._chat_refresh_timer = None
@@ -233,6 +239,11 @@ class ChatViewMixin:
         self.query_one("#speech-log").display = False
         self.query_one("#agent-activity").display = False
         chat_feed.display = True
+        # Show chat input bar
+        try:
+            self.query_one("#chat-input-bar").display = True
+        except Exception:
+            pass
         self._chat_view_active = True
 
         # Build feed — unified or single-session
@@ -349,7 +360,7 @@ class ChatViewMixin:
             # 5. Activity log entries (tool calls, status updates)
             for entry in sess.activity_log:
                 kind = entry.get("kind", "tool")
-                if kind in ("speech", "selection"):
+                if kind in ("speech", "selection", "choices"):
                     continue
                 tool = entry.get("tool", "")
                 detail = entry.get("detail", "")

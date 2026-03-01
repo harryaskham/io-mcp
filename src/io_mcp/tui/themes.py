@@ -427,6 +427,40 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
         scrollbar-color-hover: {s['fg_dim']};
     }}
 
+    #chat-input-bar {{
+        display: none;
+        dock: bottom;
+        height: auto;
+        min-height: 3;
+        max-height: 8;
+        layout: horizontal;
+        width: 1fr;
+        margin: 0 1;
+    }}
+
+    #chat-input {{
+        width: 1fr;
+        height: auto;
+        min-height: 3;
+        max-height: 8;
+        border: tall {s['border']};
+        background: {s['bg_alt']};
+    }}
+
+    #chat-voice-btn {{
+        width: 4;
+        height: auto;
+        min-height: 3;
+        content-align: center middle;
+        border: tall {s['border']};
+        background: {s['bg_alt']};
+        color: {s['accent']};
+    }}
+
+    #chat-input .text-area--cursor-line {{
+        background: {s['bg_alt']};
+    }}
+
     ChatBubbleItem {{
         padding: 0 2;
         height: auto;
