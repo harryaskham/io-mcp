@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import random
+import signal
 import subprocess
 import sys
 import threading
@@ -609,13 +610,32 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
 
     @work(thread=True, exit_on_error=False, group="vibrate")
     def _vibrate_worker(self, cmd: list[str]) -> None:
-        """Worker: run vibration subprocess in background thread."""
+        """Worker: run vibration subprocess in background thread.
+
+        Uses preexec_fn=os.setsid to create a process group, then
+        waits with a timeout to prevent zombie processes. If the
+        vibrate call hangs (e.g. socat/termux-api stuck), kills the
+        entire process group after 3 seconds.
+        """
         try:
-            subprocess.Popen(
+            proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                preexec_fn=os.setsid,
             )
+            try:
+                proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                # Kill the entire process group (termux-exec → socat → termux-api)
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except (ProcessLookupError, PermissionError, OSError):
+                    pass
+                try:
+                    proc.kill()
+                except (ProcessLookupError, PermissionError, OSError):
+                    pass
         except Exception:
             pass
 
