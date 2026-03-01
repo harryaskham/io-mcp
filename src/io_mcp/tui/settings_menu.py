@@ -36,6 +36,22 @@ class SettingsMixin:
         self._in_settings = True
         self._setting_edit_mode = False
 
+        # Remember if chat view was active so we can restore on exit
+        self._settings_was_chat_view = getattr(self, '_chat_view_active', False)
+
+        # If chat view is active, temporarily hide it and show main-content
+        if self._settings_was_chat_view:
+            try:
+                self.query_one("#chat-feed").display = False
+                self.query_one("#chat-choices").display = False
+                self.query_one("#chat-input-bar").display = False
+            except Exception:
+                pass
+            # Stop chat refresh timer
+            if hasattr(self, '_chat_refresh_timer') and self._chat_refresh_timer:
+                self._chat_refresh_timer.stop()
+                self._chat_refresh_timer = None
+
         scheme = getattr(self, '_color_scheme', DEFAULT_SCHEME)
 
         # Build current voice display: preset name
@@ -75,7 +91,17 @@ class SettingsMixin:
         preamble_widget.display = True
 
         # Ensure main content container is visible, hide inbox pane in settings
-        self._ensure_main_content_visible(show_inbox=False)
+        # In chat view, _ensure_main_content_visible is a no-op, so directly show it
+        if self._settings_was_chat_view:
+            try:
+                mc = self.query_one("#main-content")
+                mc.display = True
+                mc.styles.height = "1fr"
+                self.query_one("#inbox-list").display = False
+            except Exception:
+                pass
+        else:
+            self._ensure_main_content_visible(show_inbox=False)
 
         list_view = self.query_one("#choices", ListView)
         list_view.clear()
@@ -150,12 +176,44 @@ class SettingsMixin:
     def _exit_settings(self) -> None:
         """Leave settings and restore choices."""
         session = self._focused()
+        was_chat_view = getattr(self, '_settings_was_chat_view', False)
         self._clear_all_modal_state(session=session)
 
         # Guard: prevent the Enter keypress that triggered "close" from
         # also firing _do_select on the freshly-restored choice list.
         self._settings_just_closed = True
         self.set_timer(0.3, self._clear_settings_guard)
+
+        # Restore chat view if it was active before settings
+        if was_chat_view:
+            self._chat_view_active = True
+            try:
+                self.query_one("#chat-feed").display = True
+                self.query_one("#chat-input-bar").display = True
+                self.query_one("#main-content").display = False
+                self.query_one("#inbox-list").display = False
+                self.query_one("#preamble").display = False
+                self.query_one("#status").display = False
+            except Exception:
+                pass
+            # Determine unified mode
+            all_sessions = list(self.manager.all_sessions()) if hasattr(self, 'manager') else []
+            self._chat_unified = len(all_sessions) > 1
+            # Rebuild feed
+            if session:
+                self._chat_content_hash = ""
+                if self._chat_unified:
+                    self._build_chat_feed(session, sessions=all_sessions)
+                else:
+                    self._build_chat_feed(session)
+            # Restart refresh timer
+            if hasattr(self, '_chat_refresh_timer') and self._chat_refresh_timer:
+                self._chat_refresh_timer.stop()
+            self._chat_refresh_timer = self.set_interval(
+                3.0, lambda: self._refresh_chat_feed())
+            self._tts.stop()
+            self._speak_ui("Back to chat")
+            return
 
         # UI first, then TTS
         if session and session.active:
