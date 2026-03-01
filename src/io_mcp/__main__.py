@@ -775,7 +775,7 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
 
     def _tool_get_settings(args, session_id):
         if frontend.config:
-            return json.dumps({
+            result = {
                 "tts_voice": frontend.config.tts_voice_preset,
                 "tts_model": frontend.config.tts_model_name,
                 "tts_speed": frontend.config.tts_speed,
@@ -784,7 +784,10 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
                 "styles": frontend.config.tts_style_options,
                 "stt_model": frontend.config.stt_model_name,
                 "stt_models": frontend.config.stt_model_names,
-            })
+            }
+            if frontend.tts:
+                result["api_health"] = frontend.tts.api_health
+            return json.dumps(result)
         return json.dumps({"error": "No config available"})
 
     def _tool_register_session(args, session_id):
@@ -858,6 +861,7 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
         if frontend.config:
             frontend.config.reload()
             frontend.tts.clear_cache()
+            frontend.tts.reset_failure_counters()
             return json.dumps({
                 "status": "reloaded",
                 "tts_voice": frontend.config.tts_voice_preset,

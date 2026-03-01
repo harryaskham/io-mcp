@@ -359,6 +359,25 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         except Exception:
             pass
 
+    def _call_on_main_thread(self, callback, *args) -> None:
+        """Dispatch a callback to the main Textual thread.
+
+        If already on the main thread, calls directly.
+        If on a background thread, uses call_from_thread().
+        This avoids the RuntimeError when on_session_created is
+        invoked from the main thread (e.g. during tests or initial setup).
+        """
+        if threading.current_thread() is not threading.main_thread() and self.is_running:
+            if args:
+                self.call_from_thread(callback, *args)
+            else:
+                self.call_from_thread(callback)
+        else:
+            if args:
+                callback(*args)
+            else:
+                callback()
+
     def _speak_ui(self, text: str) -> None:
         """Speak a UI message (settings, navigation, prompts) with optional separate voice.
 
@@ -4326,7 +4345,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
                     session.emotion_override = emotion_rot[session_idx % len(emotion_rot)]
 
         try:
-            self.call_from_thread(self._update_tab_bar)
+            self._call_on_main_thread(self._update_tab_bar)
         except Exception:
             _log.debug("on_session_created: update_tab_bar failed", exc_info=True)
 
@@ -4367,7 +4386,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
                     3.0, lambda: self._refresh_chat_feed())
                 self._update_footer_status()
             try:
-                self.call_from_thread(_activate_chat)
+                self._call_on_main_thread(_activate_chat)
             except Exception:
                 pass
 
@@ -4375,7 +4394,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         # Skip _show_idle if chat view is now active — it would show #main-content
         if not self._chat_view_active:
             try:
-                self.call_from_thread(self._show_idle)
+                self._call_on_main_thread(self._show_idle)
             except Exception:
                 pass
 
@@ -4465,16 +4484,16 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
             _log.debug("Failed to send agent_disconnected notification", exc_info=True)
 
         try:
-            self.call_from_thread(self._update_tab_bar)
+            self._call_on_main_thread(self._update_tab_bar)
             # Force inbox list rebuild to remove stale items from dead session
             self._inbox_last_generation = -1
-            self.call_from_thread(self._update_inbox_list)
+            self._call_on_main_thread(self._update_inbox_list)
             if new_active is not None:
                 new_session = self.manager.get(new_active)
                 if new_session:
-                    self.call_from_thread(lambda s=new_session: self._switch_to_session(s))
+                    self._call_on_main_thread(lambda s=new_session: self._switch_to_session(s))
             else:
-                self.call_from_thread(self._show_idle)
+                self._call_on_main_thread(self._show_idle)
         except Exception:
             _log.debug("on_session_removed: UI update failed", exc_info=True)
 
@@ -4759,8 +4778,16 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
                     fragments.append(label)
                 if s:
                     fragments.append(s)
+                # Boundary cue: "Top." for first, "Last." for last real choice
+                boundary = ""
+                if logical == 1:
+                    boundary = "Top. "
+                    fragments.insert(0, "Top")
+                elif logical == len(session.choices):
+                    boundary = "Last. "
+                    fragments.insert(0, "Last")
                 # Full text for dedup key and fallback
-                text = f"{logical}. {label}. {s}" if s else f"{logical}. {label}"
+                text = f"{boundary}{logical}. {label}. {s}" if s else f"{boundary}{logical}. {label}"
             else:
                 # Extra option or separator — use the widget's label directly
                 # Strip Rich markup tags (e.g. [#616e88]...[/#616e88]) for TTS
@@ -5016,6 +5043,22 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         if list_view.display:
             if not list_view.has_focus:
                 list_view.focus()
+            # Wrap around: if at the last enabled item, jump to first enabled item
+            current = list_view.index
+            children = list(list_view.children)
+            if current is not None and len(children) > 0:
+                # Find the last enabled item index
+                last_enabled = None
+                for i in range(len(children) - 1, -1, -1):
+                    if not children[i].disabled:
+                        last_enabled = i
+                        break
+                if last_enabled is not None and current >= last_enabled:
+                    # Wrap to first enabled item
+                    for i in range(len(children)):
+                        if not children[i].disabled:
+                            list_view.index = i
+                            return
             list_view.action_cursor_down()
 
     def action_cursor_up(self) -> None:
@@ -5027,6 +5070,22 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         if list_view.display:
             if not list_view.has_focus:
                 list_view.focus()
+            # Wrap around: if at the first enabled item, jump to last enabled item
+            current = list_view.index
+            children = list(list_view.children)
+            if current is not None and len(children) > 0:
+                # Find the first enabled item index
+                first_enabled = None
+                for i in range(len(children)):
+                    if not children[i].disabled:
+                        first_enabled = i
+                        break
+                if first_enabled is not None and current <= first_enabled:
+                    # Wrap to last enabled item
+                    for i in range(len(children) - 1, -1, -1):
+                        if not children[i].disabled:
+                            list_view.index = i
+                            return
             list_view.action_cursor_up()
 
     def _scroll_allowed(self) -> bool:

@@ -429,6 +429,9 @@ async def test_action_chat_view_resets_auto_scroll():
     async with app.run_test() as pilot:
         session = _setup_session_with_choices(app)
 
+        # Turn OFF chat view first (on_session_created auto-activates it)
+        app._chat_view_active = False
+
         # Manually set auto_scroll to False (as if user scrolled up)
         app._chat_auto_scroll = False
 
@@ -1110,6 +1113,9 @@ async def test_incremental_append_resets_on_chat_view_open():
     app = make_app()
     async with app.run_test() as pilot:
         session = _setup_session_with_choices(app)
+
+        # Turn OFF chat view first (on_session_created auto-activates it)
+        app._chat_view_active = False
 
         # Simulate having stale tracker values from a previous chat view
         app._chat_last_item_count = 42

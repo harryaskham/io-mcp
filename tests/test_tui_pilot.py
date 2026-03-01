@@ -53,6 +53,22 @@ def make_app(**kwargs) -> IoMcpApp:
     return IoMcpApp(tts=tts, freeform_tts=tts, demo=True, **kwargs)
 
 
+def _disable_chat_view(app: IoMcpApp) -> None:
+    """Disable chat view auto-activation so tests can use classic #choices.
+
+    on_session_created auto-activates chat view, hiding #main-content
+    and #choices. Tests that exercise the classic layout need this.
+    """
+    app._chat_view_active = False
+    try:
+        app.query_one("#chat-feed").display = False
+        app.query_one("#chat-input-bar").display = False
+        app.query_one("#main-content").display = True
+        app.query_one("#inbox-list").display = True
+    except Exception:
+        pass
+
+
 @pytest.mark.asyncio
 async def test_app_starts():
     """App mounts without crashing."""
@@ -71,6 +87,7 @@ async def test_show_choices_populates_listview():
         session.registered = True
         session.name = "Test"
         app.on_session_created(session)
+        _disable_chat_view(app)
 
         # Set up session state as if present_choices was called
         session.preamble = "Pick one"
@@ -107,6 +124,7 @@ async def test_extra_option_index_mapping():
         session.registered = True
         session.name = "Test"
         app.on_session_created(session)
+        _disable_chat_view(app)
 
         session.preamble = "Test"
         session.choices = [{"label": "Choice1", "summary": ""}]
@@ -137,6 +155,7 @@ async def test_default_focus_is_first_real_choice():
         session.registered = True
         session.name = "Test"
         app.on_session_created(session)
+        _disable_chat_view(app)
 
         session.preamble = "Test"
         session.choices = [
@@ -164,6 +183,7 @@ async def test_freeform_input_opens_and_closes():
         session.registered = True
         session.name = "Test"
         app.on_session_created(session)
+        _disable_chat_view(app)
 
         session.preamble = "Test"
         session.choices = [{"label": "Choice1", "summary": ""}]
@@ -198,6 +218,7 @@ async def test_tab_switch_noop_single_session():
         session.registered = True
         session.name = "Agent1"
         app.on_session_created(session)
+        _disable_chat_view(app)
 
         active_before = app.manager.active_session_id
 
@@ -219,6 +240,7 @@ async def test_settings_menu_opens():
         session.registered = True
         session.name = "Test"
         app.on_session_created(session)
+        _disable_chat_view(app)
 
         await pilot.press("s")
         await pilot.pause(0.2)
@@ -241,6 +263,7 @@ async def test_message_mode_opens():
         session.registered = True
         session.name = "Test"
         app.on_session_created(session)
+        _disable_chat_view(app)
 
         await pilot.press("m")
         await pilot.pause(0.2)
@@ -267,6 +290,7 @@ async def test_inbox_list_hidden_with_single_item():
         session.registered = True
         session.name = "Test"
         app.on_session_created(session)
+        _disable_chat_view(app)
 
         # Set up single active choice
         session.preamble = "Pick one"
@@ -311,6 +335,7 @@ async def test_inbox_list_visible_with_multiple_items():
         session.registered = True
         session.name = "Test"
         app.on_session_created(session)
+        _disable_chat_view(app)
 
         # Enqueue two inbox items
         item1 = InboxItem(kind="choices", preamble="First question", choices=[{"label": "A", "summary": ""}])
@@ -353,11 +378,13 @@ async def test_inbox_items_show_agent_name_in_multi_agent_mode():
         session1.registered = True
         session1.name = "Code Review"
         app.on_session_created(session1)
+        _disable_chat_view(app)
 
         session2, _ = app.manager.get_or_create("test-2")
         session2.registered = True
         session2.name = "Build Agent"
         app.on_session_created(session2)
+        _disable_chat_view(app)
 
         # Set up session1 with inbox items
         item1 = InboxItem(kind="choices", preamble="Pick a file", choices=[{"label": "A", "summary": ""}])
@@ -403,6 +430,7 @@ async def test_inbox_items_no_agent_name_in_single_agent_mode():
         session.registered = True
         session.name = "Solo Agent"
         app.on_session_created(session)
+        _disable_chat_view(app)
 
         # Need 2+ pending choice items so inbox stays visible in single-agent mode
         item1 = InboxItem(kind="choices", preamble="Pick a file", choices=[{"label": "A", "summary": ""}])
@@ -437,6 +465,7 @@ async def test_inbox_pane_focus_default_is_choices():
         session.registered = True
         session.name = "Test"
         app.on_session_created(session)
+        _disable_chat_view(app)
 
         session.preamble = "Pick one"
         session.choices = [{"label": "Alpha", "summary": ""}]
@@ -464,6 +493,7 @@ async def test_inbox_focus_syncs_with_widget_focus():
         session.registered = True
         session.name = "Test"
         app.on_session_created(session)
+        _disable_chat_view(app)
 
         # Enqueue two inbox items so inbox pane is visible
         item1 = InboxItem(kind="choices", preamble="Q1", choices=[{"label": "A", "summary": ""}])
@@ -525,6 +555,7 @@ async def test_clear_all_modal_state_resets_settings():
         session.registered = True
         session.name = "Test"
         app.on_session_created(session)
+        _disable_chat_view(app)
 
         # Simulate being deep in nested settings state
         app._in_settings = True
@@ -568,6 +599,7 @@ async def test_exit_settings_uses_clear_all_modal_state():
         session.registered = True
         session.name = "Test"
         app.on_session_created(session)
+        _disable_chat_view(app)
 
         # Enter settings
         await pilot.press("s")
@@ -605,6 +637,7 @@ async def test_choices_force_exit_settings():
         session.registered = True
         session.name = "Test"
         app.on_session_created(session)
+        _disable_chat_view(app)
 
         # Enter settings
         await pilot.press("s")
@@ -664,6 +697,7 @@ async def test_choices_force_exit_setting_edit_mode():
         session.registered = True
         session.name = "Test"
         app.on_session_created(session)
+        _disable_chat_view(app)
 
         # Enter settings, then enter edit mode
         await pilot.press("s")
@@ -693,6 +727,7 @@ async def test_choices_force_exit_quick_settings():
         session.registered = True
         session.name = "Test"
         app.on_session_created(session)
+        _disable_chat_view(app)
 
         # Simulate quick settings mode
         app._in_settings = True

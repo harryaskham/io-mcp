@@ -33,7 +33,7 @@ from io_mcp.session import Session, InboxItem
 
 # ─── Reuse test helpers from test_tui_pilot ──────────────────────────────
 
-from tests.test_tui_pilot import MockTTS, make_app
+from tests.test_tui_pilot import MockTTS, make_app, _disable_chat_view
 
 
 # ─── Helper to set up a session with choices ─────────────────────────────
@@ -45,6 +45,7 @@ def _setup_session(app, session_id="test-1", name="Test", choices=None):
     session.registered = True
     session.name = name
     app.on_session_created(session)
+    _disable_chat_view(app)
 
     if choices is None:
         choices = [

@@ -133,6 +133,8 @@ class TTSEngine:
         # skip background API generation entirely.
         self._api_gen_consecutive_failures = 0
         self._api_gen_last_failure: float = 0
+        self._api_gen_last_error: Optional[str] = None  # last failure reason
+        self._api_gen_probe_in_progress = False  # recovery probe running
         _API_FAIL_THRESHOLD = 3
         _API_FAIL_COOLDOWN = 60  # retry API after 60s
         self._api_fail_threshold = _API_FAIL_THRESHOLD
@@ -271,24 +273,100 @@ class TTSEngine:
 
         Returns False when we've seen too many consecutive API failures
         (e.g. missing API key) to avoid spawning 30s-timeout processes
-        that pile up and make the TUI sluggish.  Resets after a cooldown.
+        that pile up and make the TUI sluggish.  Resets after a cooldown
+        and a successful recovery probe.
         """
         if self._api_gen_consecutive_failures < self._api_fail_threshold:
             return True
         # Check cooldown — maybe the key was restored
         if _time_mod.time() - self._api_gen_last_failure > self._api_fail_cooldown:
-            self._api_gen_consecutive_failures = 0
-            return True
+            # Don't immediately open the floodgates — spawn a probe first
+            if not self._api_gen_probe_in_progress:
+                self._spawn_recovery_probe()
+            return False
         return False
 
-    def _record_api_gen_failure(self) -> None:
-        """Record an API TTS generation failure."""
+    def _spawn_recovery_probe(self) -> None:
+        """Spawn a lightweight probe to test if the TTS API has recovered.
+
+        Runs in a daemon thread. On success, resets failure counters so
+        normal requests can flow through. On failure, updates the last
+        failure timestamp to restart the cooldown.
+        """
+        self._api_gen_probe_in_progress = True
+
+        def _probe():
+            try:
+                _log.info("TTS recovery probe: testing API availability")
+                # Generate a very short phrase to test API
+                if not self._tts_bin:
+                    return
+
+                if self._config:
+                    cmd = [self._tts_bin] + self._config.tts_cli_args("test")
+                else:
+                    cmd = [self._tts_bin, "test", "--stdout",
+                           "--response-format", "wav"]
+
+                probe_path = os.path.join(
+                    tempfile.gettempdir(), "io-mcp-tts-probe.wav")
+                try:
+                    with open(probe_path, "wb") as f:
+                        proc = subprocess.run(
+                            cmd, stdout=f, stderr=subprocess.PIPE,
+                            env=self._env, timeout=15,
+                        )
+                    if proc.returncode == 0:
+                        fsize = os.path.getsize(probe_path)
+                        if fsize >= WAV_HEADER_SIZE:
+                            _log.info("TTS recovery probe: API recovered")
+                            self._api_gen_consecutive_failures = 0
+                            self._api_gen_last_error = None
+                            return
+                    # Probe failed
+                    stderr_out = (proc.stderr or b"").decode(
+                        "utf-8", errors="replace").strip()
+                    reason = (f"probe failed (code {proc.returncode}): "
+                              f"{stderr_out[:120]}") if stderr_out else (
+                              f"probe failed (code {proc.returncode})")
+                    _log.warning("TTS recovery probe: %s", reason)
+                    self._api_gen_last_error = reason
+                    self._api_gen_last_failure = _time_mod.time()
+                except subprocess.TimeoutExpired:
+                    _log.warning("TTS recovery probe: timed out")
+                    self._api_gen_last_error = "probe timed out"
+                    self._api_gen_last_failure = _time_mod.time()
+                except Exception as e:
+                    _log.warning("TTS recovery probe: exception: %s", e)
+                    self._api_gen_last_error = f"probe exception: {e}"
+                    self._api_gen_last_failure = _time_mod.time()
+                finally:
+                    try:
+                        os.unlink(probe_path)
+                    except OSError:
+                        pass
+            finally:
+                self._api_gen_probe_in_progress = False
+
+        threading.Thread(target=_probe, daemon=True, name="tts-recovery-probe").start()
+
+    def _record_api_gen_failure(self, reason: Optional[str] = None) -> None:
+        """Record an API TTS generation failure.
+
+        Args:
+            reason: Human-readable failure reason (e.g. "HTTP 500",
+                    "timeout", "connection refused"). Stored for
+                    diagnostics and surfaced in get_settings.
+        """
         self._api_gen_consecutive_failures += 1
         self._api_gen_last_failure = _time_mod.time()
+        if reason:
+            self._api_gen_last_error = reason
 
     def _record_api_gen_success(self) -> None:
         """Record a successful API TTS generation."""
         self._api_gen_consecutive_failures = 0
+        self._api_gen_last_error = None
 
     def reset_failure_counters(self) -> None:
         """Reset all failure counters (API gen + playback).
@@ -298,6 +376,8 @@ class TTSEngine:
         so clearing counters lets TTS resume immediately.
         """
         self._api_gen_consecutive_failures = 0
+        self._api_gen_last_error = None
+        self._api_gen_probe_in_progress = False
         self._consecutive_failures = 0
 
     @property
@@ -327,6 +407,34 @@ class TTSEngine:
         else:
             result["status"] = "ok"
         return result
+
+    @property
+    def api_health(self) -> dict:
+        """Return API TTS circuit breaker health for diagnostics.
+
+        Returns a dict with:
+            available: whether API generation is currently allowed
+            consecutive_failures: number of consecutive API failures
+            last_error: last failure reason string (or None)
+            cooldown_remaining_seconds: seconds left in cooldown (or None if not in cooldown)
+            probe_in_progress: whether a recovery probe is currently running
+        """
+        available = self._api_gen_consecutive_failures < self._api_fail_threshold
+        cooldown_remaining = None
+        if not available and self._api_gen_last_failure:
+            elapsed = _time_mod.time() - self._api_gen_last_failure
+            remaining = self._api_fail_cooldown - elapsed
+            if remaining > 0:
+                cooldown_remaining = round(remaining, 1)
+            else:
+                cooldown_remaining = 0.0  # cooldown expired, waiting for probe
+        return {
+            "available": available,
+            "consecutive_failures": self._api_gen_consecutive_failures,
+            "last_error": self._api_gen_last_error,
+            "cooldown_remaining_seconds": cooldown_remaining,
+            "probe_in_progress": self._api_gen_probe_in_progress,
+        }
 
     def _generate_to_file(self, text: str, voice_override: Optional[str] = None,
                           emotion_override: Optional[str] = None,
@@ -381,7 +489,7 @@ class TTSEngine:
                     else:
                         if not self._tts_bin:
                             self._log_tts_error("tts binary not available", text)
-                            self._record_api_gen_failure()
+                            self._record_api_gen_failure("tts binary not found")
                             return None
 
                         if not self._api_gen_available():
@@ -405,7 +513,9 @@ class TTSEngine:
                             stderr_out = (proc.stderr or b"").decode("utf-8", errors="replace").strip()
                             self._log_tts_error(
                                 f"tts CLI failed (code {proc.returncode}): {stderr_out}", text)
-                            self._record_api_gen_failure()
+                            self._record_api_gen_failure(
+                                f"exit code {proc.returncode}: {stderr_out[:120]}" if stderr_out
+                                else f"exit code {proc.returncode}")
                             try:
                                 os.unlink(out_path)
                             except OSError:
@@ -417,7 +527,7 @@ class TTSEngine:
                             if fsize < WAV_HEADER_SIZE:
                                 self._log_tts_error(
                                     f"tts CLI produced invalid WAV ({fsize} bytes)", text)
-                                self._record_api_gen_failure()
+                                self._record_api_gen_failure(f"invalid WAV ({fsize} bytes)")
                                 try:
                                     os.unlink(out_path)
                                 except OSError:
@@ -433,7 +543,7 @@ class TTSEngine:
                 except subprocess.TimeoutExpired:
                     self._log_tts_error("TTS generation timed out", text)
                     if not self._local:
-                        self._record_api_gen_failure()
+                        self._record_api_gen_failure("timeout")
                     try:
                         os.unlink(out_path)
                     except OSError:
@@ -442,7 +552,7 @@ class TTSEngine:
                 except Exception as e:
                     self._log_tts_error(f"TTS generation exception: {e}", text)
                     if not self._local:
-                        self._record_api_gen_failure()
+                        self._record_api_gen_failure(f"exception: {e}")
                     try:
                         os.unlink(out_path)
                     except OSError:
@@ -909,7 +1019,9 @@ class TTSEngine:
                         stderr_out = (proc.stderr or b"").decode("utf-8", errors="replace").strip()
                         self._log_tts_error(
                             f"tts CLI failed (code {proc.returncode}): {stderr_out}", text)
-                        self._record_api_gen_failure()
+                        self._record_api_gen_failure(
+                            f"exit code {proc.returncode}: {stderr_out[:120]}" if stderr_out
+                            else f"exit code {proc.returncode}")
                     try:
                         os.unlink(out_path)
                     except OSError:
@@ -921,7 +1033,7 @@ class TTSEngine:
                     if fsize < WAV_HEADER_SIZE:
                         self._log_tts_error(
                             f"tts CLI produced invalid WAV ({fsize} bytes)", text)
-                        self._record_api_gen_failure()
+                        self._record_api_gen_failure(f"invalid WAV ({fsize} bytes)")
                         try:
                             os.unlink(out_path)
                         except OSError:
@@ -937,7 +1049,7 @@ class TTSEngine:
         except subprocess.TimeoutExpired:
             self._log_tts_error("TTS generation timed out", text)
             if not self._local:
-                self._record_api_gen_failure()
+                self._record_api_gen_failure("timeout")
             try:
                 os.unlink(out_path)
             except OSError:
@@ -946,7 +1058,7 @@ class TTSEngine:
         except Exception as e:
             self._log_tts_error(f"TTS generation exception: {e}", text)
             if not self._local:
-                self._record_api_gen_failure()
+                self._record_api_gen_failure(f"exception: {e}")
             try:
                 os.unlink(out_path)
             except OSError:
@@ -1362,6 +1474,10 @@ class TTSEngine:
         exponential backoff (1s, 2s). Signal kills and intentional
         cancellations are not retried.
 
+        Circuit breaker failures are recorded only once per speak_streaming
+        call (not per retry), so a single transient error doesn't
+        immediately open the circuit breaker.
+
         Args:
             text: Text to speak.
             voice_override: Optional voice name for per-session rotation.
@@ -1371,6 +1487,8 @@ class TTSEngine:
             block: If True, wait for playback to finish before returning.
         """
         max_retries = 2
+        # Save current failure count so retries don't accumulate
+        pre_fail_count = self._api_gen_consecutive_failures
         for attempt in range(max_retries + 1):
             result = self._speak_streaming_once(
                 text, voice_override=voice_override,
@@ -1384,7 +1502,11 @@ class TTSEngine:
             _log.info("TTS streaming retry %d/%d in %ds: %s",
                       attempt + 1, max_retries, delay, text[:60])
             _time_mod.sleep(delay)
-        # All retries exhausted — fall back to non-streaming
+        # All retries exhausted — record only a single failure for the
+        # circuit breaker (undo any intermediate failures from retries,
+        # then record one)
+        self._api_gen_consecutive_failures = pre_fail_count
+        self._record_api_gen_failure(f"streaming exhausted {max_retries} retries")
         _log.warning("TTS streaming failed after %d retries, falling back: %s",
                      max_retries, text[:60])
         self.play_cached(text, block=block, voice_override=voice_override,
@@ -1502,7 +1624,9 @@ class TTSEngine:
                 self._log_tts_error(
                     f"tts CLI produced no/invalid WAV header ({len(header)} bytes): {tts_stderr[:120]}",
                     text)
-                self._record_api_gen_failure()
+                self._record_api_gen_failure(
+                    f"invalid WAV header: {tts_stderr[:120]}" if tts_stderr
+                    else f"invalid WAV header ({len(header)} bytes)")
                 # Check if this is a retriable API error (500, timeout, etc.)
                 if "500" in tts_stderr or "Internal Server Error" in tts_stderr:
                     return "retry"
@@ -1599,7 +1723,9 @@ class TTSEngine:
                                     f"tts CLI (streaming) failed (code {tts_retcode}): {tts_stderr}",
                                     text)
                             tts_failed = True
-                            self._record_api_gen_failure()
+                            self._record_api_gen_failure(
+                                f"streaming exit code {tts_retcode}: {tts_stderr[:120]}" if tts_stderr
+                                else f"streaming exit code {tts_retcode}")
                 except Exception:
                     pass
                 # Report error if streaming failed (no local fallback)
@@ -1660,7 +1786,9 @@ class TTSEngine:
                                         f"tts CLI (streaming async) failed (code {tts_retcode}): {tts_stderr}",
                                         text)
                                 tts_failed = True
-                                self._record_api_gen_failure()
+                                self._record_api_gen_failure(
+                                    f"streaming async exit code {tts_retcode}: {tts_stderr[:120]}" if tts_stderr
+                                    else f"streaming async exit code {tts_retcode}")
                     except Exception:
                         pass
                     # Report error if streaming failed (no local fallback)
