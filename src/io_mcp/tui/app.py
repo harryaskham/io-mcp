@@ -1238,19 +1238,20 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         # ── Auto-prune dead sessions ─────────────────────────────
         # Heuristics for detecting dead sessions:
-        # 1. Dead tmux pane (immediate — don't wait for unresponsive timer)
+        # 1. Dead tmux pane AND unresponsive for >5min — conservative cleanup
         # 2. Unresponsive sessions without tmux info (no way to verify)
         dead_sessions = []
 
         for session in self.manager.all_sessions():
             if session.session_id == self.manager.active_session_id:
                 continue  # never auto-prune focused session
-            if session.active:
-                continue  # has pending choices
 
-            # Heuristic 1: Dead tmux pane — immediate removal
+            last_call = getattr(session, 'last_tool_call', 0)
+            elapsed = now - last_call if last_call > 0 else 0
+
+            # Heuristic 1: Dead tmux pane AND unresponsive for >5min
             pane_dead = self._is_tmux_pane_dead(session)
-            if pane_dead:
+            if pane_dead and elapsed > 300:
                 dead_sessions.append((session, "dead tmux pane"))
                 continue
 
@@ -1261,13 +1262,8 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
                     dead_sessions.append((session, "unresponsive, no tmux"))
 
         for session, reason in dead_sessions:
-            name = session.name
-            self.on_session_removed(session.session_id)
+            self._auto_cleanup_dead_session(session)
             tab_bar_dirty = True
-            try:
-                self._speak_ui(f"Removed dead session {name}")
-            except Exception:
-                pass
 
         if tab_bar_dirty:
             try:
@@ -1380,6 +1376,39 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
                 priority=5 if status == "unresponsive" else 4,
                 tags=["skull" if pane_dead else "warning", status],
             ))
+        except Exception:
+            pass
+
+    def _auto_cleanup_dead_session(self, session: "Session") -> None:
+        """Auto-cleanup a confirmed-dead session.
+
+        Resolves all pending inbox items with ``_cancelled`` so blocked MCP
+        threads don't hang, speaks a cleanup notice, and removes the session
+        from the manager.
+
+        Only called from the health monitor when BOTH conditions are met:
+        - tmux pane confirmed dead
+        - unresponsive for >5 minutes
+
+        Args:
+            session: The dead session to clean up.
+        """
+        name = session.name
+
+        # Resolve all pending inbox items (including active choices)
+        _resolve_pending_inbox(session)
+
+        # Clear TUI-side active state
+        session.active = False
+        session.preamble = ""
+        session.choices = []
+        session._active_inbox_item = None
+
+        # Remove via on_session_removed which handles UI + notifications
+        self.on_session_removed(session.session_id)
+
+        try:
+            self._speak_ui(f"Cleaned up dead session: {name}")
         except Exception:
             pass
 
@@ -3408,7 +3437,11 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         item.result = {"selected": "_speech_done", "summary": text[:100]}
         item.done = True
         item.event.set()
-        session._append_done(session.inbox.popleft())
+        try:
+            session._append_done(session.inbox.popleft())
+        except IndexError:
+            # Item already removed by concurrent cancel or drain worker
+            pass
         session.drain_kick.set()
         self._safe_call(self._update_inbox_list)
         self._safe_call(self._update_tab_bar)
@@ -6307,6 +6340,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
             {"label": "Voice toggle", "summary": f"Quick-switch voice (current: {self.settings.voice})"},
             {"label": "Notifications", "summary": "Check Android notifications"},
             {"label": "View logs", "summary": "TUI errors, proxy logs, speech history"},
+            {"label": "Clean stale sessions", "summary": "Remove unhealthy/dead agent sessions"},
             {"label": "Settings", "summary": "Open full settings menu"},
             {"label": "Restart proxy", "summary": "Kill and restart MCP proxy (agents reconnect)"},
             {"label": "Restart TUI", "summary": "Restart the TUI backend"},
@@ -6368,6 +6402,8 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         elif label == "View logs":
             self._in_settings = False
             self.action_view_system_logs()
+        elif label == "Clean stale sessions":
+            self._clean_stale_sessions_action()
         elif label == "Settings":
             session = self._focused()
             self._clear_all_modal_state(session=session)
@@ -6391,6 +6427,69 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         else:
             # "Back" or unknown
             self._exit_settings()
+
+    def _clean_stale_sessions_action(self) -> None:
+        """Scan for unhealthy sessions and let the user dismiss them.
+
+        If there are no stale sessions, speaks "No stale sessions" and
+        returns to quick settings. If there's only one, auto-cleans it.
+        If multiple, presents a list for the user to pick from.
+        """
+        stale = [
+            s for s in self.manager.all_sessions()
+            if s.health_status != "healthy"
+        ]
+
+        if not stale:
+            self._speak_ui("No stale sessions")
+            self._enter_quick_settings()
+            return
+
+        if len(stale) == 1:
+            # Auto-clean the single stale session
+            session = stale[0]
+            self._auto_cleanup_dead_session(session)
+            self._speak_ui(f"Cleaned up {session.name}")
+            self._enter_quick_settings()
+            return
+
+        # Multiple stale sessions — present choices
+        def _on_select(label: str):
+            if label == "Clean all":
+                for s in stale:
+                    # Re-check the session still exists
+                    if self.manager.get(s.session_id):
+                        self._auto_cleanup_dead_session(s)
+                self._speak_ui(f"Cleaned {len(stale)} stale sessions")
+                self._enter_quick_settings()
+            elif label == "Cancel":
+                self._enter_quick_settings()
+            else:
+                # Individual session selected
+                for s in stale:
+                    if s.name == label:
+                        self._auto_cleanup_dead_session(s)
+                        self._speak_ui(f"Cleaned up {s.name}")
+                        break
+                self._enter_quick_settings()
+
+        buttons = []
+        for s in stale:
+            status = s.health_status
+            pending = s.inbox_choices_count()
+            summary = f"Status: {status}"
+            if pending > 0:
+                summary += f", {pending} pending choice{'s' if pending != 1 else ''}"
+            buttons.append({"label": s.name, "summary": summary})
+        buttons.append({"label": "Clean all", "summary": f"Remove all {len(stale)} stale sessions"})
+        buttons.append({"label": "Cancel", "summary": "Go back to quick settings"})
+
+        self._show_dialog(
+            title="Clean Stale Sessions",
+            message=f"Found {len(stale)} unhealthy session{'s' if len(stale) != 1 else ''}",
+            buttons=buttons,
+            callback=_on_select,
+        )
 
     def _run_djent_command(self, label: str, command: str) -> None:
         """Run a djent CLI command via worker, speak the output, return to quick settings."""
