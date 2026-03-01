@@ -575,9 +575,12 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
         restart_retries = 0
         max_restart_retries = 3  # Don't retry forever — proxy/agent may be gone
 
+        # Push onto undo stack once before the loop (multi-level undo support).
+        # The loop re-presents on _undo without pushing again.
+        session.push_undo(preamble, all_choices)
+
         while True:
-            session.last_preamble = preamble
-            session.last_choices = list(all_choices)
+            # Legacy fields kept in sync by push_undo for backward compat
 
             if timeout is not None and timeout > 0:
                 # Non-blocking: present choices and return after timeout

@@ -6669,6 +6669,10 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
     def action_undo_selection(self) -> None:
         """Undo the last selection — signal the server to re-present choices.
 
+        Supports multi-level undo (up to 5 deep). Each undo pops from
+        the session's undo_stack and speaks the remaining depth so the
+        user knows how many undos are left.
+
         Only works when the session is in 'waiting for agent' state
         (selection was made, agent hasn't responded yet). Sets a special
         sentinel that the server's present_choices loop recognizes.
@@ -6694,18 +6698,25 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
             self._speak_ui("Already in choices. Scroll to pick.")
             return
 
-        # After selection: check if we have choices to go back to
-        last_choices = getattr(session, 'last_choices', [])
-        last_preamble = getattr(session, 'last_preamble', '')
-        if not last_choices:
+        # After selection: check if we have undo entries
+        if session.undo_depth == 0:
             self._speak_ui("Nothing to undo")
             return
+
+        # Pop from undo stack and speak depth indicator
+        remaining = session.undo_depth - 1  # after this pop
+        session.pop_undo()
 
         # Set the undo sentinel — the server loop will re-present
         self._vibrate(100)
         self._tts.stop()
         self._tts.play_chime("undo")
-        self._speak_ui("Undoing selection")
+
+        # Speak depth: tell user how many more undos are available
+        if remaining > 0:
+            self._speak_ui(f"Undo. {remaining} more available")
+        else:
+            self._speak_ui("Undo. No more undos left")
 
         # Remove the active inbox item from both inbox and inbox_done
         # so it doesn't appear as a resolved choice in the chat feed.

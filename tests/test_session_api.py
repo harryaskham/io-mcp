@@ -99,10 +99,12 @@ class TestSession:
         s = Session(session_id="test-1", name="Agent 1")
         assert s.last_preamble == ""
         assert s.last_choices == []
-        s.last_preamble = "test preamble"
-        s.last_choices = [{"label": "opt1"}]
+        assert s.undo_stack == []
+        assert s.undo_depth == 0
+        s.push_undo("test preamble", [{"label": "opt1"}])
         assert s.last_preamble == "test preamble"
         assert len(s.last_choices) == 1
+        assert s.undo_depth == 1
 
 
 class TestSpeechEntry:

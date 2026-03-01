@@ -298,11 +298,10 @@ def create_mcp_server(
                 all_choices.append(dict(opt))
 
         # Undo loop: re-present if user selects undo
-        while True:
-            # Save current choices for undo support
-            session.last_preamble = preamble
-            session.last_choices = list(all_choices)
+        # Push onto undo stack once before the loop (multi-level undo support).
+        session.push_undo(preamble, all_choices)
 
+        while True:
             loop = asyncio.get_event_loop()
             result = await loop.run_in_executor(
                 None, frontend.present_choices, session, preamble, all_choices

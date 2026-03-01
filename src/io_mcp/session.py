@@ -155,6 +155,52 @@ class Session:
     # ── Undo support ──────────────────────────────────────────────
     last_preamble: str = ""                  # previous present_choices preamble
     last_choices: list[dict] = field(default_factory=list)  # previous choices
+    undo_stack: list[dict] = field(default_factory=list)  # multi-level undo stack
+    _undo_stack_max: int = 5  # max undo depth
+
+    def push_undo(self, preamble: str, choices: list[dict], selection: Optional[dict] = None) -> None:
+        """Push a choices snapshot onto the undo stack.
+
+        Each entry stores the preamble, choices list, and what was selected.
+        Stack is capped at ``_undo_stack_max`` entries (oldest dropped first).
+        Also updates legacy ``last_preamble``/``last_choices`` for backward compat.
+        """
+        self.undo_stack.append({
+            "preamble": preamble,
+            "choices": list(choices),
+            "selection": selection,
+        })
+        # Trim oldest if over the cap
+        overflow = len(self.undo_stack) - self._undo_stack_max
+        if overflow > 0:
+            del self.undo_stack[:overflow]
+        # Keep legacy fields in sync for backward compat
+        self.last_preamble = preamble
+        self.last_choices = list(choices)
+
+    def pop_undo(self) -> Optional[dict]:
+        """Pop the most recent entry from the undo stack.
+
+        Returns the entry dict (preamble, choices, selection) or None if empty.
+        Updates legacy fields to the new top of stack (or clears them).
+        """
+        if not self.undo_stack:
+            return None
+        entry = self.undo_stack.pop()
+        # Update legacy fields to new top (or clear if empty)
+        if self.undo_stack:
+            top = self.undo_stack[-1]
+            self.last_preamble = top["preamble"]
+            self.last_choices = list(top["choices"])
+        else:
+            self.last_preamble = ""
+            self.last_choices = []
+        return entry
+
+    @property
+    def undo_depth(self) -> int:
+        """Number of entries available to undo."""
+        return len(self.undo_stack)
 
     # ── User message inbox (queued for next MCP response) ─────────
     pending_messages: list[str] = field(default_factory=list)

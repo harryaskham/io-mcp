@@ -276,9 +276,8 @@ class TestUndoCallsChime:
         session = Session(session_id="test-undo", name="Test")
         session.choices = []
         session.active = False
-        # Set up last_choices so undo has something to revert
-        session.last_choices = [{"label": "Prev", "summary": "old"}]
-        session.last_preamble = "Pick one"
+        # Set up undo stack so undo has something to revert
+        session.push_undo("Pick one", [{"label": "Prev", "summary": "old"}])
 
         app._focused = mock.MagicMock(return_value=session)
         app._in_settings = False
@@ -302,8 +301,7 @@ class TestUndoCallsChime:
         session = Session(session_id="test-undo-ord", name="Test")
         session.choices = []
         session.active = False
-        session.last_choices = [{"label": "Prev", "summary": "old"}]
-        session.last_preamble = "Pick one"
+        session.push_undo("Pick one", [{"label": "Prev", "summary": "old"}])
 
         app._focused = mock.MagicMock(return_value=session)
         app._in_settings = False
