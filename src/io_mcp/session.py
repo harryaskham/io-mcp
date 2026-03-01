@@ -98,6 +98,7 @@ class Session:
 
     # ── Speech inbox ──────────────────────────────────────────────
     speech_log: list[SpeechEntry] = field(default_factory=list)
+    _speech_log_max: int = 200  # cap to prevent unbounded growth
     unplayed_speech: list[SpeechEntry] = field(default_factory=list)
 
     # ── UI state (saved/restored on tab switch) ───────────────────
@@ -149,6 +150,7 @@ class Session:
 
     # ── Selection history ─────────────────────────────────────────
     history: list[HistoryEntry] = field(default_factory=list)
+    _history_max: int = 200  # cap to prevent unbounded growth
 
     # ── Undo support ──────────────────────────────────────────────
     last_preamble: str = ""                  # previous present_choices preamble
@@ -187,6 +189,20 @@ class Session:
     def touch(self) -> None:
         """Update the last_activity timestamp."""
         self.last_activity = time.time()
+
+    def append_speech(self, entry: SpeechEntry) -> None:
+        """Append a speech entry and trim if over the cap."""
+        self.speech_log.append(entry)
+        overflow = len(self.speech_log) - self._speech_log_max
+        if overflow > 0:
+            self.speech_log = self.speech_log[overflow:]
+
+    def append_history(self, entry: HistoryEntry) -> None:
+        """Append a history entry and trim if over the cap."""
+        self.history.append(entry)
+        overflow = len(self.history) - self._history_max
+        if overflow > 0:
+            self.history = self.history[overflow:]
 
     @property
     def mood(self) -> str:
@@ -584,6 +600,26 @@ class Session:
         return entries
 
 
+def _resolve_pending_inbox(session: Session) -> int:
+    """Resolve all pending inbox items in a session so blocked threads unblock.
+
+    Sets each pending item's result to a ``_cancelled`` marker, marks it
+    done, and signals its event.  This prevents threads blocked on
+    ``item.event.wait()`` from hanging forever when their session is removed.
+
+    Returns the number of items resolved.
+    """
+    resolved = 0
+    while session.inbox:
+        item = session.inbox.popleft()
+        if not item.done:
+            item.result = {"selected": "_cancelled", "summary": "Session removed"}
+            item.done = True
+            item.event.set()
+            resolved += 1
+    return resolved
+
+
 class SessionManager:
     """Manages multiple sessions with tab navigation.
 
@@ -622,21 +658,35 @@ class SessionManager:
         """Remove a session. Returns new active_session_id (or None).
 
         If the removed session was focused, focuses the next available.
+        Resolves all pending inbox items so blocked threads are unblocked.
         """
         with self._lock:
-            if session_id not in self.sessions:
-                return self.active_session_id
+            return self._remove_locked(session_id)
 
-            del self.sessions[session_id]
-            self.session_order.remove(session_id)
+    def _remove_locked(self, session_id: str) -> Optional[str]:
+        """Remove a session while the lock is held.
 
-            if self.active_session_id == session_id:
-                if self.session_order:
-                    self.active_session_id = self.session_order[0]
-                else:
-                    self.active_session_id = None
-
+        Resolves all pending inbox items so blocked threads are unblocked.
+        Returns new active_session_id (or None).
+        """
+        if session_id not in self.sessions:
             return self.active_session_id
+
+        session = self.sessions[session_id]
+
+        # Resolve all pending inbox items so blocked threads don't hang forever
+        _resolve_pending_inbox(session)
+
+        del self.sessions[session_id]
+        self.session_order.remove(session_id)
+
+        if self.active_session_id == session_id:
+            if self.session_order:
+                self.active_session_id = self.session_order[0]
+            else:
+                self.active_session_id = None
+
+        return self.active_session_id
 
     def focused(self) -> Optional[Session]:
         """Get the currently focused session."""
@@ -779,6 +829,7 @@ class SessionManager:
         A session is considered stale if:
         - It is NOT the currently focused session
         - It does NOT have active choices (pending present_choices)
+        - It does NOT have pending inbox items
         - Its last_activity is older than timeout_seconds ago
 
         Returns a list of removed session IDs.
@@ -797,13 +848,17 @@ class SessionManager:
                 # Never remove sessions with active choices
                 if session.active:
                     continue
+                # Never remove sessions with pending inbox items
+                if session.inbox:
+                    continue
                 # Check if stale
                 activity = getattr(session, 'last_activity', now)
                 if now - activity > timeout_seconds:
                     to_remove.append(sid)
 
-        # Remove outside the lock (remove() acquires its own lock)
-        for sid in to_remove:
-            self.remove(sid)
+            # Remove inside the lock to avoid TOCTOU races where a session
+            # becomes active between the check and the removal.
+            for sid in to_remove:
+                self._remove_locked(sid)
 
         return to_remove

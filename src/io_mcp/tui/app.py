@@ -2043,7 +2043,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
             session.intro_speaking = False
             entry = SpeechEntry(text=full_intro)
             session.unplayed_speech.append(entry)
-            session.speech_log.append(SpeechEntry(text=f"[choices] {preamble}"))
+            session.append_speech(SpeechEntry(text=f"[choices] {preamble}"))
 
             # Alert: chime + speak session name so user knows which tab needs attention
             # Use distinct "inbox" chime if user is already viewing choices from
@@ -2954,7 +2954,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         # Log the speech
         entry = SpeechEntry(text=text, priority=priority)
-        session.speech_log.append(entry)
+        session.append_speech(entry)
 
         # Update speech log UI if this is the focused session
         if self._is_focused(session.session_id):
@@ -3066,7 +3066,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         # Log the speech
         entry = SpeechEntry(text=text, priority=priority)
-        session.speech_log.append(entry)
+        session.append_speech(entry)
 
         # Emit event for remote frontends
         try:
@@ -5662,10 +5662,8 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         # Record in history
         try:
-            history = getattr(session, 'history', None)
-            if history is not None:
-                history.append(HistoryEntry(
-                    label=label, summary=summary, preamble=session.preamble))
+            session.append_history(HistoryEntry(
+                label=label, summary=summary, preamble=session.preamble))
         except Exception:
             pass
 

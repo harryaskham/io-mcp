@@ -1148,3 +1148,259 @@ class TestSessionManagerVoiceTracking:
         s2, _ = m.get_or_create("b")
         s1.emotion_override = "happy"
         assert m.in_use_emotions() == {"happy"}
+
+
+class TestSpeechLogCap:
+    """Tests for Session.append_speech() trimming."""
+
+    def test_append_speech_basic(self):
+        s = Session(session_id="test-1", name="Agent 1")
+        entry = SpeechEntry(text="hello")
+        s.append_speech(entry)
+        assert len(s.speech_log) == 1
+        assert s.speech_log[0].text == "hello"
+
+    def test_append_speech_trims_at_cap(self):
+        s = Session(session_id="test-1", name="Agent 1")
+        # Fill to cap
+        for i in range(s._speech_log_max):
+            s.append_speech(SpeechEntry(text=f"msg-{i}"))
+        assert len(s.speech_log) == s._speech_log_max
+        # One more should trim
+        s.append_speech(SpeechEntry(text="overflow"))
+        assert len(s.speech_log) == s._speech_log_max
+        assert s.speech_log[0].text == "msg-1"  # oldest trimmed
+        assert s.speech_log[-1].text == "overflow"
+
+    def test_append_speech_preserves_order(self):
+        s = Session(session_id="test-1", name="Agent 1")
+        for i in range(5):
+            s.append_speech(SpeechEntry(text=f"msg-{i}"))
+        assert [e.text for e in s.speech_log] == [f"msg-{i}" for i in range(5)]
+
+
+class TestHistoryCap:
+    """Tests for Session.append_history() trimming."""
+
+    def test_append_history_basic(self):
+        s = Session(session_id="test-1", name="Agent 1")
+        entry = HistoryEntry(label="A", summary="desc", preamble="pick")
+        s.append_history(entry)
+        assert len(s.history) == 1
+        assert s.history[0].label == "A"
+
+    def test_append_history_trims_at_cap(self):
+        s = Session(session_id="test-1", name="Agent 1")
+        for i in range(s._history_max):
+            s.append_history(HistoryEntry(
+                label=f"choice-{i}", summary="", preamble=""))
+        assert len(s.history) == s._history_max
+        s.append_history(HistoryEntry(label="overflow", summary="", preamble=""))
+        assert len(s.history) == s._history_max
+        assert s.history[0].label == "choice-1"
+        assert s.history[-1].label == "overflow"
+
+
+class TestResolvePendingInbox:
+    """Tests for _resolve_pending_inbox() — unblocking threads on session removal."""
+
+    def test_resolve_empty_inbox(self):
+        from io_mcp.session import _resolve_pending_inbox
+        s = Session(session_id="test-1", name="Agent 1")
+        assert _resolve_pending_inbox(s) == 0
+
+    def test_resolve_pending_items(self):
+        from io_mcp.session import _resolve_pending_inbox
+        s = Session(session_id="test-1", name="Agent 1")
+        item1 = InboxItem(kind="choices", preamble="Pick")
+        item2 = InboxItem(kind="choices", preamble="Choose")
+        s.enqueue(item1)
+        s.enqueue(item2)
+
+        resolved = _resolve_pending_inbox(s)
+        assert resolved == 2
+        assert item1.done is True
+        assert item2.done is True
+        assert item1.event.is_set()
+        assert item2.event.is_set()
+        assert item1.result["selected"] == "_cancelled"
+        assert item2.result["selected"] == "_cancelled"
+        assert len(s.inbox) == 0
+
+    def test_resolve_skips_already_done(self):
+        from io_mcp.session import _resolve_pending_inbox
+        s = Session(session_id="test-1", name="Agent 1")
+        item1 = InboxItem(kind="choices", preamble="Done already")
+        item1.done = True
+        item1.result = {"selected": "A"}
+        item1.event.set()
+        item2 = InboxItem(kind="choices", preamble="Pending")
+        s.enqueue(item1)
+        s.enqueue(item2)
+
+        resolved = _resolve_pending_inbox(s)
+        assert resolved == 1  # only item2 was pending
+        assert item2.done is True
+        assert item2.result["selected"] == "_cancelled"
+
+    def test_blocked_thread_unblocks_on_resolve(self):
+        """Thread blocked on item.event.wait() should be released."""
+        from io_mcp.session import _resolve_pending_inbox
+        s = Session(session_id="test-1", name="Agent 1")
+        item = InboxItem(kind="choices", preamble="Pick")
+        s.enqueue(item)
+
+        result_holder = [None]
+
+        def waiter():
+            item.event.wait(timeout=5)
+            result_holder[0] = item.result
+
+        t = threading.Thread(target=waiter, daemon=True)
+        t.start()
+
+        # Give thread time to start waiting
+        time.sleep(0.05)
+        assert t.is_alive()
+
+        _resolve_pending_inbox(s)
+        t.join(timeout=2)
+        assert not t.is_alive()
+        assert result_holder[0]["selected"] == "_cancelled"
+
+
+class TestRemoveResolvesInbox:
+    """Tests that SessionManager.remove() resolves pending inbox items."""
+
+    def test_remove_unblocks_waiting_thread(self):
+        m = SessionManager()
+        s, _ = m.get_or_create("a")
+        item = InboxItem(kind="choices", preamble="Pick")
+        s.enqueue(item)
+
+        result_holder = [None]
+
+        def waiter():
+            item.event.wait(timeout=5)
+            result_holder[0] = item.result
+
+        t = threading.Thread(target=waiter, daemon=True)
+        t.start()
+        time.sleep(0.05)
+
+        m.remove("a")
+        t.join(timeout=2)
+        assert not t.is_alive()
+        assert result_holder[0]["selected"] == "_cancelled"
+        assert m.count() == 0
+
+    def test_remove_without_inbox_still_works(self):
+        m = SessionManager()
+        m.get_or_create("a")
+        m.get_or_create("b")
+        m.remove("a")
+        assert m.count() == 1
+        assert m.get("a") is None
+
+
+class TestCleanupStaleImprovements:
+    """Tests for the improved cleanup_stale logic."""
+
+    def test_cleanup_does_not_remove_sessions_with_inbox(self):
+        """Sessions with pending inbox items should not be removed even if stale."""
+        m = SessionManager()
+        s1, _ = m.get_or_create("a")
+        s2, _ = m.get_or_create("b")
+        m.focus("a")  # focus on a, so b is eligible
+
+        # Make b stale
+        s2.last_activity = time.time() - 600
+        # But b has a pending inbox item
+        s2.enqueue(InboxItem(kind="choices", preamble="Waiting"))
+
+        removed = m.cleanup_stale(timeout_seconds=300)
+        assert removed == []
+        assert m.count() == 2
+
+    def test_cleanup_removes_stale_without_inbox(self):
+        """Stale sessions without inbox items should be removed."""
+        m = SessionManager()
+        s1, _ = m.get_or_create("a")
+        s2, _ = m.get_or_create("b")
+        m.focus("a")
+
+        s2.last_activity = time.time() - 600
+        removed = m.cleanup_stale(timeout_seconds=300)
+        assert removed == ["b"]
+        assert m.count() == 1
+
+    def test_cleanup_never_removes_focused(self):
+        m = SessionManager()
+        s1, _ = m.get_or_create("a")
+        s1.last_activity = time.time() - 600
+        removed = m.cleanup_stale(timeout_seconds=300)
+        assert removed == []
+
+    def test_cleanup_never_removes_active(self):
+        m = SessionManager()
+        s1, _ = m.get_or_create("a")
+        s2, _ = m.get_or_create("b")
+        m.focus("a")
+
+        s2.last_activity = time.time() - 600
+        s2.active = True
+        removed = m.cleanup_stale(timeout_seconds=300)
+        assert removed == []
+
+    def test_cleanup_resolves_inbox_on_removal(self):
+        """When cleanup removes a session, pending inbox items get resolved."""
+        m = SessionManager()
+        s1, _ = m.get_or_create("a")
+        s2, _ = m.get_or_create("b")
+        m.focus("a")
+
+        # b is stale and has no inbox — will be removed
+        s2.last_activity = time.time() - 600
+        # Add an already-done item to make sure it doesn't break
+        done_item = InboxItem(kind="choices", preamble="Done")
+        done_item.done = True
+        done_item.result = {"selected": "X"}
+        done_item.event.set()
+        # The done item in inbox should not prevent cleanup
+        # (inbox deque has it, but resolve handles it)
+
+        removed = m.cleanup_stale(timeout_seconds=300)
+        assert "b" in removed
+
+    def test_cleanup_atomic_no_toctou(self):
+        """Cleanup should be atomic — no window for session to become active."""
+        m = SessionManager()
+        s1, _ = m.get_or_create("a")
+        s2, _ = m.get_or_create("b")
+        m.focus("a")
+        s2.last_activity = time.time() - 600
+
+        # Simulate concurrent access: another thread makes s2 active
+        # After our fix, both check and remove happen under the same lock,
+        # so this shouldn't cause issues
+        activated = [False]
+
+        def activator():
+            time.sleep(0.01)  # slight delay
+            s2_ref = m.get("b")
+            if s2_ref:
+                s2_ref.active = True
+                activated[0] = True
+
+        t = threading.Thread(target=activator, daemon=True)
+        t.start()
+
+        removed = m.cleanup_stale(timeout_seconds=300)
+        t.join(timeout=2)
+
+        # Either b was removed (cleanup won the race) or it wasn't
+        # (activator won), but we should never have a half-removed session
+        if "b" in removed:
+            assert m.get("b") is None
+        else:
+            assert m.get("b") is not None

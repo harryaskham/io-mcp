@@ -32,14 +32,31 @@ _log = get_logger("io-mcp.tui.chat", TUI_ERROR_LOG)
 # ─── Chat Bubble Item ────────────────────────────────────────────────
 
 class ChatBubbleItem(ListItem):
-    """A single item in the chat feed.
+    """A single styled item in the chat feed ListView.
+
+    Each bubble represents one chronological event in an agent session.
+    Rendering uses the app's active color scheme for accent colors, borders,
+    and dim text. A ``tts_text`` attribute is computed at init time for
+    scroll-readout TTS so the TTS engine can pre-generate audio.
 
     Kinds:
-        header   - Session header showing name, cwd, connection time
-        speech   - Agent spoke text (speak/speak_async)
-        choices  - Agent presented choices (may be resolved or pending)
-        user_msg - User queued a message
-        system   - System event (tool call, status update)
+        header   - Session header showing name, cwd, connection time.
+        speech   - Agent spoke text (speak/speak_async).
+        choices  - Agent presented choices (may be resolved or pending).
+        user_msg - User queued a message (pending or flushed).
+        system   - System event (tool call, ambient update, status).
+
+    Attributes:
+        bubble_kind: The event kind string (``"header"``, ``"speech"``, etc.).
+        bubble_text: Primary display text (truncated to 200 chars upstream).
+        bubble_timestamp: Unix timestamp of the event.
+        bubble_detail: Optional secondary info (e.g. cwd for headers).
+        bubble_resolved: Whether a choices item has been answered.
+        bubble_result: The selected choice label, if resolved.
+        bubble_choices: List of choice dicts (``{"label": ..., "summary": ...}``).
+        bubble_flushed: Whether a user_msg was delivered to the agent.
+        agent_name: Display name of the agent session.
+        tts_text: Pre-computed plain text for TTS readout (no markup).
     """
 
     def __init__(self, kind: str, text: str, timestamp: float,
@@ -79,6 +96,24 @@ class ChatBubbleItem(ListItem):
         return self.bubble_text
 
     def compose(self) -> ComposeResult:
+        """Render the bubble's Textual widgets based on its kind.
+
+        Yields styled Label widgets appropriate to the bubble kind:
+        - ``header``: Dim divider line with agent name, cwd, connection age.
+        - ``speech``: Agent name + timestamp header, then the speech text.
+        - ``choices``: Preamble text followed by numbered choice labels.
+          Resolved choices highlight the selected option; pending ones
+          show an "awaiting selection" indicator.
+        - ``user_msg``: Status icon (check/circle) + "you" label + text.
+        - ``system``: Single dim inline line with timestamp and event text.
+
+        The color scheme is read from ``self.app._color_scheme`` at render
+        time, falling back to ``DEFAULT_SCHEME`` if unavailable. A CSS class
+        ``-{kind}`` is added to the item for left-border color coding.
+
+        Yields:
+            Label widgets composing the visual bubble.
+        """
         # Get color scheme from the app if available, otherwise use default
         try:
             s = get_scheme(self.app._color_scheme)
@@ -187,10 +222,34 @@ class ChatBubbleItem(ListItem):
 class ChatViewMixin:
     """Mixin providing the chat bubble view for IoMcpApp.
 
-    The chat feed (#chat-feed) is a top-level sibling of #main-content.
-    When active, #main-content is hidden and #chat-feed is shown.
-    The normal #preamble + #choices widgets are reused for selection —
-    no duplicate choice widgets needed.
+    Adds a chronological, scrollable feed of all agent interactions
+    (speech, choices, user messages, system events) rendered as styled
+    chat bubbles in a Textual ``ListView``.
+
+    The chat feed (``#chat-feed``) is a top-level sibling of
+    ``#main-content``. When active, ``#main-content`` is hidden and
+    ``#chat-feed`` is shown. The normal ``#preamble`` + ``#choices``
+    widgets are reused for active choice selection — no duplicate
+    choice widgets are needed.
+
+    Supports two display modes:
+    - **Single-session**: shows one agent's history (default).
+    - **Unified**: merges all agents' histories chronologically
+      (auto-selected when multiple sessions exist).
+
+    Uses incremental appending when possible to avoid expensive full
+    rebuilds on every refresh. A 3-second auto-refresh timer polls
+    for data changes; callers can also trigger immediate refreshes
+    via ``_notify_chat_feed_update()``.
+
+    Class Attributes:
+        _chat_view_active: Whether the chat view is currently displayed.
+        _chat_unified: True for multi-agent unified feed mode.
+        _chat_content_hash: Fingerprint string to detect data changes.
+        _chat_auto_scroll: Whether to auto-scroll to bottom on updates.
+        _chat_last_item_count: Previous item count for incremental logic.
+        _chat_base_fingerprint: Fingerprint of stable items for delta detection.
+        _chat_force_full_rebuild: Flag to skip incremental append once.
     """
 
     _chat_view_active: bool = False
@@ -203,7 +262,30 @@ class ChatViewMixin:
 
     @_safe_action
     def action_chat_view(self: "IoMcpApp") -> None:
-        """Toggle the chat bubble view."""
+        """Toggle the chat bubble view on or off.
+
+        When toggling **on**:
+        - Hides ``#main-content``, ``#inbox-list``, ``#preamble``, and other
+          views; shows ``#chat-feed`` and ``#chat-input-bar``.
+        - Determines display mode: unified (all agents) if multiple sessions
+          exist, otherwise single-session for the focused agent.
+        - Builds the initial feed via ``_build_chat_feed()``.
+        - If the focused session has active choices, shows them below the feed.
+        - Starts a 3-second auto-refresh timer.
+
+        When toggling **off**:
+        - Hides ``#chat-feed`` and ``#chat-input-bar``; restores normal views.
+        - Stops the auto-refresh timer.
+        - Restores ``#main-content`` layout (height, inbox width).
+        - Re-shows active choices if any, otherwise restores default view.
+
+        Guards against activation when the session is in input mode,
+        voice recording, settings menu, or filter mode.
+
+        Side effects:
+            Stops any current TTS playback on activation.
+            Speaks a UI notification on toggle.
+        """
         chat_feed = self.query_one("#chat-feed")
 
         # Toggle off
@@ -296,10 +378,21 @@ class ChatViewMixin:
             3.0, lambda: self._refresh_chat_feed())
 
     def _chat_feed_is_at_bottom(self: "IoMcpApp") -> bool:
-        """Check if the chat feed is scrolled to the bottom (within a threshold).
+        """Check if the chat feed ListView is scrolled to the bottom.
 
-        Returns True if the user hasn't scrolled up, meaning auto-scroll
-        should happen when new content arrives.
+        Used by ``_build_chat_feed()`` to decide whether to auto-scroll
+        after adding new items. If the user has scrolled up to read
+        history, auto-scroll is suppressed to avoid yanking them away
+        from what they're reading.
+
+        Uses a threshold of 5 lines — the feed is considered "at bottom"
+        if the scroll position is within 5 lines of the maximum, or if
+        there's not enough content to scroll at all.
+
+        Returns:
+            True if the user is at or near the bottom (auto-scroll
+            should happen), False if they've scrolled up. Defaults to
+            True if the feed can't be queried (e.g. not mounted yet).
         """
         try:
             feed = self.query_one("#chat-feed", ListView)
@@ -316,13 +409,36 @@ class ChatViewMixin:
 
     def _build_chat_feed(self: "IoMcpApp", session: "Session",
                          sessions: list["Session"] | None = None) -> None:
-        """Build the chronological chat feed from session data.
+        """Build or incrementally update the chronological chat feed.
 
-        Optimized for the common case of appending new items:
-        - If only new items were added (no modifications to existing items),
-          appends just the delta instead of clearing and rebuilding.
-        - Falls back to full rebuild when items are modified (e.g., choice
-          resolved, pending message flushed, log trimmed).
+        Collects all chat-relevant data from the session(s) into
+        ``ChatBubbleItem`` widgets and populates the ``#chat-feed``
+        ``ListView``.
+
+        Uses an optimized incremental append strategy when possible:
+        items are only appended (not rebuilt) if the base fingerprint
+        is unchanged, item count didn't decrease, the 200-item cap
+        wasn't hit, and we're not in unified mode. Falls back to a
+        full clear-and-rebuild otherwise.
+
+        After populating, pre-generates TTS audio for recent items
+        (last 20 on full rebuild, delta items on incremental) so
+        scroll readout is instant from cache.
+
+        Args:
+            session: The primary/focused session to build the feed for.
+            sessions: If provided, builds a unified feed merging all
+                sessions chronologically. Pass ``None`` for single-session
+                mode.
+
+        Side effects:
+            - Clears and repopulates ``#chat-feed`` (full rebuild) or
+              appends new items (incremental).
+            - Updates ``_chat_last_item_count`` and
+              ``_chat_base_fingerprint`` tracking state.
+            - Scrolls to bottom if the user was already at the bottom.
+            - Triggers TTS pregeneration in a background worker.
+            - Clears ``_chat_force_full_rebuild`` flag after checking it.
         """
         try:
             feed = self.query_one("#chat-feed", ListView)
@@ -441,7 +557,31 @@ class ChatViewMixin:
 
     def _collect_chat_items(self: "IoMcpApp", session: "Session",
                             sessions: list["Session"] | None = None) -> list[ChatBubbleItem]:
-        """Merge session data into a chronological list of ChatBubbleItems."""
+        """Merge session data into a chronological list of ChatBubbleItems.
+
+        Iterates over one or more sessions and collects all displayable
+        events into ``ChatBubbleItem`` instances, then sorts them by
+        timestamp. The result is capped at the most recent 200 items.
+
+        Collected event sources per session (in order):
+        1. **Session header** — synthetic item at registration time.
+        2. **Speech log** — agent speak/speak_async calls (truncated to 200 chars).
+        3. **Resolved inbox items** — answered choice presentations.
+        4. **User messages** — both flushed (delivered) and pending (queued).
+           Flushed messages use their delivery timestamp; pending messages
+           use the current time.
+        5. **Activity log** — tool calls, ambient updates, status events.
+           Skips entries already represented as speech/selection/choices.
+
+        Args:
+            session: The primary session (used when ``sessions`` is None).
+            sessions: Optional list of sessions for unified mode. If None,
+                only ``session`` is processed.
+
+        Returns:
+            Chronologically sorted list of ``ChatBubbleItem`` instances,
+            capped at 200 items (most recent kept).
+        """
         all_sessions = sessions if sessions else [session]
         raw_items: list[tuple[float, str, ChatBubbleItem]] = []
 
@@ -562,7 +702,25 @@ class ChatViewMixin:
         return [item for _, _, item in raw_items]
 
     def _chat_content_fingerprint(self: "IoMcpApp", session: "Session") -> str:
-        """Compute a lightweight fingerprint of chat-relevant session data."""
+        """Compute a lightweight fingerprint of chat-relevant session data.
+
+        Builds a pipe-delimited string from the lengths of all data sources
+        (speech_log, inbox_done, inbox, pending_messages, flushed_messages,
+        activity_log) plus the timestamp of the last entry in each non-empty
+        source. Used by ``_refresh_chat_feed()`` to detect whether session
+        data has changed since the last rebuild.
+
+        This is intentionally cheap — no hashing or deep inspection. The
+        fingerprint changes when items are added, removed, or when the
+        last item's timestamp changes (e.g. a choice gets resolved).
+
+        Args:
+            session: The session to fingerprint.
+
+        Returns:
+            A pipe-delimited string encoding data source lengths and
+            last-entry timestamps (e.g. ``"5|3|1|0|2|8|s1709312400|d1709312300"``).
+        """
         flushed = getattr(session, 'flushed_messages', [])
         parts = [
             str(len(session.speech_log)),
@@ -614,7 +772,27 @@ class ChatViewMixin:
         return "|".join(parts)
 
     def _refresh_chat_feed(self: "IoMcpApp") -> None:
-        """Refresh the chat feed only if the session data has changed."""
+        """Refresh the chat feed if session data has changed.
+
+        Called every 3 seconds by the auto-refresh timer set up in
+        ``action_chat_view()``. Computes a content fingerprint for
+        the relevant session(s) and compares it to the cached hash.
+        If unchanged, the refresh is skipped to avoid unnecessary
+        DOM manipulation.
+
+        In unified mode, fingerprints are computed for all sessions
+        and joined. In single-session mode, only the focused session
+        is checked.
+
+        Side effects:
+            Calls ``_build_chat_feed()`` if data has changed, which
+            may clear/rebuild or incrementally append to the ListView.
+            Updates ``_chat_content_hash`` with the new fingerprint.
+
+        Thread safety:
+            Runs on the Textual event loop (main thread). Not thread-safe
+            — must not be called from background threads.
+        """
         if not self._chat_view_active:
             return
         session = self._focused()
@@ -643,9 +821,28 @@ class ChatViewMixin:
     def _notify_chat_feed_update(self: "IoMcpApp", session: "Session") -> None:
         """Force an immediate chat feed refresh when new content arrives.
 
-        Called from _activate_speech_item and notify_inbox_update to push
-        new bubbles into the feed without waiting for the 3-second timer.
-        Only refreshes if the chat view is active and the session is focused.
+        Called from ``_activate_speech_item()`` and ``notify_inbox_update()``
+        to push new bubbles into the feed without waiting for the 3-second
+        auto-refresh timer. Clears the cached content hash to ensure the
+        next ``_refresh_chat_feed()`` call detects a change.
+
+        In unified mode, any session's update triggers a refresh. In
+        single-session mode, only refreshes if the updated session
+        matches the currently focused session.
+
+        Args:
+            session: The session that has new content. Used to decide
+                whether a refresh is needed in single-session mode.
+
+        Side effects:
+            Resets ``_chat_content_hash`` to empty and calls
+            ``_refresh_chat_feed()``, which may rebuild or append to
+            the feed.
+
+        Thread safety:
+            Must be called from the Textual event loop (main thread).
+            Callers from background threads should use
+            ``self.call_from_thread()`` to marshal onto the main thread.
         """
         if not self._chat_view_active:
             return
