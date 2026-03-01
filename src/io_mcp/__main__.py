@@ -557,6 +557,11 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
                 t.join(timeout=float(timeout))
                 if result_box[0] is None:
                     # Timed out — resolve the active inbox item cleanly
+                    _file_log.info("_tool_present_choices: timeout fired", extra={"context": {
+                        "timeout": timeout,
+                        "session": session.name,
+                        "n_choices": len(all_choices),
+                    }})
                     _active = getattr(session, '_active_inbox_item', None)
                     if _active and not _active.done:
                         _active.result = {"selected": "_timeout", "summary": "timed out"}
@@ -574,6 +579,11 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
                         session)
                 result = result_box[0]
             else:
+                _file_log.info("_tool_present_choices: blocking present", extra={"context": {
+                    "session": session.name,
+                    "preamble": preamble[:80],
+                    "n_choices": len(all_choices),
+                }})
                 result = frontend.present_choices(session, preamble, all_choices)
 
             if result.get("selected") == "_cancelled":

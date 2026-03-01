@@ -18,12 +18,15 @@ from typing import TYPE_CHECKING
 from textual.app import ComposeResult
 from textual.widgets import Label, ListItem, ListView
 
+from ..logging import get_logger, TUI_ERROR_LOG
 from .themes import DEFAULT_SCHEME, get_scheme
 from .widgets import _safe_action
 
 if TYPE_CHECKING:
     from .app import IoMcpApp
     from ..session import Session
+
+_log = get_logger("io-mcp.tui.chat", TUI_ERROR_LOG)
 
 
 # ─── Chat Bubble Item ────────────────────────────────────────────────
@@ -175,6 +178,7 @@ class ChatViewMixin:
 
         # Toggle off
         if self._chat_view_active:
+            _log.info("action_chat_view: toggling OFF")
             chat_feed.display = False
             self._chat_view_active = False
             if hasattr(self, '_chat_refresh_timer') and self._chat_refresh_timer:
@@ -208,6 +212,8 @@ class ChatViewMixin:
             return
 
         self._tts.stop()
+
+        _log.info("action_chat_view: toggling ON")
 
         # Determine if unified mode (all agents) or single-session mode
         all_sessions = list(self.manager.all_sessions()) if hasattr(self, 'manager') else []
@@ -262,6 +268,11 @@ class ChatViewMixin:
 
         feed.clear()
         items = self._collect_chat_items(session, sessions=sessions)
+
+        _log.info("_build_chat_feed: building", extra={"context": {
+            "n_items": len(items),
+            "unified": sessions is not None,
+        }})
 
         for item in items:
             try:
@@ -409,12 +420,16 @@ class ChatViewMixin:
             all_sessions = list(self.manager.all_sessions()) if hasattr(self, 'manager') else [session]
             fingerprint = "||".join(self._chat_content_fingerprint(s) for s in all_sessions)
             if fingerprint == self._chat_content_hash:
+                _log.info("_refresh_chat_feed: skipping, no change (unified)")
                 return
+            _log.info("_refresh_chat_feed: rebuilding (unified)")
             self._chat_content_hash = fingerprint
             self._build_chat_feed(session, sessions=all_sessions)
         else:
             fingerprint = self._chat_content_fingerprint(session)
             if fingerprint == self._chat_content_hash:
+                _log.info("_refresh_chat_feed: skipping, no change")
                 return
+            _log.info("_refresh_chat_feed: rebuilding")
             self._chat_content_hash = fingerprint
             self._build_chat_feed(session)

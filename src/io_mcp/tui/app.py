@@ -402,6 +402,10 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
                        (unless user has collapsed it). If False, hide
                        the inbox list (for modal views).
         """
+        _log.info("_ensure_main_content_visible: entering", extra={"context": {
+            "show_inbox": show_inbox,
+            "chat_view_active": self._chat_view_active,
+        }})
         # Chat view: don't show #main-content here — only _show_choices
         # should show it when choices are active. This prevents the
         # waiting state from appearing below the chat feed.
@@ -2029,6 +2033,13 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         if session is None:
             return
 
+        _log.info("_show_choices: entering", extra={"context": {
+            "chat_view_active": self._chat_view_active,
+            "session_active": session.active,
+            "n_choices": len(session.choices) if session.choices else 0,
+            "session": session.name,
+        }})
+
         # Refresh chat feed if active (so new choices appear in the timeline)
         if self._chat_view_active:
             self._chat_content_hash = ""  # Force rebuild
@@ -2158,6 +2169,11 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         list_view.display = True
         list_view.index = 0
         list_view.focus()
+        _log.info("_populate_chat_choices_list: populated", extra={"context": {
+            "n_choices": len(choices),
+            "n_extras": di - len(choices),
+            "display": True,
+        }})
 
     def _show_waiting(self, label: str) -> None:
         """Show waiting state after selection, returning to unified inbox.
@@ -2168,6 +2184,10 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         If there are more pending items, the next one will auto-present
         via the inbox drain loop.
         """
+        _log.info("_show_waiting: entering", extra={"context": {
+            "label": label,
+            "chat_view_active": self._chat_view_active,
+        }})
         # Chat view: just refresh the feed and hide choices panel
         if self._chat_view_active:
             self._chat_content_hash = ""  # Force rebuild
@@ -2210,6 +2230,9 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
 
     def _show_idle(self) -> None:
         """Show idle state with inbox view."""
+        _log.info("_show_idle: entering", extra={"context": {
+            "chat_view_active": self._chat_view_active,
+        }})
         self.query_one("#preamble").display = False
         self.query_one("#dwell-bar").display = False
         self.query_one("#speech-log").display = False
@@ -2255,6 +2278,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         In chat view, this is a no-op — the chat feed provides context.
         """
         if self._chat_view_active:
+            _log.info("_show_waiting_with_shortcuts: chat view, returning early")
             return
         try:
             s = self._cs
@@ -2527,6 +2551,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         """
         # Chat view: inbox is hidden, skip all work
         if self._chat_view_active:
+            _log.info("_update_inbox_list: chat view, returning early")
             return
         # Don't rebuild inbox while user is typing — it can steal focus
         if self._message_mode or self._filter_mode:
