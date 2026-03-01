@@ -5241,7 +5241,18 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         Checks actual widget focus first to handle Tab key / click focus
         changes, then falls back to the logical _inbox_pane_focused state.
+
+        Settings mode always uses #choices regardless of chat view state,
+        since settings populate #choices and show #main-content.
         """
+        # Settings/menus always use #choices — they hide chat view temporarily
+        if (self._in_settings or self._setting_edit_mode
+                or getattr(self, '_help_mode', False)
+                or getattr(self, '_history_mode', False)
+                or getattr(self, '_tab_picker_mode', False)
+                or getattr(self, '_system_logs_mode', False)):
+            return self.query_one("#choices", ListView)
+
         # Chat view: prefer #chat-choices if visible (scrollable selection),
         # otherwise fall through to chat-feed for scrolling the timeline
         if self._chat_view_active:

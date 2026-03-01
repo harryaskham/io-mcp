@@ -48,7 +48,7 @@ class ChatBubbleItem(ListItem):
 
     Attributes:
         bubble_kind: The event kind string (``"header"``, ``"speech"``, etc.).
-        bubble_text: Primary display text (truncated to 200 chars upstream).
+        bubble_text: Primary display text (truncated to 500 chars upstream).
         bubble_timestamp: Unix timestamp of the event.
         bubble_detail: Optional secondary info (e.g. cwd for headers).
         bubble_resolved: Whether a choices item has been answered.
@@ -612,7 +612,7 @@ class ChatViewMixin:
                     "speech",
                     ChatBubbleItem(
                         kind="speech",
-                        text=entry.text[:200],
+                        text=entry.text[:500],
                         timestamp=entry.timestamp,
                         agent_name=name,
                     ),
@@ -629,7 +629,7 @@ class ChatViewMixin:
                         "choices",
                         ChatBubbleItem(
                             kind="choices",
-                            text=item.preamble[:200],
+                            text=item.preamble[:500],
                             timestamp=item.timestamp,
                             resolved=True,
                             result=result_label,
@@ -648,7 +648,7 @@ class ChatViewMixin:
                     "user_msg",
                     ChatBubbleItem(
                         kind="user_msg",
-                        text=fm.text[:200],
+                        text=fm.text[:500],
                         timestamp=fm.flushed_at,
                         flushed=True,
                         agent_name=name,
@@ -662,7 +662,7 @@ class ChatViewMixin:
                     "user_msg",
                     ChatBubbleItem(
                         kind="user_msg",
-                        text=msg[:200],
+                        text=msg[:500],
                         timestamp=now,
                         flushed=False,
                         agent_name=name,
