@@ -2010,7 +2010,7 @@ def main() -> None:
     parser.add_argument("--proxy-address", default=f"localhost:{DEFAULT_PROXY_PORT}",
                         help=f"MCP proxy address (default: localhost:{DEFAULT_PROXY_PORT})")
     parser.add_argument("--dwell", type=float, default=0.0, metavar="SECONDS")
-    parser.add_argument("--scroll-debounce", type=float, default=0.15, metavar="SECONDS")
+    parser.add_argument("--scroll-debounce", type=float, default=None, metavar="SECONDS")
     parser.add_argument("--append-option", action="append", default=[], metavar="LABEL")
     parser.add_argument("--append-silent-option", action="append", default=[], metavar="LABEL")
     parser.add_argument("--demo", action="store_true", help="Demo mode")
@@ -2021,7 +2021,7 @@ def main() -> None:
     parser.add_argument("--freeform-tts", choices=["api", "local"], default="local")
     parser.add_argument("--freeform-tts-speed", type=float, default=1.6, metavar="SPEED")
     parser.add_argument("--freeform-tts-delimiters", default=" .,;:!?")
-    parser.add_argument("--invert", action="store_true")
+    parser.add_argument("--invert", action="store_true", default=None)
     parser.add_argument("--config-file", default=None, metavar="PATH")
     parser.add_argument("--default-config", action="store_true",
                         help="Ignore user config, use built-in defaults (does not overwrite config file)")
@@ -2061,13 +2061,17 @@ def main() -> None:
     freeform_local = args.freeform_tts == "local"
     freeform_tts = TTSEngine(local=freeform_local, speed=args.freeform_tts_speed, config=config)
 
+    # Resolve scroll settings: CLI flag overrides config, config overrides default
+    scroll_debounce = args.scroll_debounce if args.scroll_debounce is not None else config.scroll_debounce
+    invert_scroll = args.invert if args.invert is not None else config.invert_scroll
+
     app = IoMcpApp(
         tts=tts,
         freeform_tts=freeform_tts,
         freeform_delimiters=args.freeform_tts_delimiters,
         dwell_time=args.dwell,
-        scroll_debounce=args.scroll_debounce,
-        invert_scroll=args.invert,
+        scroll_debounce=scroll_debounce,
+        invert_scroll=invert_scroll,
         demo=args.demo,
         config=config,
     )
@@ -2269,8 +2273,8 @@ def main() -> None:
                 freeform_tts=freeform_tts,
                 freeform_delimiters=args.freeform_tts_delimiters,
                 dwell_time=args.dwell,
-                scroll_debounce=args.scroll_debounce,
-                invert_scroll=args.invert,
+                scroll_debounce=scroll_debounce,
+                invert_scroll=invert_scroll,
                 demo=args.demo,
                 config=config,
             )

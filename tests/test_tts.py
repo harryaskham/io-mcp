@@ -399,6 +399,7 @@ class TestSpeak:
                 "hello", block=True,
                 voice_override="coral", emotion_override=None,
                 model_override=None, speed_override=None,
+                force=True,
             )
 
     def test_speak_async_runs_in_thread(self):
@@ -990,7 +991,7 @@ class TestPlayChime:
     """Tests for play_chime style dispatch."""
 
     KNOWN_STYLES = [
-        "choices", "select", "connect", "record_start", "record_stop",
+        "choices", "select", "undo", "connect", "record_start", "record_stop",
         "convo_on", "convo_off", "urgent", "error", "warning",
         "success", "disconnect", "heartbeat", "inbox",
     ]

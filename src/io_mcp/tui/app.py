@@ -212,6 +212,15 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         self._last_scroll_time: float = 0.0
         self._dwell_time = dwell_time
 
+        # Scroll acceleration — ring buffer of recent scroll timestamps
+        sa = config.scroll_acceleration if config else {}
+        self._scroll_accel_enabled: bool = bool(sa.get("enabled", True))
+        self._scroll_accel_fast_ms: float = float(sa.get("fastThresholdMs", 80))
+        self._scroll_accel_turbo_ms: float = float(sa.get("turboThresholdMs", 40))
+        self._scroll_accel_fast_skip: int = int(sa.get("fastSkip", 3))
+        self._scroll_accel_turbo_skip: int = int(sa.get("turboSkip", 5))
+        self._scroll_times: list[float] = []  # last N scroll timestamps
+
         # Session manager
         self.manager = SessionManager()
 
@@ -5034,6 +5043,40 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
                 pass
         return self.query_one("#choices", ListView)
 
+    def _scroll_skip_count(self) -> int:
+        """Compute how many items to skip based on scroll speed.
+
+        Records the current timestamp in a ring buffer of the last 5 scroll
+        events. If the average interval between the last 3+ events is below
+        the turbo threshold, return turboSkip. If below the fast threshold,
+        return fastSkip. Otherwise return 1 (normal scroll).
+        """
+        if not self._scroll_accel_enabled:
+            return 1
+
+        now = time.time()
+        self._scroll_times.append(now)
+        # Keep only the last 5 timestamps
+        if len(self._scroll_times) > 5:
+            self._scroll_times = self._scroll_times[-5:]
+
+        # Need at least 3 timestamps to compute meaningful intervals
+        if len(self._scroll_times) < 3:
+            return 1
+
+        # Compute average interval between consecutive timestamps (in ms)
+        intervals = []
+        for i in range(1, len(self._scroll_times)):
+            intervals.append((self._scroll_times[i] - self._scroll_times[i - 1]) * 1000.0)
+
+        avg_ms = sum(intervals) / len(intervals)
+
+        if avg_ms <= self._scroll_accel_turbo_ms:
+            return self._scroll_accel_turbo_skip
+        elif avg_ms <= self._scroll_accel_fast_ms:
+            return self._scroll_accel_fast_skip
+        return 1
+
     def action_cursor_down(self) -> None:
         session = self._focused()
         if session and (session.input_mode or session.voice_recording):
@@ -5043,22 +5086,37 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         if list_view.display:
             if not list_view.has_focus:
                 list_view.focus()
-            # Wrap around: if at the last enabled item, jump to first enabled item
             current = list_view.index
             children = list(list_view.children)
             if current is not None and len(children) > 0:
-                # Find the last enabled item index
-                last_enabled = None
-                for i in range(len(children) - 1, -1, -1):
-                    if not children[i].disabled:
-                        last_enabled = i
-                        break
-                if last_enabled is not None and current >= last_enabled:
+                # Build list of enabled indices
+                enabled = [i for i, c in enumerate(children) if not c.disabled]
+                if not enabled:
+                    return
+
+                skip = self._scroll_skip_count()
+
+                # Find current position in enabled list
+                try:
+                    pos = enabled.index(current)
+                except ValueError:
+                    # Current index isn't enabled; find nearest enabled after current
+                    pos = -1
+                    for idx, e in enumerate(enabled):
+                        if e >= current:
+                            pos = idx
+                            break
+                    if pos == -1:
+                        pos = len(enabled) - 1
+
+                # Advance by skip items within enabled list
+                new_pos = pos + skip
+                if new_pos >= len(enabled):
                     # Wrap to first enabled item
-                    for i in range(len(children)):
-                        if not children[i].disabled:
-                            list_view.index = i
-                            return
+                    list_view.index = enabled[0]
+                else:
+                    list_view.index = enabled[new_pos]
+                return
             list_view.action_cursor_down()
 
     def action_cursor_up(self) -> None:
@@ -5070,22 +5128,37 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         if list_view.display:
             if not list_view.has_focus:
                 list_view.focus()
-            # Wrap around: if at the first enabled item, jump to last enabled item
             current = list_view.index
             children = list(list_view.children)
             if current is not None and len(children) > 0:
-                # Find the first enabled item index
-                first_enabled = None
-                for i in range(len(children)):
-                    if not children[i].disabled:
-                        first_enabled = i
-                        break
-                if first_enabled is not None and current <= first_enabled:
+                # Build list of enabled indices
+                enabled = [i for i, c in enumerate(children) if not c.disabled]
+                if not enabled:
+                    return
+
+                skip = self._scroll_skip_count()
+
+                # Find current position in enabled list
+                try:
+                    pos = enabled.index(current)
+                except ValueError:
+                    # Current index isn't enabled; find nearest enabled before current
+                    pos = len(enabled)
+                    for idx in range(len(enabled) - 1, -1, -1):
+                        if enabled[idx] <= current:
+                            pos = idx
+                            break
+                    if pos >= len(enabled):
+                        pos = 0
+
+                # Move back by skip items within enabled list
+                new_pos = pos - skip
+                if new_pos < 0:
                     # Wrap to last enabled item
-                    for i in range(len(children) - 1, -1, -1):
-                        if not children[i].disabled:
-                            list_view.index = i
-                            return
+                    list_view.index = enabled[-1]
+                else:
+                    list_view.index = enabled[new_pos]
+                return
             list_view.action_cursor_up()
 
     def _scroll_allowed(self) -> bool:
@@ -5892,10 +5965,11 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         # Haptic feedback on selection (longer buzz)
         self._vibrate(100)
 
-        # Audio cue
+        self._tts.stop()
+
+        # Audio cue — instant chime before TTS speech starts generating
         self._tts.play_chime("select")
 
-        self._tts.stop()
         # Use fragment playback: "selected" + label are cached individually
         ui_speed = self._config.tts_speed_for("ui") if self._config else None
         self._tts.speak_fragments(["selected", label], speed_override=ui_speed)
@@ -6326,6 +6400,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         # Set the undo sentinel — the server loop will re-present
         self._vibrate(100)
         self._tts.stop()
+        self._tts.play_chime("undo")
         self._speak_ui("Undoing selection")
 
         # Remove the active inbox item from both inbox and inbox_done

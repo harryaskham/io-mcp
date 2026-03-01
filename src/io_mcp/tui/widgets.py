@@ -89,26 +89,30 @@ PRIMARY_EXTRAS = [
 ]
 
 # Secondary extras: hidden behind "More options ›" header
+# Ordered by usefulness for smart ring navigation (scroll-only input):
+# - Ring-friendly actions first (voice, replay, undo, dismiss)
+# - Agent management in the middle (compact, pane view, history)
+# - Keyboard-dependent actions last (type, filter, interrupt)
 SECONDARY_EXTRAS = [
-    {"label": "Queue message", "summary": "Type or speak a message to queue for the agent's next response"},
-    {"label": "Interrupt agent", "summary": "Send text directly to the agent's tmux pane via tmux-cli"},
-    {"label": "Multi select", "summary": "Toggle multiple choices then confirm -- do several things at once"},
+    {"label": "Queue message", "summary": "Speak or type a message to queue for the agent's next response"},
+    {"label": "Replay prompt", "summary": "Re-read the agent's question aloud"},
+    {"label": "Undo", "summary": "Undo the last selection and re-present choices"},
     {"label": "Dismiss", "summary": "Mark this choice as done without responding (clears dead/stale items)"},
-    {"label": "Branch to worktree", "summary": "Create a git worktree for isolated work on a new branch"},
+    {"label": "Multi select", "summary": "Toggle multiple choices then confirm -- do several things at once"},
     {"label": "Compact context", "summary": "Compact the agent's context window to free up space"},
     {"label": "Pane view", "summary": "Show live tmux pane output for the focused agent"},
     {"label": "History", "summary": "Review past selections for this session"},
+    {"label": "Chat view", "summary": "Toggle chat bubble view"},
+    {"label": "Quick settings", "summary": "Speed, voice, notifications, restart"},
     {"label": "Switch tab", "summary": "Scroll through agent tabs and select one"},
     {"label": "New agent", "summary": "Spawn a new Claude Code agent (local or remote)"},
-    {"label": "View logs", "summary": "TUI errors, proxy logs, speech history"},
     {"label": "Close tab", "summary": "Close the focused agent tab"},
-    {"label": "Quick settings", "summary": "Speed, voice, notifications, restart"},
-    {"label": "Help", "summary": "Show keyboard shortcut reference"},
+    {"label": "View logs", "summary": "TUI errors, proxy logs, speech history"},
+    {"label": "Branch to worktree", "summary": "Create a git worktree for isolated work on a new branch"},
     {"label": "Type reply", "summary": "Type a freeform text reply (keyboard input)"},
-    {"label": "Undo", "summary": "Undo the last selection and re-present choices"},
-    {"label": "Replay prompt", "summary": "Re-read the agent's question aloud"},
-    {"label": "Chat view", "summary": "Toggle chat bubble view"},
+    {"label": "Interrupt agent", "summary": "Send text directly to the agent's tmux pane via tmux-cli"},
     {"label": "Filter", "summary": "Type to filter the choice list"},
+    {"label": "Help", "summary": "Show keyboard shortcut reference"},
 ]
 
 # "More options" toggle item

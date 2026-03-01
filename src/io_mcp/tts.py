@@ -439,7 +439,8 @@ class TTSEngine:
     def _generate_to_file(self, text: str, voice_override: Optional[str] = None,
                           emotion_override: Optional[str] = None,
                           model_override: Optional[str] = None,
-                          speed_override: Optional[float] = None) -> Optional[str]:
+                          speed_override: Optional[float] = None,
+                          force: bool = False) -> Optional[str]:
         """Generate audio for text and save to a WAV file. Returns file path.
 
         Acquires both the speech lock (to wait for active speech to finish)
@@ -492,7 +493,7 @@ class TTSEngine:
                             self._record_api_gen_failure("tts binary not found")
                             return None
 
-                        if not self._api_gen_available():
+                        if not force and not self._api_gen_available():
                             return None
 
                         if self._config:
@@ -1069,7 +1070,8 @@ class TTSEngine:
                     voice_override: Optional[str] = None,
                     emotion_override: Optional[str] = None,
                     model_override: Optional[str] = None,
-                    speed_override: Optional[float] = None) -> None:
+                    speed_override: Optional[float] = None,
+                    force: bool = False) -> None:
         """Play a pregenerated audio clip. Falls back to live generation.
 
         If block=True, waits for playback to finish before returning.
@@ -1096,7 +1098,8 @@ class TTSEngine:
             # Slow path: generate on demand
             p = self._generate_to_file(text, voice_override, emotion_override,
                                        model_override=model_override,
-                                       speed_override=speed_override)
+                                       speed_override=speed_override,
+                                       force=force)
             if p:
                 _time_mod.sleep(PULSE_SETTLE_DELAY)  # Brief pause to let PulseAudio settle
                 if not self._start_playback(p, max_attempts=self._max_retries):
@@ -1255,6 +1258,9 @@ class TTSEngine:
 
         Acquires the speech lock to ensure sequential playback — no
         self-interruption. Previous speech finishes before this starts.
+
+        Always bypasses the circuit breaker (force=True) because agent
+        speech is fundamental and must always attempt the API.
         """
         with self._speech_lock:
             if self._local and self._local_backend == "termux" and self._termux_exec:
@@ -1269,18 +1275,21 @@ class TTSEngine:
                 self.play_cached(text, block=True, voice_override=voice_override,
                                 emotion_override=emotion_override,
                                 model_override=model_override,
-                                speed_override=speed_override)
+                                speed_override=speed_override,
+                                force=True)
             elif not self._local and self._tts_bin and self._config:
                 self.speak_streaming(text, voice_override=voice_override,
                                    emotion_override=emotion_override,
                                    model_override=model_override,
                                    speed_override=speed_override,
-                                   block=True)
+                                   block=True,
+                                   force=True)
             else:
                 self.play_cached(text, block=True, voice_override=voice_override,
                                 emotion_override=emotion_override,
                                 model_override=model_override,
-                                speed_override=speed_override)
+                                speed_override=speed_override,
+                                force=True)
 
     def speak_async(self, text: str, voice_override: Optional[str] = None,
                     emotion_override: Optional[str] = None,
@@ -1294,6 +1303,9 @@ class TTSEngine:
 
         Checks the speech generation counter after acquiring the lock.
         If stop() was called while this was queued, the speech is dropped.
+
+        Always bypasses the circuit breaker (force=True) because agent
+        speech is fundamental and must always attempt the API.
         """
         my_gen = self._speech_gen
         def _do():
@@ -1313,18 +1325,21 @@ class TTSEngine:
                         self.play_cached(text, block=True, voice_override=voice_override,
                                        emotion_override=emotion_override,
                                        model_override=model_override,
-                                       speed_override=speed_override)
+                                       speed_override=speed_override,
+                                       force=True)
                     elif not self._local and self._tts_bin and self._config:
                         self.speak_streaming(text, voice_override=voice_override,
                                            emotion_override=emotion_override,
                                            model_override=model_override,
                                            speed_override=speed_override,
-                                           block=True)
+                                           block=True,
+                                           force=True)
                     else:
                         self.play_cached(text, block=True, voice_override=voice_override,
                                        emotion_override=emotion_override,
                                        model_override=model_override,
-                                       speed_override=speed_override)
+                                       speed_override=speed_override,
+                                       force=True)
             except Exception as e:
                 _log.error("speak_async error", exc_info=True)
         threading.Thread(target=_do, daemon=True).start()
@@ -1462,7 +1477,8 @@ class TTSEngine:
                         emotion_override: Optional[str] = None,
                         model_override: Optional[str] = None,
                         speed_override: Optional[float] = None,
-                        block: bool = True) -> None:
+                        block: bool = True,
+                        force: bool = False) -> None:
         """Speak text by piping tts stdout directly to paplay (no file).
 
         This reduces time-to-first-audio because playback starts as soon
@@ -1485,6 +1501,7 @@ class TTSEngine:
             model_override: Optional model name for cross-provider rotation.
             speed_override: Optional speed multiplier override.
             block: If True, wait for playback to finish before returning.
+            force: If True, bypass circuit breaker (for agent speech).
         """
         max_retries = 2
         # Save current failure count so retries don't accumulate
@@ -1494,7 +1511,8 @@ class TTSEngine:
                 text, voice_override=voice_override,
                 emotion_override=emotion_override,
                 model_override=model_override,
-                speed_override=speed_override, block=block)
+                speed_override=speed_override, block=block,
+                force=force)
             if result != "retry":
                 return
             # Exponential backoff: 1s, 2s
@@ -1512,13 +1530,14 @@ class TTSEngine:
         self.play_cached(text, block=block, voice_override=voice_override,
                         emotion_override=emotion_override,
                         model_override=model_override,
-                        speed_override=speed_override)
-
+                        speed_override=speed_override,
+                        force=force)
     def _speak_streaming_once(self, text: str, voice_override: Optional[str] = None,
                               emotion_override: Optional[str] = None,
                               model_override: Optional[str] = None,
                               speed_override: Optional[float] = None,
-                              block: bool = True) -> Optional[str]:
+                              block: bool = True,
+                              force: bool = False) -> Optional[str]:
         """Single attempt at streaming TTS. Returns "retry" if retriable error.
 
         Returns None on success or non-retriable failure, "retry" on API error.
@@ -1551,7 +1570,8 @@ class TTSEngine:
             return
 
         # Skip streaming when API is known-broken — report error
-        if not self._api_gen_available():
+        # force=True bypasses this (agent speech must always attempt)
+        if not force and not self._api_gen_available():
             self._report_tts_error(f"TTS API unavailable: {text[:60]}")
             return
 
@@ -2061,7 +2081,8 @@ class TTSEngine:
 
         Styles:
             choices: Two ascending tones (new choices arrived)
-            select: Short low click (selection made)
+            select: Short high-pitched ping (selection confirmed)
+            undo: Descending two-tone (going back / undoing)
             connect: Three-note ascending (agent connected)
             record_start: Rising tone (recording started)
             record_stop: Falling tone (recording stopped)
@@ -2087,7 +2108,12 @@ class TTSEngine:
                 _time_mod.sleep(0.08)
                 self.play_tone(900, 80, 0.2)
             elif style == "select":
-                self.play_tone(400, 40, 0.2)
+                self.play_tone(1200, 50, 0.25)
+            elif style == "undo":
+                # Descending two-tone — "going back"
+                self.play_tone(900, 60, 0.2)
+                _time_mod.sleep(0.06)
+                self.play_tone(500, 80, 0.2)
             elif style == "connect":
                 self.play_tone(500, 50, 0.15)
                 _time_mod.sleep(0.06)

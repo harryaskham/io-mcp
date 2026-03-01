@@ -160,6 +160,17 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "maxReconnectAttempts": 3,          # max consecutive reconnect attempts before giving up
             "reconnectCooldownSecs": 30,       # min seconds between reconnect attempts
         },
+        "scroll": {
+            "debounce": 0.15,                  # minimum seconds between scroll events
+            "invert": False,                   # reverse scroll direction (for rings that spin the "wrong" way)
+        },
+        "scrollAcceleration": {
+            "enabled": True,                   # detect rapid scrolling and skip items
+            "fastThresholdMs": 80,             # avg interval below this → skip fastSkip items
+            "turboThresholdMs": 40,            # avg interval below this → skip turboSkip items
+            "fastSkip": 3,                     # items to skip in fast mode
+            "turboSkip": 5,                    # items to skip in turbo mode
+        },
         "haptic": {
             "enabled": False,                  # disabled by default; enable on Android/Termux
         },
@@ -449,7 +460,8 @@ class IoMcpConfig:
         # ── Unknown keys inside config section ────────────────────
         known_config_keys = {
             "colorScheme", "tts", "stt", "realtime", "session",
-            "ambient", "pulseAudio", "haptic", "chimes", "healthMonitor",
+            "ambient", "pulseAudio", "scroll", "scrollAcceleration",
+            "haptic", "chimes", "healthMonitor",
             "notifications", "agents", "keyBindings", "djent",
             "alwaysAllow", "ringReceiver",
         }
@@ -1167,6 +1179,25 @@ class IoMcpConfig:
         )
 
     @property
+    def scroll_acceleration(self) -> dict:
+        """Scroll acceleration settings.
+
+        Returns dict with keys: enabled, fastThresholdMs, turboThresholdMs,
+        fastSkip, turboSkip.
+        """
+        defaults = {
+            "enabled": True,
+            "fastThresholdMs": 80,
+            "turboThresholdMs": 40,
+            "fastSkip": 3,
+            "turboSkip": 5,
+        }
+        sa = self.expanded.get("config", {}).get("scrollAcceleration", {})
+        if isinstance(sa, dict):
+            defaults.update(sa)
+        return defaults
+
+    @property
     def chimes_enabled(self) -> bool:
         """Whether audio chimes/tones are enabled."""
         return bool(
@@ -1298,6 +1329,26 @@ class IoMcpConfig:
             .get("pregenerateWorkers", 3)
         )
         return max(1, min(8, int(val)))
+
+    # ─── Scroll settings ──────────────────────────────────────────
+
+    @property
+    def scroll_debounce(self) -> float:
+        """Minimum seconds between scroll events (default 0.15)."""
+        return float(
+            self.expanded.get("config", {})
+            .get("scroll", {})
+            .get("debounce", 0.15)
+        )
+
+    @property
+    def invert_scroll(self) -> bool:
+        """Reverse scroll direction for rings that spin the 'wrong' way."""
+        return bool(
+            self.expanded.get("config", {})
+            .get("scroll", {})
+            .get("invert", False)
+        )
 
     # ─── Config mutation ────────────────────────────────────────────
 
