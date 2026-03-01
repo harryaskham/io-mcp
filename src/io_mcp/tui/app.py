@@ -44,7 +44,7 @@ def _strip_rich_markup(text: str) -> str:
     return _RICH_TAG_RE.sub('', text).strip()
 
 from .themes import COLOR_SCHEMES, DEFAULT_SCHEME, get_scheme, build_css
-from .widgets import ChoiceItem, InboxListItem, PreambleItem, DwellBar, ManagedListView, TextInputModal, SubmitTextArea, VOICE_REQUESTED, EXTRA_OPTIONS, PRIMARY_EXTRAS, SECONDARY_EXTRAS, MORE_OPTIONS_ITEM, _safe_action
+from .widgets import ChoiceItem, InboxListItem, PreambleItem, DwellBar, ManagedListView, TextInputModal, SubmitTextArea, VoiceButton, VOICE_REQUESTED, EXTRA_OPTIONS, PRIMARY_EXTRAS, SECONDARY_EXTRAS, MORE_OPTIONS_ITEM, _safe_action
 from .views import ViewsMixin
 from .voice import VoiceMixin
 from .settings_menu import SettingsMixin
@@ -601,7 +601,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         # dock: bottom — text input + voice button for chat view
         with Horizontal(id="chat-input-bar"):
             yield SubmitTextArea(id="chat-input", placeholder="Type a message...")
-            yield Static("🎤", id="chat-voice-btn")
+            yield VoiceButton("🎤", id="chat-voice-btn")
         # Filter input (display: none by default, toggled by '/' key)
         yield Input(placeholder="Filter choices...", id="filter-input")
         # dock: bottom — persistent status line (must be last for bottom-most position)
@@ -1736,6 +1736,9 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
             self._safe_call(self._update_inbox_list)
             self._safe_call(self._update_tab_bar)
 
+            # Suppress the waiting-state TTS announcement — dismiss already spoke
+            session._waiting_announced = True
+
             # Auto-advance to next pending item or show waiting view
             self._safe_call(self._show_next_or_waiting)
         elif session.active or any(not it.done for it in session.inbox):
@@ -1751,6 +1754,10 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
             self._speak_ui("Dismissed stale item")
             self._safe_call(self._update_inbox_list)
             self._safe_call(self._update_tab_bar)
+
+            # Suppress the waiting-state TTS announcement — dismiss already spoke
+            session._waiting_announced = True
+
             self._safe_call(self._show_next_or_waiting)
         else:
             self._speak_ui("Nothing to dismiss")
@@ -2194,6 +2201,10 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         session = self._focused()
         if session is None:
             return
+
+        # Reset waiting-state announcement flag so it fires again next
+        # time the session enters the waiting state.
+        session._waiting_announced = False
 
         _log.info("_show_choices: entering", extra={"context": {
             "chat_view_active": self._chat_view_active,
@@ -2704,6 +2715,24 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
 
             list_view.display = True
             list_view.index = 0
+
+            # ── One-time TTS announcement on entering waiting state ──
+            # Speaks shortcut hints so screen-off users know what keys
+            # are available. Only fires once per waiting-state entry;
+            # reset when choices are next presented.
+            if not session._waiting_announced:
+                session._waiting_announced = True
+                kl = getattr(self, '_key_labels', {})
+                msg_key = kl.get("message", "m")
+                settings_key = kl.get("settings", "s")
+                dismiss_key = kl.get("dismiss", "d")
+                agent_name = session.name or "Agent"
+                self._speak_ui(
+                    f"{agent_name} is working. "
+                    f"Press {msg_key} to message, "
+                    f"{settings_key} for settings, "
+                    f"{dismiss_key} to dismiss."
+                )
         except Exception:
             # Guard against app not running or widget errors during shutdown
             pass
@@ -5382,6 +5411,27 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
                 self.action_voice_input()
         except Exception:
             _log.debug("on_click: error handling click", exc_info=True)
+
+    @on(VoiceButton.Pressed, "#chat-voice-btn")
+    def on_voice_button_pressed(self, event: VoiceButton.Pressed) -> None:
+        """Handle Enter on the voice button — start voice recording."""
+        try:
+            self.action_voice_input()
+        except Exception:
+            _log.debug("on_voice_button_pressed: error", exc_info=True)
+
+    def _on_voice_button_focus(self) -> None:
+        """Speak 'Voice input' when the chat voice button receives focus."""
+        try:
+            self._speak_ui("Voice input")
+        except Exception:
+            _log.debug("_on_voice_button_focus: error", exc_info=True)
+
+    def on_descendant_focus(self, event) -> None:
+        """Detect when the voice button receives focus and speak TTS."""
+        widget = event.widget if hasattr(event, 'widget') else None
+        if widget is not None and getattr(widget, "id", None) == "chat-voice-btn":
+            self._on_voice_button_focus()
 
     def on_key(self, event) -> None:
         """Handle Escape in voice/settings/filter mode."""

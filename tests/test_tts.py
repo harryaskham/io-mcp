@@ -1527,3 +1527,266 @@ class TestSpeakFragmentsScroll:
         initial_gen = engine._scroll_gen
         engine.speak_fragments_scroll(["uncached"])
         assert engine._scroll_gen > initial_gen
+
+
+# ─── Common UI phrases / settings constants ───────────────────────────
+
+
+class TestUITextConstants:
+    """Tests for the pregeneration text constants on TTSEngine."""
+
+    def test_common_ui_phrases_not_empty(self):
+        """_COMMON_UI_PHRASES should contain essential UI strings."""
+        phrases = TTSEngine._COMMON_UI_PHRASES
+        assert len(phrases) > 10, "Expected many common UI phrases"
+        # Check for essential phrases that are spoken frequently
+        assert "selected" in phrases
+        assert "Dismissed" in phrases
+        assert "Settings" in phrases
+        assert "Quick settings" in phrases
+        assert "Refreshed" in phrases
+        assert "Cancelled." in phrases
+        assert "More options" in phrases
+        assert "Collapsed" in phrases
+
+    def test_common_ui_phrases_no_duplicates(self):
+        """_COMMON_UI_PHRASES should not contain duplicates."""
+        phrases = TTSEngine._COMMON_UI_PHRASES
+        assert len(phrases) == len(set(phrases)), (
+            f"Duplicates found: {[p for p in phrases if phrases.count(p) > 1]}"
+        )
+
+    def test_settings_labels_not_empty(self):
+        """_SETTINGS_LABELS should contain all settings menu entries."""
+        labels = TTSEngine._SETTINGS_LABELS
+        assert len(labels) >= 8
+        assert "Speed" in labels
+        assert "Agent voice" in labels
+        assert "UI voice" in labels
+        assert "Style" in labels
+        assert "Close settings" in labels
+
+    def test_quick_settings_labels_not_empty(self):
+        """_QUICK_SETTINGS_LABELS should contain common quick settings."""
+        labels = TTSEngine._QUICK_SETTINGS_LABELS
+        assert len(labels) >= 5
+        assert "Fast toggle" in labels
+        assert "Voice toggle" in labels
+        assert "Back" in labels
+
+    def test_number_words_cover_1_through_9(self):
+        """_NUMBER_WORDS should map all single-digit positions."""
+        words = TTSEngine._NUMBER_WORDS
+        for i in range(1, 10):
+            assert i in words, f"Missing number word for {i}"
+        assert words[1] == "one"
+        assert words[9] == "nine"
+
+
+# ─── pregenerate_ui ──────────────────────────────────────────────────
+
+
+class TestPregenerateUi:
+    """Tests for the UI pregeneration queue."""
+
+    def test_skips_already_cached_ui_texts(self):
+        engine = _make_engine()
+        # Pre-populate cache with UI voice override
+        key = engine._cache_key("Settings", voice_override="noa")
+        engine._cache[key] = "/tmp/fake.wav"
+
+        with mock.patch.object(engine, "_generate_to_file_unlocked") as mock_gen:
+            engine.pregenerate_ui(["Settings"], voice_override="noa")
+            mock_gen.assert_not_called()
+
+    def test_generates_uncached_ui_texts(self):
+        engine = _make_engine()
+        generated = []
+
+        def fake_generate(text, **kwargs):
+            generated.append(text)
+            return f"/tmp/{text}.wav"
+
+        with mock.patch.object(engine, "_generate_to_file_unlocked", side_effect=fake_generate):
+            engine.pregenerate_ui(["alpha", "beta"])
+            assert set(generated) == {"alpha", "beta"}
+
+    def test_uses_separate_generation_counter(self):
+        """UI pregeneration has its own counter, independent of main pregeneration."""
+        engine = _make_engine()
+
+        # Record initial counters
+        initial_main = engine._pregen_gen
+        initial_ui = engine._pregen_ui_gen
+
+        with mock.patch.object(engine, "_generate_to_file_unlocked"):
+            engine.pregenerate_ui(["text1"])
+
+        assert engine._pregen_ui_gen > initial_ui
+        assert engine._pregen_gen == initial_main  # main counter unchanged
+
+    def test_voice_override_changes_cache_key(self):
+        """UI texts pregenerated with voice override should have different cache keys."""
+        config = FakeConfig(voice="sage")
+        engine = _make_engine(local=False, config=config)
+        # Force API mode (init may have fallen back to local)
+        engine._local = False
+
+        key_no_override = engine._cache_key("hello")
+        key_with_override = engine._cache_key("hello", voice_override="noa")
+        assert key_no_override != key_with_override
+
+    def test_speed_override_changes_cache_key(self):
+        """UI texts pregenerated with speed override should have different cache keys."""
+        config = FakeConfig(speed=1.3)
+        engine = _make_engine(local=False, config=config)
+        engine._local = False
+
+        key_default = engine._cache_key("hello")
+        key_faster = engine._cache_key("hello", speed_override=1.8)
+        assert key_default != key_faster
+
+    def test_empty_list_is_noop(self):
+        engine = _make_engine()
+        with mock.patch.object(engine, "_generate_to_file_unlocked") as mock_gen:
+            engine.pregenerate_ui([])
+            mock_gen.assert_not_called()
+
+    def test_passes_voice_and_speed_overrides_to_generator(self):
+        """pregenerate_ui should forward voice and speed overrides."""
+        engine = _make_engine()
+        calls = []
+
+        def fake_generate(text, **kwargs):
+            calls.append(kwargs)
+            return f"/tmp/{text}.wav"
+
+        with mock.patch.object(engine, "_generate_to_file_unlocked", side_effect=fake_generate):
+            engine.pregenerate_ui(["test"], voice_override="noa", speed_override=1.5)
+
+        assert len(calls) == 1
+        assert calls[0].get("voice_override") == "noa"
+        assert calls[0].get("speed_override") == 1.5
+
+    def test_ui_pregen_counter_name(self):
+        """UI pregeneration should use the '_pregen_ui_gen' counter name."""
+        engine = _make_engine()
+        calls = []
+
+        def fake_generate(text, **kwargs):
+            calls.append(kwargs)
+            return f"/tmp/{text}.wav"
+
+        with mock.patch.object(engine, "_generate_to_file_unlocked", side_effect=fake_generate):
+            engine.pregenerate_ui(["test"])
+
+        assert len(calls) == 1
+        assert calls[0].get("_pregen_counter") == "_pregen_ui_gen"
+
+
+# ─── Cache key consistency ──────────────────────────────────────────
+
+
+class TestCacheKeyConsistency:
+    """Tests ensuring that pregeneration and playback use matching cache keys.
+
+    A common source of cache misses is when pregeneration uses different
+    parameters (voice, speed, emotion) than the playback path. These tests
+    verify that the cache keys match.
+    """
+
+    def test_ui_voice_pregen_matches_playback_with_override(self):
+        """Pregenerate with voice_override should match is_cached with same override."""
+        config = FakeConfig(voice="sage")
+        engine = _make_engine(local=False, config=config)
+        engine._local = False  # Force API mode
+
+        # Simulate pregeneration with UI voice override
+        key = engine._cache_key("More options", voice_override="noa", speed_override=1.5)
+        wav_path = os.path.join(CACHE_DIR, f"{key}.wav")
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        _make_wav(wav_path)
+        engine._cache[key] = wav_path
+
+        # Check that playback path with same override finds the cache
+        assert engine.is_cached("More options", voice_override="noa", speed_override=1.5)
+
+        # Without override, it should NOT be cached (different key)
+        assert not engine.is_cached("More options")
+
+    def test_number_words_cached_at_ui_speed(self):
+        """Number words pregenerated at ui speed should be found at that speed."""
+        config = FakeConfig(speed=1.3)
+        engine = _make_engine(local=False, config=config)
+        engine._local = False  # Force API mode
+
+        ui_speed = 1.5
+        key = engine._cache_key("one", speed_override=ui_speed)
+        wav_path = os.path.join(CACHE_DIR, f"{key}.wav")
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        _make_wav(wav_path)
+        engine._cache[key] = wav_path
+
+        # Should be found at UI speed
+        assert engine.is_cached("one", speed_override=ui_speed)
+        # Should NOT be found at default speed
+        assert not engine.is_cached("one")
+
+    def test_selected_fragment_consistent_across_paths(self):
+        """The word 'selected' should use consistent cache keys in all paths.
+
+        Pregeneration path: pregenerate(["selected"], speed_override=ui_speed)
+        Playback path: speak_fragments(["selected", label], speed_override=ui_speed)
+        Both should produce the same cache key for "selected".
+        """
+        config = FakeConfig(speed=1.3)
+        engine = _make_engine(local=False, config=config)
+        engine._local = False  # Force API mode
+
+        ui_speed = 1.5
+
+        # Key from pregeneration (no voice override, with speed override)
+        pregen_key = engine._cache_key("selected", speed_override=ui_speed)
+
+        # Key from fragment playback (same parameters)
+        playback_key = engine._cache_key("selected", speed_override=ui_speed)
+
+        assert pregen_key == playback_key
+
+    def test_extras_label_pregen_ui_matches_scroll_with_ui_voice(self):
+        """Extra option labels pregenerated with UI voice should match scroll playback.
+
+        The app pregenerates extras with _pregenerate_ui_worker (UI voice + UI speed).
+        on_highlight_changed for extras now also passes the UI voice override.
+        These must produce the same cache key.
+        """
+        config = FakeConfig(voice="sage")
+        engine = _make_engine(local=False, config=config)
+        engine._local = False  # Force API mode
+
+        ui_voice = "noa"
+        ui_speed = 1.5
+
+        # Pregeneration path (from _pregenerate_ui_worker)
+        pregen_key = engine._cache_key("Record response", voice_override=ui_voice,
+                                        speed_override=ui_speed)
+
+        # Scroll readout path (from on_highlight_changed with UI voice)
+        scroll_key = engine._cache_key("Record response", voice_override=ui_voice,
+                                        speed_override=ui_speed)
+
+        assert pregen_key == scroll_key
+
+    def test_extras_without_ui_voice_match_no_override(self):
+        """When uiVoice is not set, extras pregeneration and scroll both use no override."""
+        config = FakeConfig(voice="sage")
+        engine = _make_engine(local=False, config=config)
+        engine._local = False  # Force API mode
+
+        ui_speed = 1.5
+
+        # Without UI voice override
+        pregen_key = engine._cache_key("Record response", speed_override=ui_speed)
+        scroll_key = engine._cache_key("Record response", speed_override=ui_speed)
+
+        assert pregen_key == scroll_key

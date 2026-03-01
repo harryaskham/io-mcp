@@ -12,6 +12,7 @@ from typing import Optional
 from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.events import MouseScrollDown, MouseScrollUp
+from textual.message import Message
 from textual.reactive import reactive
 from textual.screen import ModalScreen
 from textual.widgets import Label, ListItem, ListView, Static, TextArea
@@ -268,6 +269,37 @@ class DwellBar(Static):
         remaining = self.dwell_time * (1.0 - self.progress)
         bar = "━" * filled + "╌" * empty
         return f"  [{bar}] {remaining:.1f}s"
+
+
+# ─── Voice Button ────────────────────────────────────────────────────────
+
+class VoiceButton(Static):
+    """Focusable voice input button that posts a Pressed message on Enter.
+
+    Used in the chat view input bar (🎤). When focused (e.g. via Tab from
+    the text area), the app speaks "Voice input" via TTS. Pressing Enter
+    triggers voice recording.
+    """
+
+    can_focus = True
+
+    class Pressed(Message):
+        """Posted when the user presses Enter on the voice button."""
+
+        def __init__(self, voice_button: "VoiceButton") -> None:
+            super().__init__()
+            self.voice_button = voice_button
+
+        @property
+        def control(self) -> "VoiceButton":
+            return self.voice_button
+
+    def _on_key(self, event) -> None:
+        """Trigger Pressed on Enter."""
+        if event.key == "enter":
+            event.prevent_default()
+            event.stop()
+            self.post_message(self.Pressed(self))
 
 
 # ─── Submit-on-Enter TextArea ─────────────────────────────────────────────

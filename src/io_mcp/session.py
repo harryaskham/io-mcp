@@ -176,6 +176,9 @@ class Session:
     health_alert_spoken: bool = False        # True once we've spoken the warning alert
     health_last_check: float = 0.0          # timestamp of last health evaluation
 
+    # ── Waiting-state TTS announcement ─────────────────────────────
+    _waiting_announced: bool = False         # True once we've spoken the waiting-state shortcut hints
+
     # ── Agent registration metadata ─────────────────────────────
     registered: bool = False                 # has the agent called register_session?
     registered_at: float = 0.0               # timestamp when register_session was called
