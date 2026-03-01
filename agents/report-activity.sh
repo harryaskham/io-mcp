@@ -49,6 +49,9 @@ case "$TOOL" in
   Task)
     DETAIL=$(echo "$INPUT" | jq -r '.tool_input.description // .tool_input.prompt // ""' | head -c 60)
     ;;
+  NotebookEdit)
+    DETAIL=$(echo "$INPUT" | jq -r '.tool_input.notebook_path // ""' | sed "s|$HOME|~|" | tail -c 60)
+    ;;
   *)
     DETAIL=$(echo "$TOOL" | head -c 40)
     ;;

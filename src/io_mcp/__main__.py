@@ -518,11 +518,29 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
                     "can't see the screen — narrate what you're doing!]")
         return ""
 
+    def _touch_speech_timestamp(session):
+        """Update the speech timestamp file for the PreToolUse nudge hook.
+
+        The nudge-speak.sh hook checks this file to decide whether to remind
+        the agent to narrate. We touch it on speak/speak_async/speak_urgent
+        and present_choices (since preamble is spoken aloud).
+        """
+        try:
+            # Use tmux_pane (sanitized) as identifier, matching the hook script
+            pane = getattr(session, 'tmux_pane', '') or ''
+            agent_id = pane.replace('%', '') if pane else session.session_id
+            ts_file = f"/tmp/io-mcp-last-speech-{agent_id}"
+            with open(ts_file, 'w') as f:
+                f.write(str(int(_time.time())))
+        except Exception:
+            pass  # Best-effort — don't break tool calls
+
     # ─── Tool implementations ─────────────────────────────────
 
     def _tool_present_choices(args, session_id):
         session = _get_session(session_id)
         session.last_tool_name = "present_choices"
+        _touch_speech_timestamp(session)  # preamble is spoken aloud
         preamble = args.get("preamble", "")
         choices = args.get("choices", [])
         timeout = args.get("timeout", None)  # Optional timeout in seconds
@@ -660,6 +678,7 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
     def _tool_speak(args, session_id):
         session = _get_session(session_id)
         session.last_tool_name = "speak"
+        _touch_speech_timestamp(session)
         text = args.get("text", "")
         # Enqueue as inbox item — agent blocks until TTS finishes
         item = session.enqueue_speech(text, blocking=True, priority=0)
@@ -671,6 +690,7 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
     def _tool_speak_async(args, session_id):
         session = _get_session(session_id)
         session.last_tool_name = "speak_async"
+        _touch_speech_timestamp(session)
         text = args.get("text", "")
         # Enqueue as inbox item — agent returns immediately
         item = session.enqueue_speech(text, blocking=False, priority=0)
@@ -681,6 +701,7 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
     def _tool_speak_urgent(args, session_id):
         session = _get_session(session_id)
         session.last_tool_name = "speak_urgent"
+        _touch_speech_timestamp(session)
         text = args.get("text", "")
         # Enqueue at front of inbox with priority — agent blocks
         item = session.enqueue_speech(text, blocking=True, priority=1)
@@ -1450,47 +1471,45 @@ def _run_server_command(args) -> None:
 
 def _run_status_command() -> None:
     """Show status of proxy and backend processes."""
+    import time as _time
+    import socket
     import urllib.request
     import urllib.error
+    from .proxy import proxy_health
 
     print("io-mcp status")
-    print("─" * 40)
+    print("─" * 50)
 
-    # Check proxy
-    proxy_pid = None
-    proxy_alive = False
-    try:
-        with open(PROXY_PID_FILE, "r") as f:
-            proxy_pid = int(f.read().strip())
-        os.kill(proxy_pid, 0)
-        proxy_alive = True
-    except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError):
-        pass
+    # ── Check proxy (comprehensive: PID + TCP port) ───────
+    proxy = proxy_health(f"localhost:{DEFAULT_PROXY_PORT}")
+    proxy_alive = proxy["pid_alive"]
+    proxy_port_open = proxy["port_open"]
 
-    if proxy_alive:
-        print(f"  Proxy:   ✔ running (PID {proxy_pid}, port {DEFAULT_PROXY_PORT})")
+    if proxy["status"] == "healthy":
+        uptime_str = f", up {proxy['uptime']}" if proxy.get("uptime") else ""
+        print(f"  Proxy:    ✔ running (PID {proxy['pid']}, :{DEFAULT_PROXY_PORT}{uptime_str})")
+    elif proxy["status"] == "degraded":
+        print(f"  Proxy:    ⚠ {proxy['details']}")
     else:
-        print(f"  Proxy:   ✘ not running (port {DEFAULT_PROXY_PORT})")
+        print(f"  Proxy:    ✘ not running (port {DEFAULT_PROXY_PORT})")
 
-    # Check backend
+    # ── Check backend (PID + health endpoint) ──────────────
     backend_pid = None
     backend_alive = False
+    backend_uptime = ""
     try:
         with open(PID_FILE, "r") as f:
             backend_pid = int(f.read().strip())
         os.kill(backend_pid, 0)
         backend_alive = True
+        backend_uptime = _format_uptime(os.path.getmtime(PID_FILE))
     except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError):
         pass
 
-    if backend_alive:
-        print(f"  Backend: ✔ running (PID {backend_pid}, port {DEFAULT_BACKEND_PORT})")
-    else:
-        print(f"  Backend: ✘ not running (port {DEFAULT_BACKEND_PORT})")
-
-    # Check backend health endpoint
     backend_healthy = False
+    backend_sessions = 0
     if backend_alive:
+        print(f"  Backend:  ✔ running (PID {backend_pid}, :{DEFAULT_BACKEND_PORT}, up {backend_uptime})")
         try:
             url = f"http://localhost:{DEFAULT_BACKEND_PORT}/health"
             req = urllib.request.Request(url, method="GET")
@@ -1499,34 +1518,76 @@ def _run_status_command() -> None:
         except Exception:
             pass
         if backend_healthy:
-            print(f"  Backend: ✔ /health responding")
+            print(f"  Health:   ✔ /health responding")
         else:
-            print(f"  Backend: ✘ /health not responding")
+            print(f"  Health:   ✘ /health not responding")
+    else:
+        print(f"  Backend:  ✘ not running (port {DEFAULT_BACKEND_PORT})")
 
-    # Check Android API
+    # ── Check Frontend API + sessions ──────────────────────
     api_healthy = False
+    api_data = {}
     try:
         url = f"http://localhost:{DEFAULT_API_PORT}/api/health"
         req = urllib.request.Request(url, method="GET")
         with urllib.request.urlopen(req, timeout=2) as resp:
             api_healthy = resp.status == 200
+            try:
+                api_data = json.loads(resp.read().decode())
+            except Exception:
+                pass
     except Exception:
         pass
 
     if api_healthy:
-        print(f"  Android: ✔ API on port {DEFAULT_API_PORT}")
+        session_count = api_data.get("sessions", 0)
+        sse_subs = api_data.get("sse_subscribers", 0)
+        parts = [f"✔ API on :{DEFAULT_API_PORT}"]
+        parts.append(f"{session_count} session{'s' if session_count != 1 else ''}")
+        if sse_subs > 0:
+            parts.append(f"{sse_subs} SSE client{'s' if sse_subs != 1 else ''}")
+        print(f"  Frontend: {', '.join(parts)}")
     else:
-        print(f"  Android: ✘ API not responding (port {DEFAULT_API_PORT})")
+        print(f"  Frontend: ✘ API not responding (port {DEFAULT_API_PORT})")
 
-    print("─" * 40)
-    if proxy_alive and backend_alive and backend_healthy:
-        print("  All systems operational")
+    # ── Active sessions detail ─────────────────────────────
+    if api_healthy:
+        try:
+            url = f"http://localhost:{DEFAULT_API_PORT}/api/sessions"
+            req = urllib.request.Request(url, method="GET")
+            with urllib.request.urlopen(req, timeout=2) as resp:
+                data = json.loads(resp.read().decode())
+                sessions = data.get("sessions", [])
+                if sessions:
+                    print(f"\n  Active sessions:")
+                    for s in sessions:
+                        name = s.get("name", "unnamed")
+                        sid = s.get("id", "?")[:8]
+                        active = "●" if s.get("active") else "○"
+                        choices_count = len(s.get("choices", []))
+                        status = f"{choices_count} choices" if s.get("active") else "waiting"
+                        print(f"    {active} {name} ({sid}…) — {status}")
+        except Exception:
+            pass
+
+    # ── Summary ────────────────────────────────────────────
+    print("─" * 50)
+    if proxy_alive and proxy_port_open and backend_alive and backend_healthy:
+        print("  All systems operational ✔")
     elif proxy_alive and not backend_alive:
         print("  Proxy OK, backend down — run: io-mcp")
     elif not proxy_alive and not backend_alive:
         print("  Everything down — run: io-mcp --restart")
     else:
         print("  Partial — check logs at /tmp/io-mcp-*.log")
+
+
+def _format_uptime(start_time: float) -> str:
+    """Format seconds since start_time as a human-readable uptime string."""
+    from .proxy import _format_uptime as _fmt_uptime
+    import time as _time
+    elapsed = _time.time() - start_time
+    return _fmt_uptime(elapsed)
 
 
 def _restart_proxy(proxy_address: str = f"localhost:{DEFAULT_PROXY_PORT}",

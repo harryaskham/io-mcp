@@ -1017,3 +1017,183 @@ def check_health(address: str) -> bool:
     Uses PID file check (the proxy doesn't expose a /health endpoint).
     """
     return is_server_running()
+
+
+def _check_port_open(host: str, port: int, timeout: float = 2.0) -> bool:
+    """Check if a TCP port is accepting connections.
+
+    Args:
+        host: Host to connect to.
+        port: Port to check.
+        timeout: Connection timeout in seconds.
+
+    Returns:
+        True if the port is accepting connections, False otherwise.
+    """
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except (OSError, socket.timeout, TimeoutError):
+        return False
+
+
+def _parse_address(address: str) -> tuple[str, int]:
+    """Parse a host:port address string.
+
+    Args:
+        address: Address string like "localhost:8444" or "0.0.0.0:8444".
+
+    Returns:
+        Tuple of (host, port). Defaults to ("localhost", 8444) for invalid input.
+    """
+    try:
+        if ":" in address:
+            host, port_str = address.rsplit(":", 1)
+            port = int(port_str)
+            # Normalize 0.0.0.0 to localhost for health checks
+            if host in ("0.0.0.0", ""):
+                host = "localhost"
+            return host, port
+    except (ValueError, TypeError):
+        pass
+    return "localhost", 8444
+
+
+def _get_pid_uptime(pid: int) -> float | None:
+    """Get process uptime in seconds by reading /proc/<pid>/stat.
+
+    Returns None if the process doesn't exist or uptime can't be determined.
+    On native Linux, reads /proc for accurate start time. Falls back to PID
+    file mtime as an approximation when /proc is unavailable or unreliable
+    (e.g. on proot/Nix-on-Droid where /proc values may be virtualized).
+    """
+    try:
+        # Try /proc/<pid>/stat for accurate start time
+        with open(f"/proc/{pid}/stat", "r") as f:
+            stat = f.read()
+        # Field 22 (0-indexed: 21) is starttime in clock ticks
+        fields = stat.rsplit(")", 1)[-1].split()
+        # fields[0] is state (after the closing paren), starttime is index 19
+        # (because we split after ")", so we lost fields 0 and 1)
+        starttime_ticks = int(fields[19])
+        ticks_per_sec = os.sysconf("SC_CLK_TCK")
+
+        # Read system uptime
+        with open("/proc/uptime", "r") as f:
+            system_uptime = float(f.read().split()[0])
+
+        process_start_secs = starttime_ticks / ticks_per_sec
+        uptime = system_uptime - process_start_secs
+        # On proot, /proc values can be virtualized and produce negative
+        # uptimes. Fall through to PID file fallback in that case.
+        if uptime >= 0:
+            return uptime
+    except (FileNotFoundError, IndexError, ValueError, OSError, AttributeError):
+        pass
+
+    # Fallback: use PID file modification time
+    try:
+        mtime = os.path.getmtime(PID_FILE)
+        return time.time() - mtime
+    except (FileNotFoundError, OSError):
+        return None
+
+
+def _format_uptime(seconds: float) -> str:
+    """Format uptime seconds into a human-readable string.
+
+    Examples: "3s", "2m 15s", "1h 30m", "2d 5h"
+    """
+    if seconds < 0:
+        return "0s"
+    seconds = int(seconds)
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        m, s = divmod(seconds, 60)
+        return f"{m}m {s}s"
+    if seconds < 86400:
+        h, remainder = divmod(seconds, 3600)
+        m = remainder // 60
+        return f"{h}h {m}m"
+    d, remainder = divmod(seconds, 86400)
+    h = remainder // 3600
+    return f"{d}d {h}h"
+
+
+def proxy_health(address: str = "localhost:8444") -> dict:
+    """Comprehensive health check for the MCP proxy server.
+
+    Performs a multi-level health check:
+    1. PID file check (fast — is the process alive?)
+    2. TCP port check (verifies the server is actually accepting connections)
+
+    Args:
+        address: Proxy address as "host:port" (default: "localhost:8444").
+
+    Returns:
+        Dict with health information:
+        - status: "healthy", "unhealthy", or "degraded"
+        - pid: Process ID (if found)
+        - pid_alive: Whether the PID process exists
+        - port_open: Whether the proxy port is accepting connections
+        - uptime: Human-readable uptime string (if available)
+        - uptime_seconds: Uptime in seconds (if available)
+        - address: The address checked
+        - details: Human-readable summary
+    """
+    host, port = _parse_address(address)
+    result: dict = {
+        "address": f"{host}:{port}",
+        "pid": None,
+        "pid_alive": False,
+        "port_open": False,
+        "uptime": None,
+        "uptime_seconds": None,
+        "status": "unhealthy",
+        "details": "",
+    }
+
+    # Step 1: Check PID file
+    pid = _read_pid()
+    result["pid"] = pid
+
+    if pid is not None:
+        try:
+            os.kill(pid, 0)
+            result["pid_alive"] = True
+        except (ProcessLookupError, PermissionError):
+            pass
+
+    # Step 2: Check TCP port connectivity
+    result["port_open"] = _check_port_open(host, port)
+
+    # Step 3: Get uptime if process is alive
+    if result["pid_alive"] and pid is not None:
+        uptime_secs = _get_pid_uptime(pid)
+        if uptime_secs is not None and uptime_secs >= 0:
+            result["uptime_seconds"] = round(uptime_secs, 1)
+            result["uptime"] = _format_uptime(uptime_secs)
+
+    # Determine overall status
+    if result["pid_alive"] and result["port_open"]:
+        result["status"] = "healthy"
+        uptime_str = f", uptime {result['uptime']}" if result["uptime"] else ""
+        result["details"] = f"Proxy running (PID {pid}, port {port}{uptime_str})"
+    elif result["pid_alive"] and not result["port_open"]:
+        result["status"] = "degraded"
+        result["details"] = (
+            f"Process alive (PID {pid}) but port {port} not accepting connections. "
+            f"Server may be starting up or stuck."
+        )
+    elif not result["pid_alive"] and result["port_open"]:
+        result["status"] = "degraded"
+        result["details"] = (
+            f"Port {port} is open but PID file is stale or missing. "
+            f"Another process may be using the port."
+        )
+    else:
+        result["status"] = "unhealthy"
+        result["details"] = f"Proxy not running (port {port})"
+
+    return result
