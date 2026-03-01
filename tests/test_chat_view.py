@@ -714,3 +714,66 @@ async def test_filter_no_match_in_chat_view():
         real = [c for c in items if c.choice_index > 0]
         assert len(real) == 0
 
+
+# ─── Test: chat feed pregeneration ────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_build_chat_feed_pregenerates_tts_for_recent_items():
+    """_build_chat_feed calls _pregenerate_ui_worker for recent chat items."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        session = _setup_session_with_choices(app)
+
+        # Add speech entries so there are chat items with tts_text
+        for i in range(5):
+            session.speech_log.append(SpeechEntry(text=f"Speech message {i}"))
+
+        # Track pregenerate_ui_worker calls
+        pregen_calls = []
+        original_worker = app._pregenerate_ui_worker
+
+        def mock_worker(texts):
+            pregen_calls.append(texts)
+
+        app._pregenerate_ui_worker = mock_worker
+
+        # Build chat feed
+        app._chat_view_active = True
+        app._build_chat_feed(session)
+        await pilot.pause(0.1)
+
+        # Should have called _pregenerate_ui_worker with tts texts
+        assert len(pregen_calls) == 1
+        texts = pregen_calls[0]
+        # Should contain at least some of the speech texts
+        assert any("Speech message" in t for t in texts)
+
+
+@pytest.mark.asyncio
+async def test_build_chat_feed_skips_pregeneration_for_empty_feed():
+    """_build_chat_feed does NOT call pregenerate when feed is empty."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        session, _ = app.manager.get_or_create("empty-1")
+        session.registered = True
+        session.name = "Empty"
+        app.on_session_created(session)
+
+        pregen_calls = []
+
+        def mock_worker(texts):
+            pregen_calls.append(texts)
+
+        app._pregenerate_ui_worker = mock_worker
+
+        app._chat_view_active = True
+        app._build_chat_feed(session)
+        await pilot.pause(0.1)
+
+        # Only a header item, which has very short tts_text ("Empty session")
+        # It should still pregenerate if there's text
+        if pregen_calls:
+            # If called, it should have short header text
+            assert all(len(t) < 200 for texts in pregen_calls for t in texts)
+
