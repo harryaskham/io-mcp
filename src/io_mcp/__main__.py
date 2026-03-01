@@ -2065,11 +2065,14 @@ def main() -> None:
     scroll_debounce = args.scroll_debounce if args.scroll_debounce is not None else config.scroll_debounce
     invert_scroll = args.invert if args.invert is not None else config.invert_scroll
 
+    # Resolve dwell: CLI flag overrides config, config overrides default (0 = disabled)
+    dwell_time = args.dwell if args.dwell != 0.0 else config.dwell_duration
+
     app = IoMcpApp(
         tts=tts,
         freeform_tts=freeform_tts,
         freeform_delimiters=args.freeform_tts_delimiters,
-        dwell_time=args.dwell,
+        dwell_time=dwell_time,
         scroll_debounce=scroll_debounce,
         invert_scroll=invert_scroll,
         demo=args.demo,
@@ -2272,7 +2275,7 @@ def main() -> None:
                 tts=tts,
                 freeform_tts=freeform_tts,
                 freeform_delimiters=args.freeform_tts_delimiters,
-                dwell_time=args.dwell,
+                dwell_time=dwell_time,
                 scroll_debounce=scroll_debounce,
                 invert_scroll=invert_scroll,
                 demo=args.demo,

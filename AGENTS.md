@@ -209,6 +209,14 @@ config:
     prevTab: h
     refresh: r
     dismiss: d                # dismiss active choice without responding
+  scrollDebounce: 0.15        # seconds between scroll events (tune for ring hardware)
+  invertScroll: false         # reverse scroll direction
+  scrollAcceleration:         # skip items when spinning fast
+    enabled: true
+    fastThresholdMs: 80       # avg interval for fast mode (3-item skip)
+    turboThresholdMs: 40      # avg interval for turbo mode (5-item skip)
+    fastSkip: 3               # items to skip in fast mode
+    turboSkip: 5              # items to skip in turbo mode
 
 styles:                       # available TTS style/emotion names
   - whispering
@@ -399,6 +407,13 @@ register_session(
 - **`get_logs` MCP tool**: agents can call `get_logs(lines=50)` to retrieve recent TUI error logs, proxy logs, and speech history for debugging. Reads from `/tmp/io-mcp-tui-error.log` and `/tmp/io-mcp-proxy.log`
 - **`--default-config` flag**: run `io-mcp --default-config` to ignore user config files and use built-in defaults only. Does not overwrite the config file on disk. Useful for debugging config issues
 - **`--reset-config` flag**: run `io-mcp --reset-config` to delete `~/.config/io-mcp/config.yml` and regenerate it with all current defaults. Use this when your config has stale keys or missing new defaults. The old config is deleted and a fresh one is written with the latest defaults. You can also manually delete the config file and restart io-mcp to achieve the same effect
+- **Scroll wrap-around**: scrolling past the last item wraps to the first (and vice versa). Essential for smart ring input where you keep spinning in one direction. Disabled items (like PreambleItem) are skipped when wrapping
+- **Scroll boundary cues**: TTS says "Top" at the first choice and "Last" at the final choice, so the user knows their position without seeing the screen
+- **Scroll acceleration**: detects rapid scrolling and skips items — fast mode (3-item skip at <80ms intervals) and turbo mode (5-item skip at <40ms intervals). Fully configurable in `config.scrollAcceleration`
+- **Configurable scroll parameters**: `config.scrollDebounce` (default 0.15s) and `config.invertScroll` (default false) allow tuning for different ring hardware. CLI args override config values
+- **Selection confirmation chimes**: audio click on choice selection (1200Hz, 50ms) and descending tone on undo (800→400Hz, 100ms) provide instant feedback before TTS generates speech
+- **TTS circuit breaker resilience**: retries within a single speech request count as one failure (not three), preventing transient HTTP 500 errors from silencing all speech. Recovery probe tests a short phrase before reopening the circuit after cooldown
+- **Extras menu ring-ordering**: secondary extras are ordered by smart ring usefulness — ring-friendly actions (replay, undo, dismiss) first, keyboard-dependent actions (type reply, filter) last
 
 ### Fallback TTS (when MCP is down)
 

@@ -3381,6 +3381,46 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
             entry.played = True
             self._tts.speak(entry.text)
 
+    def _speak_tab_summary(self, session: Session) -> None:
+        """Speak a brief summary when switching to a session tab.
+
+        Builds a 1-2 sentence orientation summary including:
+        - Session name
+        - Status: "waiting for you" (active), "working" (recent activity), "idle"
+        - Number of pending choices if active
+        - Truncated preamble if active
+
+        Uses _speak_ui() for self-interrupting UI voice.
+        """
+        if session is None:
+            return
+
+        parts: list[str] = [session.name]
+
+        if session.active:
+            # Has pending choices
+            n = len(session.choices)
+            if n > 0:
+                parts.append(f"waiting for you, {n} option{'s' if n != 1 else ''}")
+            else:
+                parts.append("waiting for you")
+            # Add truncated preamble if available
+            if session.preamble:
+                preamble = session.preamble
+                if len(preamble) > 80:
+                    preamble = preamble[:77] + "..."
+                parts.append(preamble)
+        else:
+            # Not active — check recent activity
+            import time as _time
+            elapsed = _time.time() - session.last_activity
+            if elapsed > 120:
+                parts.append("idle")
+            else:
+                parts.append("working")
+
+        self._speak_ui(". ".join(parts))
+
     def _show_session_waiting(self, session: Session) -> None:
         """Show waiting state for a specific session."""
         # Chat view handles its own waiting state
@@ -4200,7 +4240,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         new_session = self.manager.next_tab()
         if new_session and new_session.session_id != (session.session_id if session else None):
             self._tts.stop()
-            self._tts.speak_async(new_session.name)
+            self._speak_tab_summary(new_session)
             self._switch_to_session(new_session)
 
     def action_prev_tab(self) -> None:
@@ -4237,7 +4277,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         new_session = self.manager.prev_tab()
         if new_session and new_session.session_id != (session.session_id if session else None):
             self._tts.stop()
-            self._tts.speak_async(new_session.name)
+            self._speak_tab_summary(new_session)
             self._switch_to_session(new_session)
 
     def action_next_choices_tab(self) -> None:
@@ -4248,7 +4288,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         new_session = self.manager.next_with_choices()
         if new_session:
             self._tts.stop()
-            self._tts.speak_async(new_session.name)
+            self._speak_tab_summary(new_session)
             self._switch_to_session(new_session)
         else:
             self._speak_ui("No other tabs with choices")
@@ -4780,7 +4820,10 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
                 from io_mcp.tts import TTSEngine
                 _num_words = TTSEngine._NUMBER_WORDS
                 fragments = []
-                if logical in _num_words:
+                n_total = len(session.choices)
+                if n_total > 2 and logical in _num_words:
+                    fragments.append(f"{_num_words[logical]} of {n_total}")
+                elif logical in _num_words:
                     fragments.append(_num_words[logical])
                 label = c.get('label', '')
                 if label:
@@ -4796,7 +4839,10 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
                     boundary = "Last. "
                     fragments.insert(0, "Last")
                 # Full text for dedup key and fallback
-                text = f"{boundary}{logical}. {label}. {s}" if s else f"{boundary}{logical}. {label}"
+                if n_total > 2:
+                    text = f"{boundary}{logical} of {n_total}. {label}. {s}" if s else f"{boundary}{logical} of {n_total}. {label}"
+                else:
+                    text = f"{boundary}{logical}. {label}. {s}" if s else f"{boundary}{logical}. {label}"
             else:
                 # Extra option or separator — use the widget's label directly
                 # Strip Rich markup tags (e.g. [#616e88]...[/#616e88]) for TTS

@@ -171,6 +171,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "fastSkip": 3,                     # items to skip in fast mode
             "turboSkip": 5,                    # items to skip in turbo mode
         },
+        "dwell": {
+            "enabled": False,                  # master toggle for dwell-to-select
+            "durationSeconds": 3.0,            # seconds to dwell before auto-selecting
+        },
         "haptic": {
             "enabled": False,                  # disabled by default; enable on Android/Termux
         },
@@ -461,7 +465,7 @@ class IoMcpConfig:
         known_config_keys = {
             "colorScheme", "tts", "stt", "realtime", "session",
             "ambient", "pulseAudio", "scroll", "scrollAcceleration",
-            "haptic", "chimes", "healthMonitor",
+            "dwell", "haptic", "chimes", "healthMonitor",
             "notifications", "agents", "keyBindings", "djent",
             "alwaysAllow", "ringReceiver",
         }
@@ -1329,6 +1333,24 @@ class IoMcpConfig:
             .get("pregenerateWorkers", 3)
         )
         return max(1, min(8, int(val)))
+
+    # ─── Dwell settings ──────────────────────────────────────────
+
+    @property
+    def dwell_duration(self) -> float:
+        """Dwell-to-select duration in seconds.
+
+        Returns 0.0 if dwell is disabled, otherwise the configured duration.
+        Handles missing/invalid config gracefully.
+        """
+        try:
+            dwell = self.expanded.get("config", {}).get("dwell", {})
+            if not dwell.get("enabled", False):
+                return 0.0
+            duration = float(dwell.get("durationSeconds", 3.0))
+            return max(0.0, duration)
+        except (TypeError, ValueError):
+            return 0.0
 
     # ─── Scroll settings ──────────────────────────────────────────
 
