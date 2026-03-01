@@ -13,9 +13,11 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 import logging
 import os
+import socket
 import time
 import urllib.request
 import urllib.error
@@ -30,6 +32,60 @@ _server_log = get_logger("io-mcp.proxy.server", SERVER_LOG, json_format=False)
 
 PID_FILE = "/tmp/io-mcp-server.pid"
 DEFAULT_BACKEND = "http://localhost:8446"
+
+# Tools that block waiting for user interaction — need very long read timeouts.
+_BLOCKING_TOOLS = frozenset({
+    "present_choices",
+    "present_multi_select",
+    "speak",           # blocks until speech finishes
+    "speak_urgent",    # blocks until speech finishes
+    "run_command",     # blocks waiting for user approval + command execution
+    "request_close",   # blocks waiting for user confirmation
+    "request_restart", # blocks waiting for user confirmation
+    "request_proxy_restart",
+})
+
+# Errno values that indicate retriable connection failures.
+_RETRIABLE_ERRNOS = frozenset({
+    errno.ECONNREFUSED,
+    errno.ECONNRESET,
+    errno.ECONNABORTED,
+    errno.ETIMEDOUT,
+    errno.EHOSTUNREACH,
+    errno.ENETUNREACH,
+})
+
+# Exception types that indicate retriable connection failures.
+_RETRIABLE_EXCEPTIONS = (
+    ConnectionRefusedError,
+    ConnectionResetError,
+    ConnectionAbortedError,
+    BrokenPipeError,
+    socket.timeout,
+    TimeoutError,
+)
+
+
+def _is_connection_error(exc: Exception) -> bool:
+    """Check if an exception indicates a retriable connection failure.
+
+    Returns True for connection-refused, connection-reset, and timeout errors
+    (i.e. backend is down or restarting).
+    Returns False for non-retriable errors like bad hostname, SSL errors, etc.
+    """
+    if isinstance(exc, _RETRIABLE_EXCEPTIONS):
+        return True
+    if isinstance(exc, urllib.error.URLError):
+        reason = getattr(exc, 'reason', None)
+        if isinstance(reason, _RETRIABLE_EXCEPTIONS):
+            return True
+        if isinstance(reason, OSError):
+            if getattr(reason, 'errno', None) in _RETRIABLE_ERRNOS:
+                return True
+    if isinstance(exc, OSError):
+        if getattr(exc, 'errno', None) in _RETRIABLE_ERRNOS:
+            return True
+    return False
 
 
 def _forward_to_backend(
@@ -46,6 +102,13 @@ def _forward_to_backend(
     Retries with exponential backoff if the backend is unavailable
     (e.g. during a restart). This is the key feature that lets us
     restart the backend without losing agent connections.
+
+    Blocking tools (present_choices, run_command, etc.) get a very long
+    read timeout since they wait for user interaction. Non-blocking tools
+    get a shorter timeout.
+
+    Only connection-related errors are retried. Non-retriable errors
+    (bad hostname, SSL errors, etc.) are returned immediately.
 
     Args:
         backend_url: Base URL of the backend (e.g. http://localhost:8446)
@@ -66,6 +129,13 @@ def _forward_to_backend(
         "session_id": session_id,
     }).encode()
 
+    # Blocking tools wait for user interaction — use a very long timeout.
+    # Non-blocking tools should complete quickly — use a shorter timeout.
+    if tool_name in _BLOCKING_TOOLS:
+        read_timeout = 3600  # 1 hour — user may take a long time
+    else:
+        read_timeout = 300   # 5 minutes — generous for non-interactive tools
+
     backoff = initial_backoff
     last_error = ""
 
@@ -77,25 +147,42 @@ def _forward_to_backend(
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
-            with urllib.request.urlopen(req, timeout=300) as resp:
+            with urllib.request.urlopen(req, timeout=read_timeout) as resp:
                 return resp.read().decode()
         except urllib.error.HTTPError as e:
-            # Backend returned an error — don't retry, return it
+            # Backend returned an HTTP error — don't retry, return it.
+            # The backend has its own error wrapping (_safe_tool), so an
+            # HTTP error here usually means a real problem in the dispatch layer.
             try:
                 body = e.read().decode()
                 return body + _crash_log_hint()
             except Exception:
                 return json.dumps({"error": f"Backend HTTP {e.code}"}) + _crash_log_hint()
         except (urllib.error.URLError, ConnectionRefusedError, OSError) as e:
+            # Only retry connection-related errors (backend down/restarting).
+            # Non-retriable errors (bad hostname, SSL, etc.) fail fast.
+            if not _is_connection_error(e):
+                log.error(f"Non-retriable error forwarding {tool_name}: {e}")
+                return json.dumps({
+                    "error": f"Proxy error forwarding {tool_name}: {str(e)[:200]}",
+                }) + _crash_log_hint()
+
             last_error = str(e)
             if attempt < max_retries - 1:
-                log.debug(f"Backend unavailable (attempt {attempt + 1}), retrying in {backoff:.1f}s: {e}")
+                log.debug(
+                    f"Backend unavailable (attempt {attempt + 1}/{max_retries}), "
+                    f"retrying in {backoff:.1f}s: {e}"
+                )
                 time.sleep(backoff)
                 backoff = min(backoff * 1.5, max_backoff)
             else:
                 log.error(f"Backend unavailable after {max_retries} attempts: {e}")
         except Exception as e:
-            return json.dumps({"error": f"Proxy error: {str(e)[:200]}"}) + _crash_log_hint()
+            # Catch-all for unexpected errors — log the type for debugging.
+            log.error(f"Unexpected error forwarding {tool_name}: {type(e).__name__}: {e}")
+            return json.dumps({
+                "error": f"Proxy error: {type(e).__name__}: {str(e)[:200]}",
+            }) + _crash_log_hint()
 
     return json.dumps({
         "error": f"Backend unavailable after {max_retries} retries: {last_error}",
@@ -112,6 +199,8 @@ def _cancel_backend_tool(
 
     This tells the backend to resolve any pending inbox items (e.g.
     present_choices) with a _cancelled result so the TUI cleans up.
+
+    Best effort — errors are logged but not propagated.
     """
     url = f"{backend_url}/cancel-mcp"
     payload = json.dumps({
@@ -128,8 +217,10 @@ def _cancel_backend_tool(
         )
         with urllib.request.urlopen(req, timeout=5) as resp:
             resp.read()
-    except Exception:
-        pass  # Best effort — don't propagate cancel errors
+    except Exception as e:
+        # Best effort — log but don't propagate cancel errors.
+        # The backend may be down (that's often WHY the cancel happened).
+        log.debug(f"Cancel request failed for {tool_name} (session {session_id}): {e}")
 
 
 def _crash_log_hint() -> str:
@@ -240,8 +331,17 @@ def create_proxy_server(
 
         If the MCP client cancels the tool call, sends a cancel request to
         the backend to clean up pending inbox items (e.g. present_choices).
+
+        Handles all exceptions gracefully — never lets an unhandled exception
+        crash the proxy server.
         """
-        sid = _get_session_id(ctx)
+        try:
+            sid = _get_session_id(ctx)
+        except Exception as e:
+            # ctx.session might be None or malformed — use a fallback
+            log.warning(f"Failed to extract session ID for {tool_name}: {e}")
+            sid = "unknown"
+
         loop = asyncio.get_event_loop()
         try:
             return await loop.run_in_executor(
@@ -255,6 +355,15 @@ def create_proxy_server(
             except Exception as e:
                 log.warning(f"Failed to cancel backend tool: {e}")
             raise
+        except Exception as e:
+            # Catch-all for executor failures (RuntimeError if loop is closing,
+            # or any unexpected error from _forward_to_backend that wasn't caught).
+            # This prevents unhandled exceptions from crashing the proxy.
+            log.error(f"Executor error forwarding {tool_name}: {type(e).__name__}: {e}")
+            return json.dumps({
+                "error": f"Proxy executor error: {type(e).__name__}: {str(e)[:200]}",
+                "tool": tool_name,
+            })
 
     # ─── Tool definitions (thin proxies) ──────────────────────────
 
@@ -723,7 +832,7 @@ def create_proxy_server(
         return await _fwd("check_inbox", {}, ctx)
 
     @server.tool()
-    async def report_status(status: str, ctx: Context = None) -> str:
+    async def report_status(status: str, ctx: Context) -> str:
         """Report a lightweight status update to the activity feed.
 
         Use this to push progress updates that appear in the TUI activity

@@ -584,6 +584,20 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
         color: {s['fg_dim']};
     }}
 
+    ChatBubbleItem > .chat-bubble-header {{
+        width: 1fr;
+        height: auto;
+        color: {s['fg_dim']};
+        text-style: dim;
+    }}
+
+    ChatBubbleItem.-header {{
+        border: none;
+        background: transparent;
+        padding: 0 2;
+        margin-top: 1;
+    }}
+
     /* ─── Highlighted (focused) bubble ───────────────────── */
 
     ChatBubbleItem.-highlight {{

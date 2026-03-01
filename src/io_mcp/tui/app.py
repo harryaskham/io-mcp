@@ -511,32 +511,47 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
     # ─── Widget composition ────────────────────────────────────────
 
     def compose(self) -> ComposeResult:
+        # ── Header (hidden via CSS, replaced by #tab-bar) ──
         yield Header(name="io-mcp", show_clock=False)
+
+        # ── Tab bar (dock: top — replaces Header) ──
         with Horizontal(id="tab-bar"):
             yield Static("", id="tab-bar-left")
             yield Static("", id="tab-bar-right")
+
+        # ── Legacy daemon status (display: none — merged into tab bar) ──
         yield Static("", id="daemon-status")
+
+        # ── Main content area (normal flow) ──
         status_text = "[dim]Ready — demo mode[/dim]" if self._demo else "[dim]Waiting for agent...[/dim]"
         yield Label(status_text, id="status")
         yield Label("", id="agent-activity")
         yield Vertical(id="speech-log")
-        # Inbox list — left sidebar for browsing pending/completed items
+
+        # ── Two-column inbox layout (choices view) ──
         with Horizontal(id="main-content"):
             yield ManagedListView(id="inbox-list")
             with Vertical(id="choices-panel"):
                 yield Label("", id="preamble")
                 yield ManagedListView(id="choices")
                 yield DwellBar(id="dwell-bar")
+
+        # ── Tmux pane view (display: none, toggled by 'v' key) ──
         yield RichLog(id="pane-view", markup=False, highlight=False, auto_scroll=True, max_lines=200)
-        # Chat feed — chronological view of all agent interactions
+
+        # ── Chat view widgets ──
         yield ManagedListView(id="chat-feed")
-        # Standalone choices list for chat view — scrollable, no inbox
+
+        # ── Bottom-docked widgets (last yielded = bottom-most) ──
+        # dock: bottom — choices overlay in chat view
         yield ManagedListView(id="chat-choices")
-        # Chat input bar — text input + voice button, always visible in chat view
+        # dock: bottom — text input + voice button for chat view
         with Horizontal(id="chat-input-bar"):
             yield SubmitTextArea(id="chat-input", placeholder="Type a message...")
             yield Static("🎤", id="chat-voice-btn")
+        # Filter input (display: none by default, toggled by '/' key)
         yield Input(placeholder="Filter choices...", id="filter-input")
+        # dock: bottom — persistent status line (must be last for bottom-most position)
         yield Static("", id="footer-status")
 
     def on_mount(self) -> None:

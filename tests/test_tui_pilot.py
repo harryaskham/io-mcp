@@ -40,6 +40,7 @@ class MockTTS:
     def play_chime(self, name): pass
     def pregenerate(self, texts): pass
     def pregenerate_ui(self, texts, **kwargs): pass
+    def cache_stats(self): return (0, 0)
     def clear_cache(self): pass
     def is_cached(self, text, **kwargs): return False
     def mute(self): self._muted = True
