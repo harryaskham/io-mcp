@@ -28,6 +28,8 @@ def _safe_action(fn):
     """Decorator that catches exceptions in TUI action methods.
 
     Logs the error and speaks it via TTS instead of crashing the app.
+    Uses ``_speak_ui`` when available (lighter, uses the UI voice),
+    falling back to ``_tts.speak_async``.
     """
 
     @functools.wraps(fn)
@@ -41,10 +43,15 @@ def _safe_action(fn):
                 exc_info=True,
                 extra={"context": log_context(tool_name=fn.__name__)},
             )
+            # Speak the error — prefer _speak_ui (lighter), fall back to _tts
             try:
-                self._tts.speak_async(f"Error in {fn.__name__}: {err}")
+                speak_ui = getattr(self, '_speak_ui', None)
+                if speak_ui:
+                    speak_ui(f"Error in {fn.__name__}")
+                elif hasattr(self, '_tts'):
+                    self._tts.speak_async(f"Error in {fn.__name__}: {err}")
             except Exception:
-                pass
+                pass  # Never let error reporting crash the TUI
     return wrapper
 
 

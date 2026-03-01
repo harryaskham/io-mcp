@@ -238,7 +238,11 @@ def create_mcp_server(
                     frontend.tts.speak_async(short_err)
                 except Exception:
                     pass
-                return json.dumps({"error": err_msg, "tool": fn.__name__})
+                return json.dumps({
+                    "error": err_msg,
+                    "tool": fn.__name__,
+                    "suggestion": "Retry the tool call, or call get_logs() to inspect recent errors.",
+                })
         return wrapper
 
     # ─── Tools ────────────────────────────────────────────────────────

@@ -1435,7 +1435,11 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
                 frontend.tts.speak_async(f"Tool error: {tool_name}. {str(e)[:80]}")
             except Exception:
                 _file_log.debug("Failed to play error chime/speech", exc_info=True)
-            error_data = {"error": f"{type(e).__name__}: {str(e)[:200]}", "tool": tool_name}
+            error_data = {
+                "error": f"{type(e).__name__}: {str(e)[:200]}",
+                "tool": tool_name,
+                "suggestion": "Retry the tool call, or call get_logs() to inspect recent errors.",
+            }
             # Include crash log content so agents can self-heal
             crash_log = ""
             from .logging import read_log_tail, TOOL_ERROR_LOG as _tel
@@ -1825,27 +1829,97 @@ def _run_cache_warmup(verbose: bool = False, dry_run: bool = False) -> None:
 
 def _run_cache_status(verbose: bool = False) -> None:
     """Show TTS cache statistics."""
+    from .tts import CACHE_DIR
+    import datetime
+
     config = IoMcpConfig.load()
     tts = TTSEngine(local=False, config=config)
 
     count, total_bytes = tts.cache_stats()
     size_str = _format_size(total_bytes)
 
-    print(f"io-mcp cache status")
-    print(f"─" * 40)
-    print(f"  Items: {count}")
-    print(f"  Size:  {size_str}")
+    # ── Scan disk cache directory ──
+    cache_exists = os.path.isdir(CACHE_DIR)
+    disk_files: list[tuple[str, int, float]] = []  # (path, size, mtime)
+    disk_total_bytes = 0
 
+    if cache_exists:
+        try:
+            for entry in os.scandir(CACHE_DIR):
+                if entry.is_file() and entry.name.endswith(".wav"):
+                    try:
+                        st = entry.stat()
+                        disk_files.append((entry.path, st.st_size, st.st_mtime))
+                        disk_total_bytes += st.st_size
+                    except OSError:
+                        disk_files.append((entry.path, 0, 0.0))
+        except OSError:
+            pass
+
+    disk_count = len(disk_files)
+
+    # ── Print report ──
+    print("io-mcp cache status")
+    print("─" * 40)
+    print(f"  Directory: {CACHE_DIR}")
+    print(f"  Exists:    {'yes' if cache_exists else 'no'}")
+    print(f"  Items:     {count}")
+    print(f"  Size:      {size_str}")
+
+    # Disk stats (may differ from in-memory if files exist from previous runs)
+    if cache_exists:
+        print()
+        print("  Disk:")
+        print(f"    Files:   {disk_count}")
+        print(f"    Size:    {_format_size(disk_total_bytes)}")
+        if disk_files:
+            avg_size = disk_total_bytes // disk_count
+            print(f"    Avg:     {_format_size(avg_size)}/file")
+            # Oldest and newest
+            oldest = min(disk_files, key=lambda e: e[2])
+            newest = max(disk_files, key=lambda e: e[2])
+            if oldest[2] > 0:
+                oldest_dt = datetime.datetime.fromtimestamp(oldest[2])
+                print(f"    Oldest:  {oldest_dt.strftime('%Y-%m-%d %H:%M:%S')}")
+            if newest[2] > 0:
+                newest_dt = datetime.datetime.fromtimestamp(newest[2])
+                print(f"    Newest:  {newest_dt.strftime('%Y-%m-%d %H:%M:%S')}")
+
+    # Current config context
+    print()
+    print("  Config:")
+    print(f"    Voice:   {config.tts_voice_preset}")
+    print(f"    Model:   {config.tts_model_name}")
+    print(f"    Speed:   {config.tts_speed}")
+    if config.tts_emotion:
+        print(f"    Emotion: {config.tts_emotion}")
+    if config.tts_ui_voice_preset and config.tts_ui_voice_preset != config.tts_voice_preset:
+        print(f"    UI voice: {config.tts_ui_voice_preset}")
+
+    # Verbose: show in-memory cache entries (hash → path)
     if verbose and tts._cache:
-        print(f"\n  Cached entries:")
-        # The cache maps hash → path; we can't recover the original text
-        # from the hash, but we can show the file paths and sizes
+        print()
+        print("  Cached entries:")
         for key, path in sorted(tts._cache.items()):
             try:
                 fsize = os.path.getsize(path)
                 print(f"    {key[:12]}…  {_format_size(fsize):>10}  {os.path.basename(path)}")
             except OSError:
                 print(f"    {key[:12]}…  (missing)")
+
+    # Verbose: show disk file details (sorted newest first)
+    if verbose and disk_files:
+        print()
+        print("  Disk files:")
+        disk_files.sort(key=lambda e: e[2], reverse=True)
+        for path, fsize, mtime in disk_files:
+            name = os.path.basename(path)
+            if mtime > 0:
+                dt = datetime.datetime.fromtimestamp(mtime)
+                time_str = dt.strftime("%m-%d %H:%M")
+            else:
+                time_str = "unknown"
+            print(f"    {name[:16]}…  {_format_size(fsize):>10}  {time_str}")
 
 
 def _format_size(nbytes: int) -> str:

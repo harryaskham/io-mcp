@@ -3139,6 +3139,9 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         handled by _present_choices_inner (which runs on the tool thread).
         This method only processes speech items — it exits when it hits a
         choice item or the queue is empty.
+
+        Error in processing one item does not prevent processing the next —
+        failed items are marked done with an error result so the loop continues.
         """
         while True:
             front = session.peek_inbox()
@@ -3156,7 +3159,24 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
 
             # ── Process speech item ──
             front.processing = True
-            self._activate_speech_item(session, front)
+            try:
+                self._activate_speech_item(session, front)
+            except Exception:
+                _log.error(
+                    "Error processing speech inbox item: %s",
+                    (front.text or front.preamble)[:80],
+                    exc_info=True,
+                )
+                # Force-resolve the failed item so we can move to the next one
+                if not front.done:
+                    front.result = {"selected": "_speech_done", "summary": "error"}
+                    front.done = True
+                    front.event.set()
+                    try:
+                        session._append_done(session.inbox.popleft())
+                    except IndexError:
+                        pass
+                    session.drain_kick.set()
 
     def _activate_speech_item(self, session: Session, item: InboxItem) -> None:
         """Play TTS for a speech inbox item and auto-resolve it.

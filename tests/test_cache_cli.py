@@ -604,3 +604,417 @@ class TestRunCacheCommand:
              mock.patch("io_mcp.__main__._run_cache_status") as mock_status:
             _run_cache_command()
             mock_status.assert_called_once_with(verbose=True)
+
+
+# ─── Tests: Enhanced _run_cache_status ────────────────────────────────
+
+
+class TestRunCacheStatusEnhanced:
+    """Test enhanced _run_cache_status features: directory info, disk stats,
+    config section, file age, verbose disk listing."""
+
+    def _mock_context(self, config=None, tts_cache=None, cache_stats=(0, 0)):
+        """Set up mock patches for IoMcpConfig and TTSEngine."""
+        cfg = config or FakeConfig()
+        mock_tts = mock.MagicMock()
+        mock_tts.cache_stats.return_value = cache_stats
+        mock_tts._cache = tts_cache or {}
+        return cfg, mock_tts
+
+    def test_shows_directory_path(self, capsys):
+        """Output includes the cache directory path."""
+        cfg, mock_tts = self._mock_context()
+        with mock.patch("io_mcp.__main__.IoMcpConfig") as MockConfig, \
+             mock.patch("io_mcp.__main__.TTSEngine") as MockTTS, \
+             mock.patch("io_mcp.__main__.os.path.isdir", return_value=False), \
+             mock.patch("io_mcp.__main__.os.scandir", return_value=iter([])):
+            MockConfig.load.return_value = cfg
+            MockTTS.return_value = mock_tts
+
+            _run_cache_status(verbose=False)
+
+            captured = capsys.readouterr()
+            assert "Directory:" in captured.out
+
+    def test_shows_exists_yes(self, capsys):
+        """Shows 'Exists: yes' when cache directory exists."""
+        cfg, mock_tts = self._mock_context()
+        with mock.patch("io_mcp.__main__.IoMcpConfig") as MockConfig, \
+             mock.patch("io_mcp.__main__.TTSEngine") as MockTTS, \
+             mock.patch("io_mcp.__main__.os.path.isdir", return_value=True), \
+             mock.patch("io_mcp.__main__.os.scandir", return_value=iter([])):
+            MockConfig.load.return_value = cfg
+            MockTTS.return_value = mock_tts
+
+            _run_cache_status(verbose=False)
+
+            captured = capsys.readouterr()
+            assert "yes" in captured.out
+
+    def test_shows_exists_no(self, capsys):
+        """Shows 'Exists: no' when cache directory does not exist."""
+        cfg, mock_tts = self._mock_context()
+        with mock.patch("io_mcp.__main__.IoMcpConfig") as MockConfig, \
+             mock.patch("io_mcp.__main__.TTSEngine") as MockTTS, \
+             mock.patch("io_mcp.__main__.os.path.isdir", return_value=False):
+            MockConfig.load.return_value = cfg
+            MockTTS.return_value = mock_tts
+
+            _run_cache_status(verbose=False)
+
+            captured = capsys.readouterr()
+            assert "Exists:" in captured.out
+            assert "no" in captured.out
+
+    def test_shows_config_section(self, capsys):
+        """Output includes Config section with voice, model, speed."""
+        cfg, mock_tts = self._mock_context()
+        with mock.patch("io_mcp.__main__.IoMcpConfig") as MockConfig, \
+             mock.patch("io_mcp.__main__.TTSEngine") as MockTTS, \
+             mock.patch("io_mcp.__main__.os.path.isdir", return_value=False):
+            MockConfig.load.return_value = cfg
+            MockTTS.return_value = mock_tts
+
+            _run_cache_status(verbose=False)
+
+            captured = capsys.readouterr()
+            assert "Config:" in captured.out
+            assert "Voice:" in captured.out
+            assert "sage" in captured.out
+            assert "Model:" in captured.out
+            assert "gpt-4o-mini-tts" in captured.out
+            assert "Speed:" in captured.out
+            assert "1.3" in captured.out
+
+    def test_shows_emotion_in_config(self, capsys):
+        """Config section includes emotion when set."""
+        cfg, mock_tts = self._mock_context()
+        with mock.patch("io_mcp.__main__.IoMcpConfig") as MockConfig, \
+             mock.patch("io_mcp.__main__.TTSEngine") as MockTTS, \
+             mock.patch("io_mcp.__main__.os.path.isdir", return_value=False):
+            MockConfig.load.return_value = cfg
+            MockTTS.return_value = mock_tts
+
+            _run_cache_status(verbose=False)
+
+            captured = capsys.readouterr()
+            assert "Emotion:" in captured.out
+            assert "friendly" in captured.out
+
+    def test_shows_ui_voice_when_different(self, capsys):
+        """Config section shows UI voice when it differs from agent voice."""
+        cfg = FakeConfigWithUIVoice()
+        _, mock_tts = self._mock_context()
+        with mock.patch("io_mcp.__main__.IoMcpConfig") as MockConfig, \
+             mock.patch("io_mcp.__main__.TTSEngine") as MockTTS, \
+             mock.patch("io_mcp.__main__.os.path.isdir", return_value=False):
+            MockConfig.load.return_value = cfg
+            MockTTS.return_value = mock_tts
+
+            _run_cache_status(verbose=False)
+
+            captured = capsys.readouterr()
+            assert "UI voice:" in captured.out
+            assert "teo" in captured.out
+
+    def test_hides_ui_voice_when_same(self, capsys):
+        """Config section omits UI voice when it matches agent voice."""
+        cfg, mock_tts = self._mock_context()
+        # FakeConfig has no separate UI voice
+        with mock.patch("io_mcp.__main__.IoMcpConfig") as MockConfig, \
+             mock.patch("io_mcp.__main__.TTSEngine") as MockTTS, \
+             mock.patch("io_mcp.__main__.os.path.isdir", return_value=False):
+            MockConfig.load.return_value = cfg
+            MockTTS.return_value = mock_tts
+
+            _run_cache_status(verbose=False)
+
+            captured = capsys.readouterr()
+            assert "UI voice:" not in captured.out
+
+    def test_disk_stats_with_files(self, capsys, tmp_path):
+        """Disk section shows file count, total size, avg, oldest, newest."""
+        import time
+
+        # Create fake WAV files with different times
+        f1 = tmp_path / "aaa.wav"
+        f2 = tmp_path / "bbb.wav"
+        f1.write_bytes(b"x" * 1024)
+        f2.write_bytes(b"x" * 3072)
+
+        # Set different mtimes
+        old_time = time.time() - 3600  # 1 hour ago
+        new_time = time.time()
+        os.utime(f1, (old_time, old_time))
+        os.utime(f2, (new_time, new_time))
+
+        cfg, mock_tts = self._mock_context()
+        with mock.patch("io_mcp.__main__.IoMcpConfig") as MockConfig, \
+             mock.patch("io_mcp.__main__.TTSEngine") as MockTTS, \
+             mock.patch("io_mcp.__main__.os.path.isdir", return_value=True), \
+             mock.patch("io_mcp.__main__.os.scandir") as mock_scandir:
+            MockConfig.load.return_value = cfg
+            MockTTS.return_value = mock_tts
+
+            # Create mock DirEntry objects
+            entries = []
+            for fpath in [f1, f2]:
+                entry = mock.MagicMock()
+                entry.is_file.return_value = True
+                entry.name = fpath.name
+                entry.path = str(fpath)
+                st = os.stat(fpath)
+                entry.stat.return_value = st
+                entries.append(entry)
+            mock_scandir.return_value = iter(entries)
+
+            _run_cache_status(verbose=False)
+
+            captured = capsys.readouterr()
+            assert "Disk:" in captured.out
+            assert "Files:" in captured.out
+            assert "2" in captured.out  # 2 files
+            assert "Avg:" in captured.out
+            assert "Oldest:" in captured.out
+            assert "Newest:" in captured.out
+
+    def test_disk_stats_total_size(self, capsys, tmp_path):
+        """Disk total size is the sum of all WAV file sizes."""
+        f1 = tmp_path / "a.wav"
+        f1.write_bytes(b"x" * 2048)
+
+        cfg, mock_tts = self._mock_context()
+        with mock.patch("io_mcp.__main__.IoMcpConfig") as MockConfig, \
+             mock.patch("io_mcp.__main__.TTSEngine") as MockTTS, \
+             mock.patch("io_mcp.__main__.os.path.isdir", return_value=True), \
+             mock.patch("io_mcp.__main__.os.scandir") as mock_scandir:
+            MockConfig.load.return_value = cfg
+            MockTTS.return_value = mock_tts
+
+            entry = mock.MagicMock()
+            entry.is_file.return_value = True
+            entry.name = "a.wav"
+            entry.path = str(f1)
+            entry.stat.return_value = os.stat(f1)
+            mock_scandir.return_value = iter([entry])
+
+            _run_cache_status(verbose=False)
+
+            captured = capsys.readouterr()
+            assert "2.0 KB" in captured.out
+
+    def test_disk_section_hidden_when_dir_missing(self, capsys):
+        """Disk section is not shown when cache directory doesn't exist."""
+        cfg, mock_tts = self._mock_context()
+        with mock.patch("io_mcp.__main__.IoMcpConfig") as MockConfig, \
+             mock.patch("io_mcp.__main__.TTSEngine") as MockTTS, \
+             mock.patch("io_mcp.__main__.os.path.isdir", return_value=False):
+            MockConfig.load.return_value = cfg
+            MockTTS.return_value = mock_tts
+
+            _run_cache_status(verbose=False)
+
+            captured = capsys.readouterr()
+            assert "Disk:" not in captured.out
+
+    def test_disk_empty_directory(self, capsys):
+        """Disk section with empty directory shows 0 files."""
+        cfg, mock_tts = self._mock_context()
+        with mock.patch("io_mcp.__main__.IoMcpConfig") as MockConfig, \
+             mock.patch("io_mcp.__main__.TTSEngine") as MockTTS, \
+             mock.patch("io_mcp.__main__.os.path.isdir", return_value=True), \
+             mock.patch("io_mcp.__main__.os.scandir", return_value=iter([])):
+            MockConfig.load.return_value = cfg
+            MockTTS.return_value = mock_tts
+
+            _run_cache_status(verbose=False)
+
+            captured = capsys.readouterr()
+            assert "Disk:" in captured.out
+            assert "Files:   0" in captured.out
+            # Avg, Oldest, Newest should NOT appear for empty dir
+            assert "Avg:" not in captured.out
+            assert "Oldest:" not in captured.out
+            assert "Newest:" not in captured.out
+
+    def test_non_wav_files_ignored(self, capsys, tmp_path):
+        """Only .wav files are counted in disk stats."""
+        wav = tmp_path / "test.wav"
+        txt = tmp_path / "test.txt"
+        wav.write_bytes(b"x" * 1024)
+        txt.write_bytes(b"y" * 512)
+
+        cfg, mock_tts = self._mock_context()
+        with mock.patch("io_mcp.__main__.IoMcpConfig") as MockConfig, \
+             mock.patch("io_mcp.__main__.TTSEngine") as MockTTS, \
+             mock.patch("io_mcp.__main__.os.path.isdir", return_value=True), \
+             mock.patch("io_mcp.__main__.os.scandir") as mock_scandir:
+            MockConfig.load.return_value = cfg
+            MockTTS.return_value = mock_tts
+
+            entries = []
+            for fpath in [wav, txt]:
+                entry = mock.MagicMock()
+                entry.is_file.return_value = True
+                entry.name = fpath.name
+                entry.path = str(fpath)
+                entry.stat.return_value = os.stat(fpath)
+                entries.append(entry)
+            mock_scandir.return_value = iter(entries)
+
+            _run_cache_status(verbose=False)
+
+            captured = capsys.readouterr()
+            # Only 1 WAV counted
+            assert "Files:   1" in captured.out
+
+    def test_verbose_shows_disk_files(self, capsys, tmp_path):
+        """Verbose mode includes 'Disk files:' listing."""
+        f1 = tmp_path / "abc123.wav"
+        f1.write_bytes(b"x" * 512)
+
+        cfg, mock_tts = self._mock_context()
+        with mock.patch("io_mcp.__main__.IoMcpConfig") as MockConfig, \
+             mock.patch("io_mcp.__main__.TTSEngine") as MockTTS, \
+             mock.patch("io_mcp.__main__.os.path.isdir", return_value=True), \
+             mock.patch("io_mcp.__main__.os.scandir") as mock_scandir:
+            MockConfig.load.return_value = cfg
+            MockTTS.return_value = mock_tts
+
+            entry = mock.MagicMock()
+            entry.is_file.return_value = True
+            entry.name = "abc123.wav"
+            entry.path = str(f1)
+            st = os.stat(f1)
+            entry.stat.return_value = st
+            mock_scandir.return_value = iter([entry])
+
+            _run_cache_status(verbose=True)
+
+            captured = capsys.readouterr()
+            assert "Disk files:" in captured.out
+            assert "abc123.wav" in captured.out
+
+    def test_verbose_no_disk_files_section_when_empty(self, capsys):
+        """Verbose mode skips 'Disk files:' when no files on disk."""
+        cfg, mock_tts = self._mock_context()
+        with mock.patch("io_mcp.__main__.IoMcpConfig") as MockConfig, \
+             mock.patch("io_mcp.__main__.TTSEngine") as MockTTS, \
+             mock.patch("io_mcp.__main__.os.path.isdir", return_value=True), \
+             mock.patch("io_mcp.__main__.os.scandir", return_value=iter([])):
+            MockConfig.load.return_value = cfg
+            MockTTS.return_value = mock_tts
+
+            _run_cache_status(verbose=True)
+
+            captured = capsys.readouterr()
+            assert "Disk files:" not in captured.out
+
+    def test_scandir_oserror_handled(self, capsys):
+        """OSError from scandir is handled gracefully."""
+        cfg, mock_tts = self._mock_context()
+        with mock.patch("io_mcp.__main__.IoMcpConfig") as MockConfig, \
+             mock.patch("io_mcp.__main__.TTSEngine") as MockTTS, \
+             mock.patch("io_mcp.__main__.os.path.isdir", return_value=True), \
+             mock.patch("io_mcp.__main__.os.scandir", side_effect=OSError("perm")):
+            MockConfig.load.return_value = cfg
+            MockTTS.return_value = mock_tts
+
+            # Should not raise
+            _run_cache_status(verbose=False)
+
+            captured = capsys.readouterr()
+            assert "Files:   0" in captured.out
+
+    def test_stat_oserror_on_entry_handled(self, capsys, tmp_path):
+        """OSError from entry.stat() is handled — file still counted."""
+        cfg, mock_tts = self._mock_context()
+        with mock.patch("io_mcp.__main__.IoMcpConfig") as MockConfig, \
+             mock.patch("io_mcp.__main__.TTSEngine") as MockTTS, \
+             mock.patch("io_mcp.__main__.os.path.isdir", return_value=True), \
+             mock.patch("io_mcp.__main__.os.scandir") as mock_scandir:
+            MockConfig.load.return_value = cfg
+            MockTTS.return_value = mock_tts
+
+            entry = mock.MagicMock()
+            entry.is_file.return_value = True
+            entry.name = "bad.wav"
+            entry.path = "/tmp/bad.wav"
+            entry.stat.side_effect = OSError("gone")
+            mock_scandir.return_value = iter([entry])
+
+            _run_cache_status(verbose=False)
+
+            captured = capsys.readouterr()
+            # File is still counted (with size 0, mtime 0)
+            assert "Files:   1" in captured.out
+
+    def test_no_emotion_hides_emotion_line(self, capsys):
+        """Config section omits emotion when it's empty."""
+        cfg, mock_tts = self._mock_context()
+        cfg.tts_emotion = ""
+        with mock.patch("io_mcp.__main__.IoMcpConfig") as MockConfig, \
+             mock.patch("io_mcp.__main__.TTSEngine") as MockTTS, \
+             mock.patch("io_mcp.__main__.os.path.isdir", return_value=False):
+            MockConfig.load.return_value = cfg
+            MockTTS.return_value = mock_tts
+
+            _run_cache_status(verbose=False)
+
+            captured = capsys.readouterr()
+            assert "Emotion:" not in captured.out
+
+    def test_disk_files_sorted_newest_first_in_verbose(self, capsys, tmp_path):
+        """Verbose disk listing is sorted by newest first."""
+        import time
+
+        f_old = tmp_path / "old_file.wav"
+        f_new = tmp_path / "new_file.wav"
+        f_old.write_bytes(b"x" * 100)
+        f_new.write_bytes(b"y" * 200)
+
+        old_time = time.time() - 7200
+        new_time = time.time()
+        os.utime(f_old, (old_time, old_time))
+        os.utime(f_new, (new_time, new_time))
+
+        cfg, mock_tts = self._mock_context()
+        with mock.patch("io_mcp.__main__.IoMcpConfig") as MockConfig, \
+             mock.patch("io_mcp.__main__.TTSEngine") as MockTTS, \
+             mock.patch("io_mcp.__main__.os.path.isdir", return_value=True), \
+             mock.patch("io_mcp.__main__.os.scandir") as mock_scandir:
+            MockConfig.load.return_value = cfg
+            MockTTS.return_value = mock_tts
+
+            entries = []
+            for fpath in [f_old, f_new]:
+                entry = mock.MagicMock()
+                entry.is_file.return_value = True
+                entry.name = fpath.name
+                entry.path = str(fpath)
+                st = os.stat(fpath)
+                entry.stat.return_value = st
+                entries.append(entry)
+            mock_scandir.return_value = iter(entries)
+
+            _run_cache_status(verbose=True)
+
+            captured = capsys.readouterr()
+            lines = captured.out.splitlines()
+            # Find the disk files listing
+            disk_lines = []
+            in_disk_files = False
+            for line in lines:
+                if "Disk files:" in line:
+                    in_disk_files = True
+                    continue
+                if in_disk_files:
+                    stripped = line.strip()
+                    if stripped.startswith("new_file") or stripped.startswith("old_file"):
+                        disk_lines.append(stripped)
+                    elif stripped and not line.startswith("    "):
+                        break
+            # new_file should appear before old_file (newest first)
+            assert len(disk_lines) == 2
+            assert "new_file" in disk_lines[0]
+            assert "old_file" in disk_lines[1]
