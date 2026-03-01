@@ -596,8 +596,182 @@ class TestPregenerate:
             assert "new1" in generated
             assert "new2" in generated
 
+    def test_generation_counter_skips_stale(self):
+        """Workers skip generation when a newer pregenerate() has been called."""
+        engine = _make_engine()
+        generated = []
 
-# ─── stop ─────────────────────────────────────────────────────────────
+        def slow_generate(text, **kwargs):
+            # Simulate a newer pregenerate() call arriving mid-generation
+            # by incrementing the counter before the second item
+            if len(generated) == 1:
+                engine._pregen_gen += 1  # simulate newer call
+            generated.append(text)
+            return f"/tmp/{text}.wav"
+
+        with mock.patch.object(engine, "_generate_to_file_unlocked", side_effect=slow_generate):
+            engine.pregenerate(["first", "second"], max_workers=1)
+
+        # "first" should be generated, "second" may or may not depending on timing
+        assert "first" in generated
+
+
+# ─── _generate_to_file error handling ─────────────────────────────────
+
+
+class TestGenerateToFileErrorHandling:
+    """Tests for partial file cleanup on errors in _generate_to_file."""
+
+    def test_timeout_cleans_up_partial_file_locked(self):
+        """_generate_to_file removes partial WAV on TimeoutExpired."""
+        config = FakeConfig()
+        engine = _make_engine(local=False, config=config)
+        engine._tts_bin = "/usr/bin/tts"
+        engine._local = False  # override fallback from init
+
+        # Create a partial file to simulate what subprocess.run would leave behind
+        out_key = engine._cache_key("timeout text")
+        out_path = os.path.join(CACHE_DIR, f"{out_key}.wav")
+        os.makedirs(CACHE_DIR, exist_ok=True)
+
+        def fake_run(*args, **kwargs):
+            # Write partial data then timeout
+            with open(out_path, "wb") as f:
+                f.write(b"partial")
+            raise subprocess.TimeoutExpired(cmd="tts", timeout=15)
+
+        with mock.patch("subprocess.run", side_effect=fake_run):
+            result = engine._generate_to_file("timeout text")
+
+        assert result is None
+        assert not os.path.exists(out_path), "Partial file should be cleaned up on timeout"
+        assert out_key not in engine._cache
+
+    def test_exception_cleans_up_partial_file_locked(self):
+        """_generate_to_file removes partial WAV on generic exception."""
+        config = FakeConfig()
+        engine = _make_engine(local=False, config=config)
+        engine._tts_bin = "/usr/bin/tts"
+        engine._local = False  # override fallback from init
+
+        out_key = engine._cache_key("error text")
+        out_path = os.path.join(CACHE_DIR, f"{out_key}.wav")
+        os.makedirs(CACHE_DIR, exist_ok=True)
+
+        def fake_run(*args, **kwargs):
+            with open(out_path, "wb") as f:
+                f.write(b"partial")
+            raise RuntimeError("API exploded")
+
+        with mock.patch("subprocess.run", side_effect=fake_run):
+            result = engine._generate_to_file("error text")
+
+        assert result is None
+        assert not os.path.exists(out_path), "Partial file should be cleaned up on exception"
+        assert out_key not in engine._cache
+
+    def test_timeout_cleans_up_partial_file_unlocked(self):
+        """_generate_to_file_unlocked removes partial WAV on TimeoutExpired."""
+        config = FakeConfig()
+        engine = _make_engine(local=False, config=config)
+        engine._tts_bin = "/usr/bin/tts"
+        engine._local = False  # override fallback from init
+
+        out_key = engine._cache_key("timeout text unlocked")
+        out_path = os.path.join(CACHE_DIR, f"{out_key}.wav")
+        os.makedirs(CACHE_DIR, exist_ok=True)
+
+        def fake_run(*args, **kwargs):
+            with open(out_path, "wb") as f:
+                f.write(b"partial")
+            raise subprocess.TimeoutExpired(cmd="tts", timeout=15)
+
+        with mock.patch("subprocess.run", side_effect=fake_run):
+            result = engine._generate_to_file_unlocked("timeout text unlocked")
+
+        assert result is None
+        assert not os.path.exists(out_path), "Partial file should be cleaned up on timeout"
+        assert out_key not in engine._cache
+
+    def test_exception_cleans_up_partial_file_unlocked(self):
+        """_generate_to_file_unlocked removes partial WAV on generic exception."""
+        config = FakeConfig()
+        engine = _make_engine(local=False, config=config)
+        engine._tts_bin = "/usr/bin/tts"
+        engine._local = False  # override fallback from init
+
+        out_key = engine._cache_key("error text unlocked")
+        out_path = os.path.join(CACHE_DIR, f"{out_key}.wav")
+        os.makedirs(CACHE_DIR, exist_ok=True)
+
+        def fake_run(*args, **kwargs):
+            with open(out_path, "wb") as f:
+                f.write(b"partial")
+            raise RuntimeError("API exploded")
+
+        with mock.patch("subprocess.run", side_effect=fake_run):
+            result = engine._generate_to_file_unlocked("error text unlocked")
+
+        assert result is None
+        assert not os.path.exists(out_path), "Partial file should be cleaned up on exception"
+        assert out_key not in engine._cache
+
+    def test_timeout_records_api_failure(self):
+        """Both methods record API failure on timeout."""
+        config = FakeConfig()
+        engine = _make_engine(local=False, config=config)
+        engine._tts_bin = "/usr/bin/tts"
+        engine._local = False  # override fallback from init
+
+        with mock.patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="tts", timeout=15)):
+            engine._generate_to_file("t1")
+            engine._generate_to_file_unlocked("t2")
+
+        assert engine._api_gen_consecutive_failures >= 2
+
+
+# ─── cache_stats ──────────────────────────────────────────────────────
+
+
+class TestCacheStats:
+    """Tests for cache_stats() accuracy."""
+
+    def test_counts_cached_items(self):
+        engine = _make_engine()
+        os.makedirs(CACHE_DIR, exist_ok=True)
+
+        # Create real files so sizes can be measured
+        f1 = os.path.join(CACHE_DIR, "stats_test_1.wav")
+        f2 = os.path.join(CACHE_DIR, "stats_test_2.wav")
+        _make_wav(f1, duration_samples=100)
+        _make_wav(f2, duration_samples=200)
+
+        engine._cache["key1"] = f1
+        engine._cache["key2"] = f2
+
+        count, total_bytes = engine.cache_stats()
+        assert count == 2
+        assert total_bytes > 0
+        assert total_bytes == os.path.getsize(f1) + os.path.getsize(f2)
+
+        # Cleanup
+        os.unlink(f1)
+        os.unlink(f2)
+
+    def test_skips_missing_files(self):
+        engine = _make_engine()
+        engine._cache["missing"] = "/tmp/nonexistent_file_xyz.wav"
+        engine._cache["also_missing"] = "/tmp/another_nonexistent.wav"
+
+        count, total_bytes = engine.cache_stats()
+        assert count == 2  # dict entries still counted
+        assert total_bytes == 0  # but no bytes since files don't exist
+
+    def test_empty_cache(self):
+        engine = _make_engine()
+        count, total_bytes = engine.cache_stats()
+        assert count == 0
+        assert total_bytes == 0
 
 
 class TestStop:

@@ -38,6 +38,14 @@ class HistoryEntry:
 
 
 @dataclass
+class FlushedMessage:
+    """A user message that was delivered (flushed) to the agent."""
+    text: str
+    queued_at: float = field(default_factory=time.time)
+    flushed_at: float = field(default_factory=time.time)
+
+
+@dataclass
 class InboxItem:
     """A queued tool call waiting for TUI display/response.
 
@@ -148,6 +156,8 @@ class Session:
 
     # ── User message inbox (queued for next MCP response) ─────────
     pending_messages: list[str] = field(default_factory=list)
+    flushed_messages: list[FlushedMessage] = field(default_factory=list)
+    _flushed_messages_max: int = 50
 
     # ── Tool call inbox (queued choices/speech for TUI display) ──
     inbox: collections.deque = field(default_factory=collections.deque)
@@ -434,11 +444,22 @@ class Session:
 
         Returns empty string if no messages queued. Otherwise returns
         a block that can be appended to MCP tool responses.
+        Messages are moved to flushed_messages with timestamps.
         """
         msgs = getattr(self, 'pending_messages', [])
         if not msgs:
             return ""
+        now = time.time()
         drained = list(msgs)
+        # Move to flushed_messages for chat view tracking
+        for m in drained:
+            self.flushed_messages.append(FlushedMessage(
+                text=m, queued_at=now, flushed_at=now,
+            ))
+        # Trim flushed_messages to cap
+        overflow = len(self.flushed_messages) - self._flushed_messages_max
+        if overflow > 0:
+            del self.flushed_messages[:overflow]
         msgs.clear()
         lines = "\n".join(f"- {m}" for m in drained)
         return f"\n\n--- Queued User Messages ---\n{lines}"

@@ -150,6 +150,20 @@ def create_mcp_server(
         if msgs is None:
             return []
         drained = list(msgs)
+        if drained:
+            # Move to flushed_messages for chat view tracking
+            from io_mcp.session import FlushedMessage
+            now = time.time()
+            flushed = getattr(session, 'flushed_messages', None)
+            if flushed is not None:
+                for m in drained:
+                    flushed.append(FlushedMessage(
+                        text=m, queued_at=now, flushed_at=now,
+                    ))
+                cap = getattr(session, '_flushed_messages_max', 50)
+                overflow = len(flushed) - cap
+                if overflow > 0:
+                    del flushed[:overflow]
         msgs.clear()
         return drained
 

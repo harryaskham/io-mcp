@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from io_mcp.session import Session, SessionManager, SpeechEntry, HistoryEntry, InboxItem
+from io_mcp.session import Session, SessionManager, SpeechEntry, HistoryEntry, InboxItem, FlushedMessage
 
 
 class TestSession:
@@ -47,6 +47,45 @@ class TestSession:
         assert "hello" in result
         assert "world" in result
         assert s.pending_messages == []  # drained
+
+    def test_drain_messages_populates_flushed(self):
+        """Draining messages should copy them to flushed_messages."""
+        s = Session(session_id="test-1", name="Agent 1")
+        s.pending_messages.append("hello")
+        s.pending_messages.append("world")
+        s.drain_messages()
+        assert len(s.flushed_messages) == 2
+        assert s.flushed_messages[0].text == "hello"
+        assert s.flushed_messages[1].text == "world"
+        assert s.flushed_messages[0].flushed_at > 0
+        assert s.flushed_messages[1].flushed_at > 0
+
+    def test_drain_messages_empty_leaves_flushed_unchanged(self):
+        """Draining empty pending_messages should not add to flushed_messages."""
+        s = Session(session_id="test-1", name="Agent 1")
+        s.drain_messages()
+        assert len(s.flushed_messages) == 0
+
+    def test_flushed_messages_capped_at_max(self):
+        """flushed_messages should be capped at _flushed_messages_max."""
+        s = Session(session_id="test-1", name="Agent 1")
+        # Fill up flushed messages to just under the cap
+        for i in range(48):
+            s.flushed_messages.append(FlushedMessage(text=f"old-{i}"))
+        # Add 5 more via drain
+        for i in range(5):
+            s.pending_messages.append(f"new-{i}")
+        s.drain_messages()
+        # Total would be 53, but should be capped at 50
+        assert len(s.flushed_messages) == 50
+        # The oldest messages should have been trimmed
+        assert s.flushed_messages[0].text == "old-3"
+        assert s.flushed_messages[-1].text == "new-4"
+
+    def test_flushed_messages_default_empty(self):
+        """New sessions start with empty flushed_messages."""
+        s = Session(session_id="test-1", name="Agent 1")
+        assert s.flushed_messages == []
 
     def test_selection_event(self):
         s = Session(session_id="test-1", name="Agent 1")

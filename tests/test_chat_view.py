@@ -577,3 +577,140 @@ async def test_action_prev_tab_skips_inbox_in_chat_view():
 
         # Should have switched to session1
         assert app.manager.active_session_id == "s1"
+
+
+# ─── Test: filter mode works in chat view ──────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_filter_applies_to_chat_choices_in_chat_view():
+    """_apply_filter targets #chat-choices when chat view is active."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        session = _setup_session_with_choices(app)
+
+        # Activate chat view and populate choices
+        app._chat_view_active = True
+        app._populate_chat_choices_list(session)
+        await pilot.pause(0.1)
+
+        chat_lv = app.query_one("#chat-choices", ListView)
+        initial_count = len(chat_lv.children)
+        assert initial_count > 0
+
+        # Enter filter mode and apply a query that matches only "Alpha"
+        app._filter_mode = True
+        app._apply_filter("alpha")
+        await pilot.pause(0.1)
+
+        items = [c for c in chat_lv.children if isinstance(c, ChoiceItem)]
+        real = [c for c in items if c.choice_index > 0]
+        assert len(real) == 1
+        assert real[0].choice_label == "Alpha"
+
+
+@pytest.mark.asyncio
+async def test_filter_includes_preamble_in_chat_view():
+    """_apply_filter re-adds PreambleItem header in chat view."""
+    from io_mcp.tui.widgets import PreambleItem
+
+    app = make_app()
+    async with app.run_test() as pilot:
+        session = _setup_session_with_choices(app)
+
+        app._chat_view_active = True
+        app._filter_mode = True
+        app._apply_filter("")  # empty query shows all
+        await pilot.pause(0.1)
+
+        chat_lv = app.query_one("#chat-choices", ListView)
+        preambles = [c for c in chat_lv.children if isinstance(c, PreambleItem)]
+        assert len(preambles) == 1
+        assert preambles[0].preamble_text == "Pick one"
+
+
+@pytest.mark.asyncio
+async def test_filter_exit_restores_chat_choices():
+    """_exit_filter restores full #chat-choices and focuses it."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        session = _setup_session_with_choices(app)
+
+        app._chat_view_active = True
+        app._populate_chat_choices_list(session)
+        await pilot.pause(0.1)
+
+        chat_lv = app.query_one("#chat-choices", ListView)
+        full_count = len(chat_lv.children)
+
+        # Enter filter mode, filter to a subset
+        app._filter_mode = True
+        app._apply_filter("alpha")
+        await pilot.pause(0.1)
+        assert len(chat_lv.children) < full_count
+
+        # Exit filter — should restore full list
+        app._exit_filter()
+        await pilot.pause(0.1)
+
+        assert app._filter_mode is False
+        assert chat_lv.display is True
+        # Should have the same count as before filtering
+        restored_count = len(chat_lv.children)
+        assert restored_count == full_count
+
+
+@pytest.mark.asyncio
+async def test_filter_submit_keeps_filtered_chat_choices():
+    """on_filter_submitted keeps filtered #chat-choices and focuses list."""
+    from textual.widgets import Input
+
+    app = make_app()
+    async with app.run_test() as pilot:
+        session = _setup_session_with_choices(app)
+
+        app._chat_view_active = True
+        app._populate_chat_choices_list(session)
+        await pilot.pause(0.1)
+
+        chat_lv = app.query_one("#chat-choices", ListView)
+        full_count = len(chat_lv.children)
+
+        # Enter filter mode and filter
+        app._filter_mode = True
+        filter_inp = app.query_one("#filter-input", Input)
+        filter_inp.styles.display = "block"
+        app._apply_filter("beta")
+        await pilot.pause(0.1)
+
+        filtered_count = len(chat_lv.children)
+        assert filtered_count < full_count
+
+        # Simulate submit by posting the event
+        app._filter_mode = True  # ensure still in filter mode
+        from textual.widgets._input import Input as InputWidget
+        app.on_filter_submitted(InputWidget.Submitted(filter_inp, value="beta"))
+        await pilot.pause(0.1)
+
+        # Filter mode should be off, but list stays filtered
+        assert app._filter_mode is False
+        assert len(chat_lv.children) == filtered_count
+
+
+@pytest.mark.asyncio
+async def test_filter_no_match_in_chat_view():
+    """_apply_filter with no matches shows only extras in chat view."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        session = _setup_session_with_choices(app)
+
+        app._chat_view_active = True
+        app._filter_mode = True
+        app._apply_filter("zzz_nonexistent")
+        await pilot.pause(0.1)
+
+        chat_lv = app.query_one("#chat-choices", ListView)
+        items = [c for c in chat_lv.children if isinstance(c, ChoiceItem)]
+        real = [c for c in items if c.choice_index > 0]
+        assert len(real) == 0
+

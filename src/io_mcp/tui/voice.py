@@ -12,7 +12,7 @@ import time
 from typing import Optional, TYPE_CHECKING
 
 from textual import work
-from textual.widgets import Input, Label, ListView
+from textual.widgets import Input, Label, ListView, Static
 
 from ..tts import _find_binary
 
@@ -80,12 +80,20 @@ class VoiceMixin:
             self._tts.stop()
             self._tts._muted = True
 
-        # UI update
-        self.query_one("#choices").display = False
-        self.query_one("#dwell-bar").display = False
-        status = self.query_one("#status", Label)
-        status.update(f"[bold {self._cs['error']}]o REC[/bold {self._cs['error']}] Recording... [dim](space to stop)[/dim]")
-        status.display = True
+        # UI update — adapt to chat view vs normal view
+        if getattr(self, '_chat_view_active', False):
+            # Chat view: update voice button to show recording state
+            try:
+                btn = self.query_one("#chat-voice-btn", Static)
+                btn.update(f"[bold {self._cs['error']}]⏺[/bold {self._cs['error']}]")
+            except Exception:
+                pass
+        else:
+            self.query_one("#choices").display = False
+            self.query_one("#dwell-bar").display = False
+            status = self.query_one("#status", Label)
+            status.update(f"[bold {self._cs['error']}]o REC[/bold {self._cs['error']}] Recording... [dim](space to stop)[/dim]")
+            status.display = True
 
         # Find binaries
         termux_exec_bin = _find_binary("termux-exec")
@@ -195,8 +203,16 @@ class VoiceMixin:
         except Exception:
             pass
 
-        status = self.query_one("#status", Label)
-        status.update(f"[{self._cs['blue']}]⧗[/{self._cs['blue']}] Transcribing...")
+        # UI update — adapt to chat view vs normal view
+        if getattr(self, '_chat_view_active', False):
+            try:
+                btn = self.query_one("#chat-voice-btn", Static)
+                btn.update(f"[{self._cs['blue']}]⧗[/{self._cs['blue']}]")
+            except Exception:
+                pass
+        else:
+            status = self.query_one("#status", Label)
+            status.update(f"[{self._cs['blue']}]⧗[/{self._cs['blue']}] Transcribing...")
 
         self._process_transcription_worker(session, desktop_mode, stt_proc, proc)
 
@@ -394,9 +410,22 @@ class VoiceMixin:
         via _show_choices() (choices may have arrived while input was open).
         Otherwise just re-shows the existing list.
         """
+        # Reset chat voice button if in chat view
+        if getattr(self, '_chat_view_active', False):
+            try:
+                btn = self.query_one("#chat-voice-btn", Static)
+                btn.update("🎤")
+            except Exception:
+                pass
+
         session = self._focused()
         if session and session.active and session.choices:
             self._show_choices()
+            return
+
+        if getattr(self, '_chat_view_active', False):
+            # Chat view: just update footer status, don't touch #choices/#status
+            self._update_footer_status()
             return
 
         self.query_one("#status").display = False

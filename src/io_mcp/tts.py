@@ -413,11 +413,19 @@ class TTSEngine:
                     self._log_tts_error("TTS generation timed out", text)
                     if not self._local:
                         self._record_api_gen_failure()
+                    try:
+                        os.unlink(out_path)
+                    except OSError:
+                        pass
                     return None
                 except Exception as e:
                     self._log_tts_error(f"TTS generation exception: {e}", text)
                     if not self._local:
                         self._record_api_gen_failure()
+                    try:
+                        os.unlink(out_path)
+                    except OSError:
+                        pass
                     return None
 
     # ─── Fragment-based TTS ─────────────────────────────────────
@@ -835,11 +843,19 @@ class TTSEngine:
             self._log_tts_error("TTS generation timed out", text)
             if not self._local:
                 self._record_api_gen_failure()
+            try:
+                os.unlink(out_path)
+            except OSError:
+                pass
             return None
         except Exception as e:
             self._log_tts_error(f"TTS generation exception: {e}", text)
             if not self._local:
                 self._record_api_gen_failure()
+            try:
+                os.unlink(out_path)
+            except OSError:
+                pass
             return None
 
     def play_cached(self, text: str, block: bool = False,

@@ -336,6 +336,22 @@ class ChatViewMixin:
             except Exception:
                 pass
 
+        # Pregenerate TTS for visible chat bubble items so scroll readout
+        # is instant (cache hit) instead of silent (cache miss → API call).
+        # Only pregenerate the last ~20 items since the user is most likely
+        # to scroll through recent history.
+        try:
+            tts_texts = set()
+            recent = items[-20:] if len(items) > 20 else items
+            for item in recent:
+                t = getattr(item, 'tts_text', '')
+                if t and len(t) < 200:  # skip very long texts
+                    tts_texts.add(t)
+            if tts_texts and hasattr(self, '_pregenerate_ui_worker'):
+                self._pregenerate_ui_worker(list(tts_texts))
+        except Exception:
+            pass
+
         # Only scroll to bottom if user was already at the bottom
         # (respects their scroll position if they scrolled up to read history)
         try:
@@ -409,6 +425,20 @@ class ChatViewMixin:
             # 3. Pending choices — skip, they're shown in the #chat-choices scrollable list
 
             # 4. User messages (pending = queued, flushed = delivered)
+            # Show flushed messages first (delivered to agent, ✓ icon)
+            for fm in getattr(sess, 'flushed_messages', []):
+                raw_items.append((
+                    fm.flushed_at,
+                    "user_msg",
+                    ChatBubbleItem(
+                        kind="user_msg",
+                        text=fm.text[:200],
+                        timestamp=fm.flushed_at,
+                        flushed=True,
+                        agent_name=name,
+                    ),
+                ))
+            # Show pending messages (still queued, ○ icon)
             now = _time.time()
             for msg in sess.pending_messages:
                 raw_items.append((
@@ -453,11 +483,13 @@ class ChatViewMixin:
 
     def _chat_content_fingerprint(self: "IoMcpApp", session: "Session") -> str:
         """Compute a lightweight fingerprint of chat-relevant session data."""
+        flushed = getattr(session, 'flushed_messages', [])
         parts = [
             str(len(session.speech_log)),
             str(len(session.inbox_done)),
             str(len(session.inbox)),
             str(len(session.pending_messages)),
+            str(len(flushed)),
             str(len(session.activity_log)),
         ]
         if session.speech_log:
@@ -466,6 +498,8 @@ class ChatViewMixin:
             parts.append(f"d{session.inbox_done[-1].timestamp:.0f}")
         if session.inbox:
             parts.append(f"i{session.inbox[-1].timestamp:.0f}")
+        if flushed:
+            parts.append(f"f{flushed[-1].flushed_at:.0f}")
         if session.activity_log:
             parts.append(f"a{session.activity_log[-1].get('timestamp', 0):.0f}")
         return "|".join(parts)
