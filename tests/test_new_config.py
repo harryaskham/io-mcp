@@ -726,20 +726,17 @@ class TestTTSSpeedsValidation:
         assert speed_warnings == [], f"Unexpected speed warnings: {speed_warnings}"
 
     def test_scroll_and_agent_in_defaults_but_not_validated(self, tmp_config):
-        """'scroll' and 'agent' contexts are in DEFAULT_CONFIG speeds but not in
-        the validation whitelist, so they produce warnings when merged from defaults.
-
-        This documents the current behavior — these contexts work fine for
-        tts_speed_for() but the validator doesn't know about them.
+        """'scroll' and 'agent' contexts are valid speed contexts and should
+        NOT produce validation warnings.
         """
         cfg = _make_config(tmp_config, {
             "config": {"tts": {"speeds": {}}},
         })
         scroll_warnings = [w for w in cfg.validation_warnings if "speeds.scroll" in w]
         agent_warnings = [w for w in cfg.validation_warnings if "speeds.agent" in w]
-        # These exist because defaults are merged in and then validated
-        assert len(scroll_warnings) >= 1, "Expected 'scroll' speed context warning from defaults"
-        assert len(agent_warnings) >= 1, "Expected 'agent' speed context warning from defaults"
+        # These should NOT produce warnings — they are valid contexts
+        assert len(scroll_warnings) == 0, f"Unexpected 'scroll' warning: {scroll_warnings}"
+        assert len(agent_warnings) == 0, f"Unexpected 'agent' warning: {agent_warnings}"
 
     def test_out_of_range_speed_warning(self, tmp_config):
         """Speed multiplier outside [0.1, 5.0] should warn."""

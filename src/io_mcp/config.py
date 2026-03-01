@@ -510,6 +510,7 @@ class IoMcpConfig:
         known_speed_contexts = {
             "speak", "speakAsync", "preamble",
             "choiceLabel", "choiceSummary", "ui",
+            "scroll", "agent",
         }
         user_speeds = user_tts.get("speeds", {}) if isinstance(user_tts, dict) else {}
         if isinstance(user_speeds, dict):
