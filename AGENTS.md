@@ -349,6 +349,8 @@ register_session(
 - After an error → present choices: retry, skip, investigate, etc.
 - After answering a question → present choices for follow-up actions
 - When you have nothing to do → present choices: "Keep building", "Review changes", "Something else"
+
+**Exception for sub-agents**: If you are a background agent spawned via the `Agent` tool (not the primary agent), do **NOT** call `present_choices()`. Sub-agents share the parent's MCP connection and their `present_choices` calls will block the TUI waiting for a response that nobody can give. Sub-agents should just complete their work and return — never call `present_choices`, `speak`, or `speak_async`. Use `present_choices` with a `timeout` parameter if you must present options from a sub-agent context.
 - **NEVER** end your turn with just `speak()` or text output — always follow with `present_choices()`
 
 ### Speech is Critical — Never Go Silent
