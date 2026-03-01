@@ -27,6 +27,11 @@ hooks:
           command: "${CLAUDE_PLUGIN_ROOT}/agents/enforce-choices.sh"
           timeout: 10
   PreToolUse:
+    - matcher: "Bash"
+      hooks:
+        - type: command
+          command: "${CLAUDE_PLUGIN_ROOT}/agents/enforce-background.sh"
+          timeout: 5
     - matcher: "Bash|Edit|Write|NotebookEdit|Task"
       hooks:
         - type: command
