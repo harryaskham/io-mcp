@@ -940,7 +940,6 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
             # Unblock all pending selections
             for sess in frontend.manager.all_sessions():
                 if sess.active:
-                    frontend.present_choices  # access to verify app is alive
                     app = frontend._app
                     app._restart_requested = True
                     # Resolve all active sessions
