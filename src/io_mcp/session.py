@@ -496,7 +496,11 @@ class Session:
         item.result = result
         item.done = True
         item.event.set()
-        self._append_done(self.inbox.popleft())
+        try:
+            self._append_done(self.inbox.popleft())
+        except IndexError:
+            # Item already removed by concurrent cancel or drain worker
+            pass
         self.drain_kick.set()
         return item
 
