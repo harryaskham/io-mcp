@@ -63,6 +63,7 @@ class ChatBubbleItem(ListItem):
                  detail: str = "", resolved: bool = False,
                  result: str = "", choices: list[dict] | None = None,
                  flushed: bool = False, agent_name: str = "agent",
+                 freeform: bool = False,
                  **kwargs) -> None:
         super().__init__(**kwargs)
         self.bubble_kind = kind
@@ -74,6 +75,7 @@ class ChatBubbleItem(ListItem):
         self.bubble_choices = choices or []
         self.bubble_flushed = flushed
         self.agent_name = agent_name
+        self.bubble_freeform = freeform
         # Plain text for TTS readout (no markup, no timestamps)
         self.tts_text = self._make_tts_text()
 
@@ -84,6 +86,8 @@ class ChatBubbleItem(ListItem):
         elif self.bubble_kind == "speech":
             return self.bubble_text
         elif self.bubble_kind == "choices":
+            if self.bubble_freeform and self.bubble_resolved and self.bubble_result:
+                return f"replied: {self.bubble_result}"
             if self.bubble_resolved and self.bubble_result:
                 return f"selected {self.bubble_result}"
             labels = ", ".join(c.get("label", "") for c in self.bubble_choices[:5])
@@ -193,6 +197,13 @@ class ChatBubbleItem(ListItem):
                         f"  [{s['fg_dim']}]{summary}[/{s['fg_dim']}]",
                         classes="chat-bubble-choice",
                     )
+            if self.bubble_freeform and self.bubble_resolved and self.bubble_result:
+                # Freeform reply — show connected reply line below the choices
+                yield Label(
+                    f"  [{s['border']}]╰─►[/{s['border']}] "
+                    f"[bold {s['purple']}]{self.bubble_result}[/bold {s['purple']}]",
+                    classes="chat-bubble-choice-selected",
+                )
             if not self.bubble_resolved and not self.bubble_result:
                 yield Label(
                     f"  [{s['warning']}]awaiting selection\u2026[/{s['warning']}]",
@@ -635,8 +646,10 @@ class ChatViewMixin:
             for item in sess.inbox_done:
                 if item.kind == "choices":
                     result_label = ""
+                    is_freeform = False
                     if item.result:
                         result_label = item.result.get("selected", "")
+                        is_freeform = item.result.get("summary", "") == "(freeform input)"
                     raw_items.append((
                         item.timestamp,
                         "choices",
@@ -648,6 +661,7 @@ class ChatViewMixin:
                             result=result_label,
                             choices=item.choices[:9],
                             agent_name=name,
+                            freeform=is_freeform,
                         ),
                     ))
 

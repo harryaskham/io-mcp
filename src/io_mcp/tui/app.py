@@ -2231,8 +2231,8 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
             seen.add("selected")
 
         all_fragments = priority_fragments + remaining_fragments
-        ui_speed = self._config.tts_speed_for("ui") if self._config else None
-        self._pregenerate_priority_worker(all_fragments, speed_override=ui_speed)
+        scroll_speed = self._config.tts_speed_for("scroll") if self._config else None
+        self._pregenerate_priority_worker(all_fragments, speed_override=scroll_speed)
 
         # Pregenerate extra option labels in separate UI queue
         # so they don't compete with agent choice pregeneration.
@@ -5077,8 +5077,8 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
                     self._last_spoken_time = now
                     # Use fragment-based playback for cached fragments,
                     # falling back to speak_with_local_fallback for uncached.
-                    # Use UI speed for scroll readout (numbers, labels, summaries).
-                    ui_speed = self._config.tts_speed_for("ui") if self._config else None
+                    # Use scroll speed for scroll readout (numbers, labels, summaries).
+                    scroll_speed = self._config.tts_speed_for("scroll") if self._config else None
                     # Extra options use UI voice override to match how they
                     # were pregenerated (via _pregenerate_ui_worker). Without
                     # this, uiVoice configs cause cache key mismatches.
@@ -5090,11 +5090,11 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
                     if fragments and len(fragments) > 1:
                         self._tts.speak_fragments_scroll(fragments,
                                                          voice_override=voice_ov,
-                                                         speed_override=ui_speed)
+                                                         speed_override=scroll_speed)
                     else:
                         self._tts.speak_with_local_fallback(text,
                                                             voice_override=voice_ov,
-                                                            speed_override=ui_speed)
+                                                            speed_override=scroll_speed)
 
             if self._dwell_time > 0:
                 self._start_dwell()
