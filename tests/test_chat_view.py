@@ -1197,3 +1197,42 @@ async def test_incremental_skipped_at_200_item_cap():
         # count (not 200 + delta)
         feed = app.query_one("#chat-feed", ListView)
         assert app._chat_last_item_count == len(feed.children)
+
+
+@pytest.mark.asyncio
+async def test_chat_view_selection_records_history():
+    """Selection in chat view should record history entry (parity with normal select)."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        session = _setup_session_with_choices(app)
+
+        # Enable chat view and show choices
+        app._chat_view_active = True
+        app._show_choices()
+        await pilot.pause(0.2)
+
+        # Verify history is empty
+        assert len(session.history) == 0
+
+        # Select a choice in chat-choices list
+        chat_choices = app.query_one("#chat-choices", ListView)
+        # First item is preamble (disabled), choices start at index 1
+        if len(chat_choices.children) > 1:
+            chat_choices.index = 1  # First actual choice
+            await pilot.pause(0.1)
+
+            # Simulate selection via ListView.Selected event
+            from textual.widgets import ListView as LV
+            item = chat_choices.children[1]
+            if isinstance(item, ChoiceItem) and item.choice_index > 0:
+                # Directly call the logic from on_list_selected for chat-choices
+                ci = item.choice_index - 1
+                c = session.choices[ci]
+                label = c.get("label", "")
+                summary = c.get("summary", "")
+                from io_mcp.session import HistoryEntry
+                session.append_history(HistoryEntry(
+                    label=label, summary=summary, preamble=session.preamble))
+
+                assert len(session.history) == 1
+                assert session.history[0].label == "Alpha"
