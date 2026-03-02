@@ -583,7 +583,7 @@ def create_proxy_server(
         name: str = "",
         voice: str = "",
         emotion: str = "",
-        metadata: dict = {},
+        metadata: dict | None = None,
     ) -> str:
         """Register this agent session with io-mcp.
 
@@ -648,7 +648,7 @@ def create_proxy_server(
             "cwd": cwd, "hostname": hostname,
             "tmux_session": tmux_session, "tmux_pane": tmux_pane,
             "name": name, "voice": voice, "emotion": emotion,
-            "metadata": metadata,
+            "metadata": metadata or {},
         }, ctx)
 
     @server.tool()

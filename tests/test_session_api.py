@@ -2540,3 +2540,105 @@ class TestSessionManagerTabNavigation:
         s, _ = m.get_or_create("a")
         assert m.active_session_id == "a"
         assert m.focused() is s
+
+
+class TestTabNavigationStaleActiveId:
+    """Tests for tab navigation when active_session_id becomes stale.
+
+    Bug: next_tab(), prev_tab(), and next_with_choices() used
+    session_order.index(active_session_id) without try/except. If
+    active_session_id pointed to a session no longer in session_order
+    (e.g. due to external removal), a ValueError would crash the
+    navigation methods. Now they gracefully reset to the first tab.
+    """
+
+    def test_next_tab_stale_active_id_recovers(self):
+        """next_tab() recovers when active_session_id is not in session_order."""
+        m = SessionManager()
+        m.get_or_create("a")
+        m.get_or_create("b")
+        # Manually corrupt active_session_id to simulate stale reference
+        m.active_session_id = "nonexistent"
+        # Should NOT raise ValueError — should recover to first tab
+        result = m.next_tab()
+        assert result is not None
+        assert m.active_session_id == "a"  # Reset to first
+
+    def test_prev_tab_stale_active_id_recovers(self):
+        """prev_tab() recovers when active_session_id is not in session_order."""
+        m = SessionManager()
+        m.get_or_create("a")
+        m.get_or_create("b")
+        m.active_session_id = "nonexistent"
+        result = m.prev_tab()
+        assert result is not None
+        assert m.active_session_id == "a"  # Reset to first
+
+    def test_next_with_choices_stale_active_id_recovers(self):
+        """next_with_choices() recovers when active_session_id is stale."""
+        m = SessionManager()
+        s1, _ = m.get_or_create("a")
+        s2, _ = m.get_or_create("b")
+        s2.active = True  # session b has choices
+        m.active_session_id = "nonexistent"
+        # Should recover from the stale ID and find session b
+        result = m.next_with_choices()
+        assert result is not None
+        assert result.session_id == "b"
+
+    def test_next_tab_normal_operation_unchanged(self):
+        """Normal next_tab still works correctly after the fix."""
+        m = SessionManager()
+        m.get_or_create("a")
+        m.get_or_create("b")
+        m.get_or_create("c")
+        assert m.active_session_id == "a"
+        result = m.next_tab()
+        assert result.session_id == "b"
+        result = m.next_tab()
+        assert result.session_id == "c"
+        result = m.next_tab()
+        assert result.session_id == "a"  # wraps
+
+    def test_prev_tab_normal_operation_unchanged(self):
+        """Normal prev_tab still works correctly after the fix."""
+        m = SessionManager()
+        m.get_or_create("a")
+        m.get_or_create("b")
+        m.get_or_create("c")
+        assert m.active_session_id == "a"
+        result = m.prev_tab()
+        assert result.session_id == "c"  # wraps backward
+        result = m.prev_tab()
+        assert result.session_id == "b"
+
+
+class TestMutableDefaultArgs:
+    """Tests verifying mutable default arguments don't cause shared state.
+
+    Bug: proxy.py register_session() used metadata: dict = {} as a default
+    argument. If any call mutated the dict, mutations would persist across
+    calls because all calls share the same default dict object. Fixed to
+    use None default.
+    """
+
+    def test_session_dataclass_default_lists_are_independent(self):
+        """Session's default factory lists are independent per instance."""
+        s1 = Session(session_id="1", name="A")
+        s2 = Session(session_id="2", name="B")
+        s1.pending_messages.append("hello")
+        assert s2.pending_messages == []  # not shared
+
+    def test_session_default_dicts_are_independent(self):
+        """Session's default factory dicts are independent per instance."""
+        s1 = Session(session_id="1", name="A")
+        s2 = Session(session_id="2", name="B")
+        s1.agent_metadata["key"] = "value"
+        assert s2.agent_metadata == {}  # not shared
+
+    def test_session_default_sets_are_independent(self):
+        """Session's achievements_unlocked sets are independent per instance."""
+        s1 = Session(session_id="1", name="A")
+        s2 = Session(session_id="2", name="B")
+        s1.achievements_unlocked.add("test")
+        assert "test" not in s2.achievements_unlocked  # not shared

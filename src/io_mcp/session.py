@@ -757,7 +757,12 @@ class SessionManager:
         with self._lock:
             if not self.session_order or self.active_session_id is None:
                 return None
-            idx = self.session_order.index(self.active_session_id)
+            try:
+                idx = self.session_order.index(self.active_session_id)
+            except ValueError:
+                # active_session_id not in session_order — reset to first
+                self.active_session_id = self.session_order[0]
+                return self.sessions[self.active_session_id]
             idx = (idx + 1) % len(self.session_order)
             self.active_session_id = self.session_order[idx]
             return self.sessions[self.active_session_id]
@@ -767,7 +772,12 @@ class SessionManager:
         with self._lock:
             if not self.session_order or self.active_session_id is None:
                 return None
-            idx = self.session_order.index(self.active_session_id)
+            try:
+                idx = self.session_order.index(self.active_session_id)
+            except ValueError:
+                # active_session_id not in session_order — reset to first
+                self.active_session_id = self.session_order[0]
+                return self.sessions[self.active_session_id]
             idx = (idx - 1) % len(self.session_order)
             self.active_session_id = self.session_order[idx]
             return self.sessions[self.active_session_id]
@@ -778,7 +788,12 @@ class SessionManager:
             if not self.session_order or self.active_session_id is None:
                 return None
 
-            start_idx = self.session_order.index(self.active_session_id)
+            try:
+                start_idx = self.session_order.index(self.active_session_id)
+            except ValueError:
+                # active_session_id not in session_order — reset to first
+                self.active_session_id = self.session_order[0]
+                start_idx = 0
             n = len(self.session_order)
 
             for offset in range(1, n + 1):

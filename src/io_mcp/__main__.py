@@ -1042,7 +1042,6 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
         """Check for queued user messages without waiting for another tool call."""
         session = _get_session(session_id)
         session.last_tool_name = "check_inbox"
-        session.tool_call_count += 1
         messages = _drain_messages(session)
         if messages:
             return json.dumps({"messages": messages, "count": len(messages)})
@@ -1052,7 +1051,6 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
         """Report a lightweight status update to the activity feed."""
         session = _get_session(session_id)
         session.last_tool_name = "report_status"
-        session.tool_call_count += 1
         status = args.get("status", "")
         if not status:
             return json.dumps({"error": "No status provided"})
@@ -1069,7 +1067,6 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
         """Return recent io-mcp logs: TUI errors, proxy output, and backend stderr."""
         session = _get_session(session_id)
         session.last_tool_name = "get_logs"
-        session.tool_call_count += 1
 
         lines = int(args.get("lines", 50))
         logs = {}
@@ -1099,7 +1096,6 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
         """List all active agent sessions with their status and metadata."""
         session = _get_session(session_id)
         session.last_tool_name = "get_sessions"
-        session.tool_call_count += 1
 
         sessions = []
         for sid in frontend.manager.session_order:
@@ -1150,7 +1146,6 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
         """Get speech history for the calling session or all sessions."""
         session = _get_session(session_id)
         session.last_tool_name = "get_speech_history"
-        session.tool_call_count += 1
 
         lines = int(args.get("lines", 30))
         target = args.get("session", "self")  # "self", "all", or a session_id
@@ -1204,7 +1199,6 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
         """Get the choices currently being displayed to the user."""
         session = _get_session(session_id)
         session.last_tool_name = "get_current_choices"
-        session.tool_call_count += 1
 
         target = args.get("session", "focused")  # "focused" or a session_id
 
@@ -1241,7 +1235,6 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
         """Capture the current TUI screen content and UI state."""
         session = _get_session(session_id)
         session.last_tool_name = "get_tui_state"
-        session.tool_call_count += 1
 
         state = {}
 
@@ -1378,9 +1371,15 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
         try:
             result = handler(args, session_id)
 
+            # Increment tool_call_count for ALL tools — centralised here
+            # so individual handlers don't need to remember.
+            session = frontend.manager.get(session_id)
+            if session:
+                session.tool_call_count += 1
+
             # Log activity (skip quiet/meta tools to keep the feed useful)
             if tool_name not in _QUIET_TOOLS:
-                session = frontend.manager.get(session_id)
+                # session already fetched above
                 if session:
                     detail = ""
                     kind = "tool"
@@ -1425,10 +1424,8 @@ def _create_tool_dispatcher(app_ref: list, append_options: list[str],
                         _file_log.debug("Post-tool tab bar update failed", exc_info=True)
 
             # Add speech reminder for non-speech tools
-            if tool_name not in _SPEECH_TOOLS:
-                session = frontend.manager.get(session_id)
-                if session:
-                    result += _speech_reminder(session)
+            if tool_name not in _SPEECH_TOOLS and session:
+                result += _speech_reminder(session)
             return result
         except Exception as e:
             log.error(f"Tool {tool_name} error: {e}")

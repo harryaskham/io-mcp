@@ -559,7 +559,7 @@ def create_mcp_server(
         name: str = "",
         voice: str = "",
         emotion: str = "",
-        metadata: dict = {},
+        metadata: dict | None = None,
     ) -> str:
         """Register this agent session with io-mcp.
 
