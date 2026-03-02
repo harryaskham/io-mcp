@@ -324,11 +324,10 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
 
     #footer-status {{
         dock: bottom;
-        height: 1;
+        height: 2;
         background: {s['bg_alt']};
         color: {s['fg_dim']};
-        padding: 0 1;
-        margin-top: 1;
+        padding: 1 1 0 1;
     }}
 
     /* ─── Input fields ────────────────────────────────────── */
@@ -523,15 +522,17 @@ def build_css(scheme_name: str = DEFAULT_SCHEME) -> str:
 
     ChatBubbleItem.-speech {{
         border-left: thick {s['accent']};
+        margin-right: 4;
     }}
 
     ChatBubbleItem.-choices {{
         border-left: thick {s['warning']};
+        margin-right: 4;
     }}
 
     ChatBubbleItem.-user-msg {{
         border-left: thick {s['purple']};
-        margin-left: 6;
+        margin-left: 4;
     }}
 
     ChatBubbleItem.-system {{
