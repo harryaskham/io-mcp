@@ -1752,13 +1752,13 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
 
         # Context-aware keyboard shortcut hints
         dim = s['fg_dim']
+        _quit = kl.get("quit", "q")
         if self._in_settings:
             # Settings mode hints
             _down = kl.get("down", "j")
             _up = kl.get("up", "k")
             _sel = kl.get("select", "Enter")
-            _stg = kl.get("settings", "s")
-            hints = f"{_down}/{_up}=scroll  {_sel}=select  {_stg}=back"
+            hints = f"{_down}/{_up}=scroll  {_sel}=select  {_quit}=back"
         elif session.active and session.choices:
             # Choices visible — navigation and selection hints
             _down = kl.get("down", "j")
@@ -1771,7 +1771,7 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
             # Chat/feed view — show close hint and utility shortcuts
             _msg = kl.get("message", "m")
             _stg = kl.get("settings", "s")
-            hints = f"g=close  {_msg}=message  {_stg}=settings"
+            hints = f"{_quit}=back  {_msg}=message  {_stg}=settings"
         else:
             # Waiting — agent is working, show utility shortcuts
             _msg = kl.get("message", "m")
@@ -5132,12 +5132,28 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
                     summary = c.get("summary", "")
                     self._tts.stop()
                     self._vibrate(100)
+                    # Audio cue — instant chime before TTS starts
+                    self._tts.play_chime("select")
                     ui_speed = self._config.tts_speed_for("ui") if self._config else None
                     self._tts.speak_fragments(["selected", label], speed_override=ui_speed)
+                    # Record in history
+                    try:
+                        session.append_history(HistoryEntry(
+                            label=label, summary=summary, preamble=session.preamble))
+                    except Exception:
+                        pass
                     self._resolve_selection(session, {"selected": label, "summary": summary})
+                    # Emit event for remote frontends
+                    try:
+                        frontend_api.emit_selection_made(session.session_id, label, summary)
+                    except Exception:
+                        pass
                     self.query_one("#chat-choices").display = False
                     self._chat_content_hash = ""
                     self._refresh_chat_feed()
+                    self._update_footer_status()
+                    # Auto-advance to next session with choices
+                    self._auto_advance_to_next_choices(session)
                 else:
                     # Extra option
                     self._handle_extra_select(event.item.choice_label)
@@ -5236,11 +5252,14 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         """
         session = self._focused()
         if session:
+            was_speaking = False
             if getattr(session, 'intro_speaking', False):
                 session.intro_speaking = False
-                self._tts.stop()
+                was_speaking = True
             if getattr(session, 'reading_options', False):
                 session.reading_options = False
+                was_speaking = True
+            if was_speaking:
                 self._tts.stop()
 
     def _sync_inbox_focus_from_widget(self) -> None:
@@ -6296,6 +6315,8 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         Called after a selection is made. If the current session has no
         more pending choices, finds another session that does and switches
         to it immediately, so the user doesn't have to press "n".
+
+        Uses set_timer instead of time.sleep to avoid blocking the event loop.
         """
         # Check if current session still has pending choices (from same session)
         if current_session.inbox_choices_count() > 0:
@@ -6304,10 +6325,9 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         # Find another session with pending choices
         next_session = self.manager.next_with_choices()
         if next_session and next_session.session_id != current_session.session_id:
-            # Brief delay so "Selected: X" audio has a moment to start
-            import time as _time
-            _time.sleep(0.3)
-            self._switch_to_session(next_session)
+            # Brief delay so "Selected: X" audio has a moment to start.
+            # Use set_timer instead of time.sleep to avoid blocking the event loop.
+            self.set_timer(0.3, lambda: self._switch_to_session(next_session))
 
     def _handle_extra_select(self, label: str) -> None:
         """Handle selection of extra options by label."""
