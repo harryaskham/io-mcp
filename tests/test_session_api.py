@@ -1612,10 +1612,16 @@ class TestCheckAchievements:
         assert any("Centurion" in a for a in new)
 
     def test_no_achievements_unlocked_initially(self):
-        """New session has no achievements."""
+        """New session has no achievements (regardless of wall-clock time)."""
         s = Session(session_id="test-1", name="Agent 1")
         assert s.achievements_unlocked == set()
-        new = s.check_achievements()
+        # Mock time.localtime to return noon so Night Owl doesn't trigger
+        import unittest.mock
+        fake_local = time.struct_time((2026, 3, 2, 12, 0, 0, 0, 61, 0))
+        with unittest.mock.patch("io_mcp.session.time") as mock_time:
+            mock_time.time.return_value = time.time()
+            mock_time.localtime.return_value = fake_local
+            new = s.check_achievements()
         assert new == []
 
     def test_night_owl_at_late_hour(self):

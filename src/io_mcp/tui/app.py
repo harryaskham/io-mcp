@@ -5672,14 +5672,18 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         if self._filter_mode:
             return
 
-        self._filter_mode = True
         session.reading_options = False
         self._tts.stop()
 
-        filter_inp = self.query_one("#filter-input", Input)
-        filter_inp.value = ""
-        filter_inp.styles.display = "block"
-        filter_inp.focus()
+        try:
+            filter_inp = self.query_one("#filter-input", Input)
+            filter_inp.value = ""
+            filter_inp.styles.display = "block"
+            filter_inp.focus()
+            self._filter_mode = True
+        except Exception:
+            # If widget lookup fails, don't enter filter mode
+            return
 
         self._speak_ui("Type to filter choices")
 
@@ -6115,15 +6119,23 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         # Filter mode → exit filter
         if self._filter_mode:
             self._filter_mode = False
-            filter_input = self.query_one("#filter-input", Input)
-            filter_input.value = ""
-            filter_input.styles.display = "none"
+            try:
+                filter_input = self.query_one("#filter-input", Input)
+                filter_input.value = ""
+                filter_input.styles.display = "none"
+            except Exception:
+                pass
             self._show_choices()
             return
 
         # Settings / help / any modal → back
         if self._in_settings:
             self._exit_settings()
+            return
+
+        # Chat view → exit chat view
+        if getattr(self, '_chat_view_active', False):
+            self.action_chat_view()  # toggles off
             return
 
         # Conversation mode → exit conversation
@@ -6135,6 +6147,15 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
             if session and session.active:
                 self._show_choices()
             return
+
+        # Pane view → close pane view
+        try:
+            pane_view = self.query_one("#pane-view")
+            if pane_view.display:
+                self.action_pane_view()  # toggles off
+                return
+        except Exception:
+            pass
 
         # Session has active input mode → dismiss modal if present
         session = self._focused()

@@ -834,7 +834,6 @@ class ChatViewMixin:
             all_sessions = list(self.manager.all_sessions()) if hasattr(self, 'manager') else [session]
             fingerprint = "||".join(self._chat_content_fingerprint(s) for s in all_sessions)
             if fingerprint == self._chat_content_hash:
-                _log.debug("_refresh_chat_feed: skipping, no change (unified)")
                 return
             _log.info("_refresh_chat_feed: rebuilding (unified)")
             self._chat_content_hash = fingerprint
@@ -842,7 +841,6 @@ class ChatViewMixin:
         else:
             fingerprint = self._chat_content_fingerprint(session)
             if fingerprint == self._chat_content_hash:
-                _log.debug("_refresh_chat_feed: skipping, no change")
                 return
             _log.info("_refresh_chat_feed: rebuilding")
             self._chat_content_hash = fingerprint

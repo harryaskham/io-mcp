@@ -569,6 +569,9 @@ async def test_clear_all_modal_state_resets_settings():
         app._worktree_options = [{"label": "test"}]
         app._dialog_callback = lambda x: None
         app._dialog_buttons = [{"label": "OK"}]
+        app._filter_mode = True
+        app._multi_select_mode = True
+        app._multi_select_checked = [True, False, True]
         session.in_settings = True
         session.reading_options = True
 
@@ -586,6 +589,9 @@ async def test_clear_all_modal_state_resets_settings():
         assert app._worktree_options is None
         assert app._dialog_callback is None
         assert app._dialog_buttons == []
+        assert app._filter_mode is False
+        assert app._multi_select_mode is False
+        assert app._multi_select_checked == []
         assert session.in_settings is False
         assert session.reading_options is False
 
@@ -740,4 +746,51 @@ async def test_choices_force_exit_quick_settings():
         assert app._in_settings is False
         assert app._quick_settings_mode is False
         assert session.in_settings is False
+
+
+@pytest.mark.asyncio
+async def test_quit_or_back_exits_chat_view():
+    """q/Escape in chat view should toggle chat view off, not show quit dialog."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        session, _ = app.manager.get_or_create("test-1")
+        session.registered = True
+        session.name = "Test"
+        app.on_session_created(session)
+
+        # Simulate chat view being active
+        app._chat_view_active = True
+
+        # Call _quit_or_back
+        app._quit_or_back()
+
+        # Should exit chat view, not show quit dialog
+        assert app._chat_view_active is False
+        assert app._in_settings is False  # No quit dialog shown
+
+
+@pytest.mark.asyncio
+async def test_quit_or_back_exits_filter_mode_safely():
+    """q/Escape in filter mode should exit filter even if widget fails."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        session, _ = app.manager.get_or_create("test-1")
+        session.registered = True
+        session.name = "Test"
+        app.on_session_created(session)
+        _disable_chat_view(app)
+
+        # Set up active choices so _show_choices works
+        session.active = True
+        session.choices = [{"label": "Option A", "summary": ""}]
+        session.preamble = "Test"
+
+        # Simulate filter mode
+        app._filter_mode = True
+
+        # Call _quit_or_back
+        app._quit_or_back()
+
+        # Should exit filter mode
+        assert app._filter_mode is False
 

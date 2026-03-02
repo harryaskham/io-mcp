@@ -51,5 +51,25 @@ phone *FLAGS:
 default *FLAGS:
     just {{ FLAGS }} --default-config
 
+# Run all tests
+test *FLAGS:
+    uv run python -m pytest tests/ {{ FLAGS }}
+
+# Run tests with short output
+test-q *FLAGS:
+    uv run python -m pytest tests/ -q --tb=short {{ FLAGS }}
+
+# Run tests matching a keyword (e.g. just test-k chat)
+test-k PATTERN *FLAGS:
+    uv run python -m pytest tests/ -q --tb=short -k "{{ PATTERN }}" {{ FLAGS }}
+
+# Run a specific test file (e.g. just test-f tests/test_tts.py)
+test-f FILE *FLAGS:
+    uv run python -m pytest {{ FILE }} --tb=short {{ FLAGS }}
+
+# Run tests with verbose failure output
+test-v *FLAGS:
+    uv run python -m pytest tests/ -v --tb=long {{ FLAGS }}
+
 demo:
     just run --demo --port 8499

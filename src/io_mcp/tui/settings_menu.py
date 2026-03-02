@@ -173,6 +173,22 @@ class SettingsMixin:
         self._quick_settings_mode = False
         self._worktree_options = None
 
+        # Clear filter mode — reset the filter input widget
+        if getattr(self, '_filter_mode', False):
+            self._filter_mode = False
+            try:
+                from textual.widgets import Input
+                filter_input = self.query_one("#filter-input", Input)
+                filter_input.value = ""
+                filter_input.styles.display = "none"
+            except Exception:
+                pass
+
+        # Clear multi-select mode
+        if getattr(self, '_multi_select_mode', False):
+            self._multi_select_mode = False
+            self._multi_select_checked = []
+
         # Clear dialog state — dialogs set _in_settings too
         self._dialog_callback = None
         self._dialog_buttons = []
