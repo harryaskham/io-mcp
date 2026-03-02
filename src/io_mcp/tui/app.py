@@ -1839,6 +1839,10 @@ class IoMcpApp(ChatViewMixin, ViewsMixin, VoiceMixin, SettingsMixin, App):
         # Update inbox list to show item as done
         self._safe_call(self._update_inbox_list)
 
+        # Immediately refresh chat feed so the selection appears without
+        # waiting for the 3-second timer
+        self._safe_call(lambda: self._notify_chat_feed_update(session))
+
     def _dismiss_active_item(self) -> None:
         """Dismiss the active inbox item without sending a response to the agent.
 
